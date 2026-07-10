@@ -1,0 +1,115 @@
+cff-version: 1.2.0
+
+message: >
+  If you use SciOS in your research, software, publications,
+  or educational materials, please cite this repository using
+  the metadata below.
+
+title: "SciOS: Scientific Cognitive Operating System"
+
+abstract: >
+  SciOS is an open-source Scientific Cognitive Operating System
+  for reproducible scientific computing, autonomous reasoning,
+  cognitive execution pipelines, research artifact management,
+  and intelligent scientific workflows. The platform provides a
+  modular kernel, runtime engine, cognitive core, distributed
+  execution infrastructure, and a research-grade artifact system
+  designed to support transparent, scalable, and reproducible
+  scientific research.
+
+type: software
+
+authors:
+  - family-names: Bùi
+    given-names: Đình Hoàng
+    name-particle: ""
+    affiliation: SciOS Research Platform
+    email: hbdatahoang@gmail.com
+    alias: hbdatahoang-ux
+
+version: "0.2.0-dev"
+
+date-released: 2026-07-09
+
+license: Apache-2.0
+
+repository-code: "https://github.com/hbdatahoang-ux/SciOS"
+
+repository-artifact: "https://github.com/hbdatahoang-ux/SciOS"
+
+url: "https://github.com/hbdatahoang-ux/SciOS"
+
+keywords:
+  - Scientific Operating System
+  - Cognitive Computing
+  - Artificial Intelligence
+  - Autonomous Agents
+  - Scientific Computing
+  - Research Operating System
+  - Reproducible Research
+  - Knowledge Graph
+  - Scientific Workflow
+  - Artifact Management
+  - Research Infrastructure
+  - Distributed Computing
+  - Open Science
+
+preferred-citation:
+  type: software
+
+  authors:
+    - family-names: Bùi Đình 
+      given-names: Hoàng
+
+  title: "SciOS: Scientific Cognitive Operating System"
+
+  version: "0.2.0-dev"
+
+  year: 2026
+
+  url: "https://github.com/hbdatahoang-ux/SciOS"
+
+repository: "https://github.com/hbdatahoang-ux/SciOS"
+
+language: en
+
+license-url: "https://www.apache.org/licenses/LICENSE-2.0"
+
+references:
+
+  - type: generic
+    title: "Apache License 2.0"
+    url: "https://www.apache.org/licenses/LICENSE-2.0"
+
+  - type: generic
+    title: "SciOS Documentation"
+    url: "https://github.com/hbdatahoang-ux/SciOS/tree/main/docs"
+
+  - type: generic
+    title: "SciOS Research Papers"
+    url: "https://github.com/hbdatahoang-ux/SciOS/tree/main/docs/research"
+
+  - type: generic
+    title: "SciOS Artifact Specification"
+    url: "https://github.com/hbdatahoang-ux/SciOS/tree/main/docs/artifacts"
+
+contact:
+  - email: hbdatahoang@gmail.com
+
+identifiers:
+  - type: url
+    value: "https://github.com/hbdatahoang-ux/SciOS"
+
+commit: ""
+
+doi: ""
+
+preferred-citation-note: >
+  Until a peer-reviewed publication becomes available,
+  please cite the SciOS software repository.
+
+license-note: >
+  SciOS is distributed under the Apache License 2.0.
+
+copyright: >
+  Copyright (c) 2026 Bùi Đình Hoàng

@@ -1,0 +1,130 @@
+name: ⚡ Performance Report
+description: Report a performance issue or propose an optimization for SciOS-NG
+title: "[Performance]: "
+labels:
+  - performance
+  - optimization
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Performance Report
+
+        Cảm ơn bạn đã đóng góp!  
+        Vui lòng điền thông tin dưới đây để chúng tôi có thể phân tích và cải thiện hiệu năng.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the performance issue or optimization.
+      placeholder: "Pipeline latency increases with large memory..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Detailed Description
+      description: Explain the performance problem or optimization idea.
+      placeholder: |
+        - Current behavior: ...
+        - Expected behavior: ...
+        - Impact: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce / Context
+      description: Provide steps, workload, or context where the issue occurs.
+      placeholder: |
+        1. Run pipeline with ...
+        2. Configure memory as ...
+        3. Observe latency ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: input
+    id: version
+    attributes:
+      label: SciOS-NG Version
+      description: Version you are using (see `VERSION` or `pyproject.toml`).
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Select the environment where the performance issue occurs.
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Docker
+        - Cloud (Kubernetes, etc.)
+        - Other
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Performance Metrics
+      description: Provide measurements (latency, throughput, memory, CPU, etc.).
+      placeholder: |
+        - Latency: ...
+        - Throughput: ...
+        - Memory usage: ...
+        - CPU usage: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: optimization
+    attributes:
+      label: Suggested Optimization
+      description: If applicable, propose an optimization or improvement.
+      placeholder: |
+        - Idea: ...
+        - Expected impact: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Output
+      description: Paste relevant logs or profiling output.
+      render: shell
+
+# --------------------------------------------------
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked that this performance issue is not already reported.
+          required: true
+        - label: I have tested with the latest version.
+          required: true
+        - label: I have provided sufficient metrics and context.
+          required: true

@@ -1,0 +1,57 @@
+# ============================================================
+# SciOS Model Metadata Template
+# ============================================================
+
+ID: MODEL-XXXX
+
+Title: 
+
+Paper: SciOS
+
+Section: 
+
+Version: v0.1
+
+Status: Draft
+
+Author: 
+
+Created: YYYY-MM-DD
+
+LastUpdated: YYYY-MM-DD
+
+Reviewer: 
+
+ApprovedBy: 
+
+Keywords: []
+
+Description: >
+  Short description of the model, its purpose, and context.
+
+Purpose: >
+  Why this model exists and what it demonstrates.
+
+Caption: caption.md
+
+Files:
+  Model: model.md
+
+Dependencies:
+  Datasets: []
+  Experiments: []
+  Workflows: []
+  Benchmarks: []
+  Figures: []
+  Tables: []
+  Equations: []
+  Supplementary: []
+
+RelatedSections: []
+
+License: CC-BY-4.0
+
+DOI: 
+
+Notes: >
+  Any additional notes or comments.

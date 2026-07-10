@@ -1,0 +1,25 @@
+id: P-0001
+title: Geometry-Driven Renormalization of Elastic Fluctuations in Constrained Hydrogel Microfluidics
+project: CEIT
+authors:
+  - Hoang Bui Dinh
+status: Submitted
+venue: Nature Energy
+submission_date: 2026-07-15
+cover_letter: cover_letter.md
+response_to_reviewers: response_to_reviewers.md
+manuscript: manuscript.pdf
+supplementary: supplementary.pdf
+source: ./source/
+license: CC BY 4.0
+doi: null
+arxiv: null
+keywords:
+  - hydrogel microfluidics
+  - elastic fluctuations
+  - renormalization group
+  - geometry confinement
+  - universality
+notes: >
+  Paper submitted to Nature Energy. Awaiting reviewer feedback.
+  Includes cover letter, manuscript, supplementary materials, and source files.

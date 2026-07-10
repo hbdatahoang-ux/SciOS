@@ -1,0 +1,7 @@
+ID,Title,Author,Created,LastUpdated,Status,Category,File,Caption
+SUP-0001,Derivation of Loss Function,Nguyen Van A,2026-07-08,2026-07-09,Approved,derivations,derivation_loss.md,caption.md
+SUP-0002,Extended Experimental Methods,Tran Thi B,2026-07-08,2026-07-10,Draft,extended_methods,methods_detail.md,caption.md
+SUP-0003,Additional Results on Dataset C,Le Van C,2026-07-09,2026-07-11,Published,additional_results,results_datasetC.csv,caption.md
+SUP-0004,Raw Microscopy Images,Pham Thi D,2026-07-09,2026-07-11,Approved,raw_images,image_set.zip,caption.md
+SUP-0005,Demonstration Video,Nguyen Van E,2026-07-10,2026-07-12,Draft,videos,experiment_demo.mp4,caption.md
+SUP-0006,Appendix A: Proofs,Hoang Van F,2026-07-10,2026-07-12,Published,appendices,appendix_A.md,caption.md

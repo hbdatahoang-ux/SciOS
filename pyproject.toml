@@ -1,7 +1,7 @@
 [build-system]
 requires = [
-    "setuptools>=69.0",
-    "wheel",
+    "setuptools>=80.0",
+    "wheel"
 ]
 build-backend = "setuptools.build_meta"
 
@@ -10,47 +10,71 @@ build-backend = "setuptools.build_meta"
 # ============================================================
 
 [project]
-name = "scios"
-version = "0.2.0"
 
-description = "Scientific Cognitive Operating System (SciOS)"
+name = "scios"
+
+version = "0.1.0"
+
+description = "SciOS - Scientific Cognitive Operating System"
+
 readme = "README.md"
-license = { file = "LICENSE" }
 
 requires-python = ">=3.11"
 
+license = { file = "LICENSE" }
+
 authors = [
-    { name = "Bui Dinh Hoang" }
+    { name = "Bùi Đình Hoàng", email = "hbdatahoang@gmail.com" }
+]
+
+maintainers = [
+    { name = "Bùi Đình Hoàng", email = "hbdatahoang@gmail.com" }
 ]
 
 keywords = [
-    "ai",
-    "operating-system",
-    "cognitive",
-    "kernel",
-    "scientific",
-    "runtime",
+    "scientific-computing",
+    "artificial-intelligence",
+    "cognitive-architecture",
+    "scientific-operating-system",
+    "autonomous-agents",
     "reasoning",
+    "research-platform",
+    "workflow-engine",
+    "knowledge-management",
+    "artifact-management"
 ]
 
 classifiers = [
     "Development Status :: 3 - Alpha",
 
-    "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
 
+    "License :: OSI Approved :: Apache Software License",
+
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 
-    "License :: OSI Approved :: MIT License",
-
     "Operating System :: OS Independent",
 
+    "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Distributed Computing"
 ]
 
-dependencies = []
+dependencies = [
+    "numpy>=2.0",
+    "pydantic>=2.10",
+    "PyYAML>=6.0",
+    "networkx>=3.4",
+    "typing-extensions>=4.12"
+]
+
+dynamic = []
 
 # ============================================================
 # Optional Dependencies
@@ -59,16 +83,58 @@ dependencies = []
 [project.optional-dependencies]
 
 dev = [
-    "pytest>=9.0",
-    "pytest-cov",
-    "ruff",
-    "black",
-    "mypy",
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.12",
+    "black>=25.0",
+    "mypy>=1.16",
+    "pre-commit>=4.0"
 ]
 
 docs = [
-    "mkdocs",
-    "mkdocs-material",
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.6",
+    "mkdocstrings[python]>=0.30"
+]
+
+research = [
+    "pandas>=2.3",
+    "matplotlib>=3.10",
+    "scipy>=1.15",
+    "jupyter>=1.1",
+    "notebook>=7.4"
+]
+
+distributed = [
+    "ray>=2.49"
+]
+
+llm = [
+    "transformers>=4.55",
+    "accelerate>=1.10"
+]
+
+all = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.12",
+    "black>=25.0",
+    "mypy>=1.16",
+    "pre-commit>=4.0",
+
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.6",
+    "mkdocstrings[python]>=0.30",
+
+    "pandas>=2.3",
+    "matplotlib>=3.10",
+    "scipy>=1.15",
+    "jupyter>=1.1",
+
+    "ray>=2.49",
+
+    "transformers>=4.55",
+    "accelerate>=1.10"
 ]
 
 # ============================================================
@@ -76,13 +142,27 @@ docs = [
 # ============================================================
 
 [project.urls]
-Homepage = "https://github.com/yourname/SciOS"
-Documentation = "https://github.com/yourname/SciOS/docs"
-Repository = "https://github.com/yourname/SciOS"
-Issues = "https://github.com/yourname/SciOS/issues"
+
+Homepage = "https://github.com/hbdatahoang-ux/SciOS"
+
+Repository = "https://github.com/hbdatahoang-ux/SciOS"
+
+Issues = "https://github.com/hbdatahoang-ux/SciOS/issues"
+
+Documentation = "https://github.com/hbdatahoang-ux/SciOS/tree/main/docs"
+
+Changelog = "https://github.com/hbdatahoang-ux/SciOS/blob/main/CHANGELOG.md"
 
 # ============================================================
-# Setuptools
+# Console Scripts
+# ============================================================
+
+[project.scripts]
+
+scios = "scios.cli:main"
+
+# ============================================================
+# Package Discovery
 # ============================================================
 
 [tool.setuptools]
@@ -91,9 +171,14 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 
-include = [
-    "scios",
-    "scios.*",
+include = ["scios*"]
+
+exclude = [
+    "tests*",
+    "docs*",
+    "examples*",
+    "scripts*",
+    "notebooks*"
 ]
 
 # ============================================================
@@ -102,24 +187,31 @@ include = [
 
 [tool.pytest.ini_options]
 
+minversion = "8.0"
+
 testpaths = [
-    "tests",
+    "tests"
 ]
 
 python_files = [
-    "test_*.py",
+    "test_*.py"
 ]
 
 addopts = "-ra"
 
 # ============================================================
-# Black
+# Coverage
 # ============================================================
 
-[tool.black]
+[tool.coverage.run]
 
-line-length = 88
-target-version = ["py311"]
+source = [
+    "scios"
+]
+
+omit = [
+    "tests/*"
+]
 
 # ============================================================
 # Ruff
@@ -128,7 +220,20 @@ target-version = ["py311"]
 [tool.ruff]
 
 line-length = 88
+
 target-version = "py311"
+
+# ============================================================
+# Black
+# ============================================================
+
+[tool.black]
+
+line-length = 88
+
+target-version = [
+    "py311"
+]
 
 # ============================================================
 # MyPy
@@ -138,10 +243,10 @@ target-version = "py311"
 
 python_version = "3.11"
 
-strict = false
+warn_return_any = true
 
 warn_unused_configs = true
 
-warn_return_any = true
+disallow_untyped_defs = false
 
-warn_unused_ignores = true
+ignore_missing_imports = true

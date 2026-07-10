@@ -1,0 +1,329 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |          Planning Engine             |
+                    +------------------+-------------------+
+                                       |
+                               Execution Plan
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |         Tool Use Framework           |
+                    +--------------------------------------+
+                    | Tool Registry                        |
+                    | Tool Selector                        |
+                    | Permission Manager                   |
+                    | Runtime Executor                     |
+                    | Result Collector                     |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                               Execution Result
+                                       |
+                                       v
+                                  Reflection
+Tool Execution Pipeline
+Execution Plan
+
+↓
+
+Select Tool
+
+↓
+
+Permission Check
+
+↓
+
+Prepare Arguments
+
+↓
+
+Execute Tool
+
+↓
+
+Collect Result
+
+↓
+
+Return Result
+
+↓
+
+Reflection
+Internal Components
+                +-------------------------------+
+                |      Tool Use Framework       |
+                +-------------------------------+
+                | Tool Registry                |
+                | Tool Selector                |
+                | Permission Manager           |
+                | Executor                     |
+                | Result Collector             |
+                | Error Handler                |
+                +-------------------------------+
+Tool Registry
+                Tool Registry
+
+        +------------+------------+
+        |            |            |
+        v            v            v
+     Python      Database      REST API
+        |
+        +------------+------------+
+                     |
+                     v
+                 File System
+
+Registry lưu thông tin và metadata của tất cả công cụ có thể sử dụng.
+
+Tool Selection
+Execution Plan
+
+↓
+
+Candidate Tools
+
+↓
+
+Capability Matching
+
+↓
+
+Best Tool
+
+↓
+
+Executor
+
+Tool Selector lựa chọn công cụ phù hợp nhất với yêu cầu của kế hoạch.
+
+Permission Validation
+Tool Request
+
+↓
+
+Permission Manager
+
+↓
+
+Allowed?
+
+↓
+
+Yes
+
+↓
+
+Execute
+
+Nếu không được phép:
+
+Tool Request
+
+↓
+
+Denied
+
+↓
+
+Return Error
+
+Permission Manager giúp kiểm soát truy cập tài nguyên và sandbox.
+
+Runtime Execution
+Tool
+
+↓
+
+Executor
+
+↓
+
+Sandbox
+
+↓
+
+External Resource
+
+↓
+
+Result
+
+Executor có thể thực thi:
+
+Python code
+Shell command
+REST API
+Database query
+Local service
+Distributed service
+GPU worker
+Scientific simulation
+Result Collection
+Tool Output
+
+↓
+
+Normalize
+
+↓
+
+Metadata
+
+↓
+
+Artifact
+
+↓
+
+Reflection
+
+Kết quả được chuẩn hóa trước khi chuyển sang Reflection và Artifact Manager.
+
+Error Recovery
+Execute Tool
+
+↓
+
+Success?
+
+↓
+
+No
+
+↓
+
+Retry
+
+↓
+
+Fallback Tool
+
+↓
+
+Return Error
+
+Framework hỗ trợ chiến lược retry, fallback và báo lỗi có cấu trúc.
+
+Tool Use Flow
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+↓
+
+Memory
+Tool Use Lifecycle
+Receive Plan
+
+↓
+
+Select Tool
+
+↓
+
+Validate
+
+↓
+
+Execute
+
+↓
+
+Collect Result
+
+↓
+
+Return Artifact
+Relationship with Cognitive Core
+Reasoning
+      |
+      v
+Planning
+      |
+      v
+Tool Use
+      |
+      +------------+
+      |            |
+      v            v
+Reflection   Artifact Manager
+
+Tool Use là lớp kết nối giữa nhận thức và môi trường thực thi.
+
+Tool Use API
+ToolExecutor
+
+├── execute()
+
+├── select_tool()
+
+├── validate_permission()
+
+├── prepare()
+
+├── invoke()
+
+├── collect()
+
+├── retry()
+
+└── shutdown()
+Suggested Colors
+Component	Color
+Tool Registry	Blue
+Tool Selector	Green
+Permission Manager	Purple
+Executor	Orange
+Result Collector	Cyan
+External Resources	Gray
+Footer
+SciOS Developer Handbook
+
+Tool Use Architecture
+
+Version: v0.2
+
+Phase 8 — Cognitive Core
+Vai trò trong kiến trúc SciOS
+
+Tool Use là Execution Layer của Cognitive Core và liên kết trực tiếp với các sơ đồ còn lại:
+
+perception.drawio
+        │
+        ▼
+memory.drawio
+        │
+        ▼
+reasoning.drawio
+        │
+        ▼
+planning.drawio
+        │
+        ▼
+tool_use.drawio
+        │
+        ▼
+reflection.drawio
+        │
+        ├────────► artifact_manager.drawio
+        │
+        ▼
+memory.drawio
+
+Trong kiến trúc này:
+
+Planning tạo Execution Plan nhưng không thực thi.
+Tool Use lựa chọn công cụ, kiểm tra quyền truy cập, thực thi và chuẩn hóa kết quả.
+Reflection đánh giá chất lượng kết quả, quyết định có cần thử lại, chọn công cụ khác hoặc yêu cầu lập kế hoạch lại.
+Artifact Manager lưu toàn bộ đầu vào, đầu ra, log và metadata để phục vụ khả năng truy vết và tái lập.
+Memory có thể cập nhật tri thức dài hạn từ các kết quả đã được Reflection xác nhận.
+
+Thiết kế này giúp Tool Use trở thành một plugin-based execution framework, nơi mỗi công cụ (Python, shell, API, cơ sở dữ liệu, mô phỏng khoa học, GPU worker, dịch vụ phân tán...) được đóng gói dưới cùng một giao diện. Điều này cho phép SciOS mở rộng khả năng hành động mà không cần thay đổi kiến trúc của Cognitive Core.

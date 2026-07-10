@@ -1,0 +1,114 @@
+name: 🌙 Nightly Build
+
+on:
+  schedule:
+    - cron: "0 1 * * *"   # chạy mỗi ngày lúc 01:00 UTC
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Nightly Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          pytest --maxfail=1 --disable-warnings -q
+
+  lint:
+    name: Nightly Lint
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linters
+        run: |
+          pip install flake8 black isort
+
+      - name: Run flake8
+        run: flake8 .
+
+      - name: Run black (check only)
+        run: black --check .
+
+      - name: Run isort (check only)
+        run: isort . --check-only --diff
+
+  coverage:
+    name: Nightly Coverage
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run coverage
+        run: pytest --cov=src --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: true
+
+  benchmarks:
+    name: Nightly Benchmarks
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-benchmark
+
+      - name: Run benchmarks
+        run: pytest --benchmark-only --benchmark-save=nightly-benchmarks
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-benchmark-results
+          path: .benchmarks

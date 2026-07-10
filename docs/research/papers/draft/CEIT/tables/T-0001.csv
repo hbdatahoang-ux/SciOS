@@ -1,0 +1,9 @@
+Parameter,Value,Unit,Description
+Channel Width,800,µm,Microchannel width
+Channel Height,50,µm,Microchannel height
+Flow Rate,2.5,mL/min,Input flow rate during experiment
+Temperature,25,°C,Ambient experimental temperature
+Viscosity,1.0,mPa·s,Fluid viscosity (water at 25 °C)
+Concentration Gradient,0.1,mol/L,Initial solute concentration difference
+Observation Time,60,min,Duration of experiment
+Replicates,3,,Number of repeated trials

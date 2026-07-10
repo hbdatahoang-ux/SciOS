@@ -1,0 +1,191 @@
+site_name: SciOS
+site_description: Scientific Cognitive Operating System
+site_author: Bùi Đình Hoàng
+site_url: https://hbdatahoang-ux.github.io/SciOS/
+
+repo_name: hbdatahoang-ux/SciOS
+repo_url: https://github.com/hbdatahoang-ux/SciOS
+
+copyright: |
+  Copyright © 2026 Bùi Đình Hoàng
+  Licensed under the Apache License 2.0.
+
+docs_dir: docs
+
+theme:
+  name: material
+
+  language: en
+
+  logo: images/logos/logo.png
+
+  favicon: images/logos/favicon.png
+
+  features:
+
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+
+    - content.code.copy
+    - content.tabs.link
+
+    - search.highlight
+    - search.suggest
+
+    - toc.follow
+
+    - content.action.edit
+    - content.action.view
+
+markdown_extensions:
+
+  - admonition
+
+  - attr_list
+
+  - tables
+
+  - footnotes
+
+  - md_in_html
+
+  - pymdownx.highlight
+
+  - pymdownx.superfences
+
+  - pymdownx.inlinehilite
+
+  - pymdownx.details
+
+  - pymdownx.tabbed:
+      alternate_style: true
+
+  - toc:
+      permalink: true
+
+plugins:
+
+  - search
+
+nav:
+
+  - Home:
+      - Overview: README.md
+
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Kernel: architecture/kernel.md
+      - Runtime: architecture/runtime.md
+      - Execution: architecture/execution.md
+      - Pipeline: architecture/pipeline.md
+      - Perception: architecture/perception.md
+      - Memory: architecture/memory.md
+      - Reasoning: architecture/reasoning.md
+      - Planner: architecture/planner.md
+      - Tool Use: architecture/tool_use.md
+      - Reflection: architecture/reflection.md
+      - Distributed: architecture/distributed.md
+      - Deployment: architecture/deployment.md
+      - Observability: architecture/observability.md
+
+  - Design:
+      - Principles: design/principles.md
+      - Architecture Principles: design/architecture_principles.md
+      - Contracts: design/contracts.md
+      - Coding Style: design/coding_style.md
+      - Naming Convention: design/naming.md
+
+  - API:
+      - Kernel: api/kernel.md
+      - Cognitive Core: api/cognitive_core.md
+      - Runtime: api/runtime.md
+      - SDK: api/sdk.md
+      - CLI: api/cli.md
+
+  - Artifacts:
+      - Overview: artifacts/README.md
+      - Artifact Specification: artifacts/artifact_specification.md
+      - Metadata Schema: artifacts/metadata_schema.md
+      - Lifecycle: artifacts/lifecycle.md
+      - Naming Convention: artifacts/naming_convention.md
+      - Registry Specification: artifacts/registry_spec.md
+      - Validation Rules: artifacts/validation_rules.md
+      - Dependency Graph: artifacts/dependency_graph.md
+      - Versioning: artifacts/versioning.md
+
+  - Research:
+      - Overview: research/README.md
+      - Roadmap: research/roadmap.md
+      - Methodology: research/methodology.md
+      - Reproducibility: research/reproducibility.md
+      - Experiments: research/experiments.md
+      - Benchmarks: research/benchmarks.md
+      - Datasets: research/datasets.md
+      - Publications: research/publications.md
+      - Citations: research/citations.md
+
+  - Tutorials:
+      - Getting Started: tutorials/getting_started.md
+      - Build Pipeline: tutorials/build_pipeline.md
+      - Custom Stage: tutorials/custom_stage.md
+      - Custom Tool: tutorials/custom_tool.md
+      - Custom Memory: tutorials/custom_memory.md
+      - Plugin Development: tutorials/plugin_development.md
+      - Deployment: tutorials/deployment.md
+
+  - Examples:
+      - Minimal Pipeline: examples/minimal_pipeline.md
+      - Planner Demo: examples/planner_demo.md
+      - Tool Use Demo: examples/tool_use_demo.md
+      - Reflection Demo: examples/reflection_demo.md
+      - Distributed Demo: examples/distributed_demo.md
+
+  - Developer:
+      - Onboarding: developer/onboarding.md
+      - Contributing: developer/contributing.md
+      - Coding Guidelines: developer/coding_guidelines.md
+      - Testing: developer/testing.md
+      - Debugging: developer/debugging.md
+      - Profiling: developer/profiling.md
+      - Release Process: developer/release_process.md
+      - Versioning: developer/versioning.md
+
+  - Benchmarks:
+      - Methodology: benchmarks/methodology.md
+      - Planner: benchmarks/planner.md
+      - Reasoning: benchmarks/reasoning.md
+      - Memory: benchmarks/memory.md
+      - Tool Use: benchmarks/tool_use.md
+      - Runtime: benchmarks/runtime.md
+      - Scalability: benchmarks/scalability.md
+      - Results: benchmarks/results.md
+
+  - Legal:
+      - Overview: legal/README.md
+      - Licensing: legal/licensing.md
+      - Third Party: legal/third_party.md
+      - Intellectual Property: legal/intellectual_property.md
+      - Citation Policy: legal/citation_policy.md
+      - Export Control: legal/export_control.md
+      - Privacy: legal/privacy.md
+      - Trademark: legal/trademark.md
+      - Contribution License: legal/contribution_license.md
+      - Vietnamese License: legal/LICENSE.vi.md
+
+extra:
+
+  social:
+
+    - icon: fontawesome/brands/github
+      link: https://github.com/hbdatahoang-ux
+
+extra_css:
+
+  - stylesheets/extra.css
+
+extra_javascript:
+
+  - javascripts/extra.js

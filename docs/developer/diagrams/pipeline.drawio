@@ -1,0 +1,225 @@
+Overall Pipeline
+                         +---------------------------+
+                         |     CognitivePipeline     |
+                         +---------------------------+
+                                      |
+                                      |
+                             run(context)
+                                      |
+                                      v
+                     +-------------------------------+
+                     |      Pipeline Context         |
+                     +-------------------------------+
+                                      |
+                                      v
+                     +-------------------------------+
+                     |      Execution Graph          |
+                     +-------------------------------+
+                                      |
+                                      v
+     +---------------------------------------------------------------+
+     |                       Stage Dispatcher                         |
+     +---------------------------------------------------------------+
+                                      |
+                                      |
+      +---------+---------+----------+----------+----------+----------+
+      |         |         |          |          |          |          |
+      v         v         v          v          v          v
++-----------+ +---------+ +-----------+ +-----------+ +---------+ +-------------+
+|Perception |→| Memory  |→|Reasoning |→| Planning |→|Tool Use |→|Reflection |
++-----------+ +---------+ +-----------+ +-----------+ +---------+ +-------------+
+                                                                  |
+                                                                  v
+                                                        +----------------+
+                                                        | Pipeline Result|
+                                                        +----------------+
+Internal Pipeline Components
++--------------------------------------------------------+
+|                CognitivePipeline                       |
++--------------------------------------------------------+
+| stages                                                 |
+| execution_graph                                        |
+| dispatcher                                             |
+| contracts                                              |
+| validator                                              |
+| middleware                                             |
+| context                                                |
++--------------------------------------------------------+
+Stage Interface
+                +------------------+
+                |      Stage       |
+                +------------------+
+                | name             |
+                | handler          |
+                +------------------+
+                | process()        |
+                | summary()        |
+                +------------------+
+
+Tất cả subsystem đều implement giao diện Stage thông qua handler.
+
+Pipeline Execution Flow
+Input Context
+
+↓
+
+Pipeline Context
+
+↓
+
+Execution Graph
+
+↓
+
+Stage Dispatcher
+
+↓
+
+Perception
+
+↓
+
+Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+↓
+
+Output Context
+Pipeline Composition
+Kernel
+
+↓
+
+PipelineBuilder
+
+↓
+
+CognitivePipeline
+
+↓
+
+add_stage()
+
+↓
+
+Execution Graph
+
+↓
+
+Runtime
+
+PipelineBuilder là nơi duy nhất chịu trách nhiệm lắp ráp pipeline.
+
+Pipeline Contracts
+            +-----------------------+
+            | Pipeline Validator    |
+            +-----------------------+
+                     |
+         +-----------+-----------+
+         |                       |
+         v                       v
+ Stage Validation        Graph Validation
+         |                       |
+         +-----------+-----------+
+                     |
+                     v
+                Ready to Run
+Context Flow
+Context
+
+↓
+
+Perception
+
+↓
+
+Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+↓
+
+Artifacts
+
+↓
+
+Updated Context
+
+Pipeline luôn truyền cùng một Context giữa các stage, mỗi stage có thể đọc và cập nhật dữ liệu trong context.
+
+Class Relationship
+Kernel
+    │
+    ▼
+PipelineBuilder
+    │
+    ▼
+CognitivePipeline
+    │
+    ├────────────► ExecutionGraph
+    │
+    ├────────────► StageDispatcher
+    │
+    ├────────────► Context
+    │
+    ├────────────► Contracts
+    │
+    └────────────► Stage[]
+Suggested Colors
+Blue — Pipeline Core
+CognitivePipeline
+PipelineBuilder
+Pipeline Context
+Green — Execution
+Execution Graph
+Stage Dispatcher
+Orange — Cognitive Stages
+Perception
+Memory
+Reasoning
+Planning
+Tool Use
+Reflection
+Purple — Validation
+Contracts
+Validator
+Gray — Output
+Pipeline Result
+Artifacts
+Footer
+SciOS Developer Handbook
+
+Cognitive Pipeline
+
+Version: v0.2
+
+Phase 8 — Cognitive Core

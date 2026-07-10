@@ -1,0 +1,6 @@
+ID,Title,File,Section,Paper,Version,Status,Author,Created,Modified,Description
+T-0001,Experimental Parameters,T-0001.csv,Methods,CEIT,v1.0,Draft,Bui Dinh Hoang,2026-07-08,2026-07-08,Experimental setup parameters
+T-0002,Microfluidic Chip Dimensions,T-0002.csv,Methods,CEIT,v1.0,Approved,Bui Dinh Hoang,2026-07-08,2026-07-08,PDMS chip geometry
+T-0003,Simulation Parameters,T-0003.csv,Simulation,CEIT,v1.0,Draft,Bui Dinh Hoang,2026-07-08,2026-07-08,FEM simulation settings
+T-0004,Experimental Results,T-0004.csv,Results,CEIT,v1.0,Draft,Bui Dinh Hoang,2026-07-08,2026-07-08,Measured experimental data
+T-0005,Model Comparison,T-0005.csv,Discussion,CEIT,v1.0,Draft,Bui Dinh Hoang,2026-07-08,2026-07-08,Comparison with existing models

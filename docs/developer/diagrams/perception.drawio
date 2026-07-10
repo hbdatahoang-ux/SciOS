@@ -1,0 +1,319 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |          External Inputs             |
+                    +------------------+-------------------+
+                                       |
+        +------------------------------+------------------------------+
+        |              |               |               |              |
+        v              v               v               v              v
+      Text          Image           Audio          Sensor          Document
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |        Perception Manager            |
+                    +--------------------------------------+
+                    | Input Adapter                        |
+                    | Preprocessor                         |
+                    | Feature Extractor                    |
+                    | Multi-modal Fusion                   |
+                    | Context Builder                      |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                               Working Memory
+Perception Pipeline
+Raw Input
+
+↓
+
+Input Adapter
+
+↓
+
+Validation
+
+↓
+
+Normalization
+
+↓
+
+Feature Extraction
+
+↓
+
+Fusion
+
+↓
+
+Context Encoding
+
+↓
+
+Percept
+
+↓
+
+Memory
+Internal Components
+                +-----------------------------+
+                |     Perception Manager      |
+                +-----------------------------+
+                | Adapter                     |
+                | Normalizer                  |
+                | Feature Extractor           |
+                | Fusion Engine               |
+                | Context Builder             |
+                +-----------------------------+
+Input Adapters
+Input
+
+        |
+        +-------------------------------+
+        |               |               |
+        v               v               v
+  Text Adapter   Image Adapter   Audio Adapter
+        |
+        +---------------+---------------+
+                        |
+                        v
+                 Standard Input
+
+Mỗi adapter chuyển dữ liệu về một định dạng thống nhất để các bước sau có thể xử lý.
+
+Feature Extraction
+Normalized Input
+
+↓
+
+Tokenizer
+
+↓
+
+Embedding
+
+↓
+
+Feature Vector
+
+↓
+
+Fusion Engine
+
+Đầu ra là các biểu diễn đặc trưng dùng cho hợp nhất đa phương thức.
+
+Multi-modal Fusion
+ Text Features
+        |
+ Image Features
+        |
+ Audio Features
+        |
+ Sensor Features
+        |
+        +------------+
+                     |
+                     v
+             Fusion Engine
+                     |
+                     v
+            Unified Representation
+
+Fusion Engine tạo một biểu diễn thống nhất từ nhiều nguồn dữ liệu.
+
+Context Building
+Unified Representation
+
+↓
+
+Metadata
+
+↓
+
+Environment Context
+
+↓
+
+Task Context
+
+↓
+
+Percept
+
+Percept bao gồm dữ liệu đã được gắn ngữ cảnh để phục vụ các giai đoạn nhận thức tiếp theo.
+
+Perception Flow
+Input
+
+↓
+
+Perception
+
+↓
+
+Working Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Reflection
+Error Handling
+Raw Input
+
+↓
+
+Validation
+
+↓
+
+Invalid?
+
+↓
+
+Reject
+
+↓
+
+Log
+
+↓
+
+Return Error
+
+Nếu dữ liệu hợp lệ:
+
+Raw Input
+
+↓
+
+Validation
+
+↓
+
+Normalization
+
+↓
+
+Pipeline
+Perception Lifecycle
+Receive
+
+↓
+
+Validate
+
+↓
+
+Normalize
+
+↓
+
+Extract Features
+
+↓
+
+Fuse
+
+↓
+
+Build Context
+
+↓
+
+Output Percept
+Relationship with Cognitive Core
+External World
+       |
+       v
+Perception
+       |
+       v
+Working Memory
+       |
+       v
+Reasoning
+       |
+       v
+Planning
+       |
+       v
+Tool Use
+       |
+       v
+Reflection
+Perception API
+PerceptionManager
+
+├── ingest()
+
+├── validate()
+
+├── normalize()
+
+├── extract_features()
+
+├── fuse()
+
+├── build_context()
+
+└── process()
+Suggested Colors
+Component	Color
+Input Sources	Gray
+Adapters	Blue
+Feature Extraction	Green
+Fusion Engine	Orange
+Context Builder	Purple
+Working Memory	Cyan
+Footer
+SciOS Developer Handbook
+
+Perception Architecture
+
+Version: v0.2
+
+Phase 8 — Cognitive Core
+Vai trò trong kiến trúc SciOS
+
+Sơ đồ này là điểm bắt đầu của Cognitive Core và liên kết trực tiếp với các sơ đồ khác:
+
+External Inputs
+        │
+        ▼
+perception.drawio
+        │
+        ▼
+memory.drawio
+        │
+        ▼
+reasoning.drawio
+        │
+        ▼
+planning.drawio
+        │
+        ▼
+tool_use.drawio
+        │
+        ▼
+reflection.drawio
+        │
+        ▼
+artifact_manager.drawio
+
+Theo kiến trúc này:
+
+perception.drawio chịu trách nhiệm tiếp nhận và chuẩn hóa dữ liệu đầu vào.
+memory.drawio lưu trữ Percept trong Working Memory và hỗ trợ truy xuất tri thức.
+reasoning.drawio khai thác ngữ cảnh để suy luận.
+planning.drawio xây dựng kế hoạch hành động.
+tool_use.drawio thực thi các hành động thông qua công cụ hoặc dịch vụ.
+reflection.drawio đánh giá kết quả và quyết định những gì cần được hợp nhất vào bộ nhớ dài hạn.
+
+Kiến trúc này giữ cho Perception độc lập với các thuật toán AI cụ thể, cho phép thay thế hoặc bổ sung các bộ xử lý (LLM, VLM, ASR, cảm biến IoT, dữ liệu khoa học...) thông qua các adapter và plugin mà không ảnh hưởng đến phần còn lại của SciOS.

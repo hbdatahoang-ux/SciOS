@@ -2,175 +2,77 @@
 SciOS Kernel Lifecycle
 ======================
 
-Kernel lifecycle state machine.
+Manages the lifecycle state of the Kernel.
 
 Responsibilities
 ----------------
-- Kernel state transitions
-- Transition validation
-- Idempotent lifecycle management
-- Runtime status reporting
+- Track Kernel state transitions.
+- Provide lifecycle control methods (boot, stop, restart).
+- Ensure valid state transitions.
 """
 
 from __future__ import annotations
+from typing import Optional
 
-from enum import Enum
-
-__all__ = [
-    "KernelState",
-    "LifecycleManager",
-]
+from .state import KernelState
 
 
-class KernelState(str, Enum):
-    """
-    Kernel lifecycle states.
-    """
-
-    STOPPED = "stopped"
-
-    BOOTING = "booting"
-
-    READY = "running"
-
-    STOPPING = "stopping"
+__all__ = ["LifecycleManager"]
 
 
 class LifecycleManager:
     """
-    Finite-state machine for the SciOS kernel.
-
-    State Diagram
-    -------------
-
-        STOPPED
-            │
-            ▼
-        BOOTING
-            │
-            ▼
-        READY
-            │
-            ▼
-        STOPPING
-            │
-            ▼
-        STOPPED
+    Lifecycle controller for the Kernel.
     """
 
-    _ALLOWED = {
+    def __init__(self, kernel: "Kernel") -> None:
+        self.kernel = kernel
+        self._state: KernelState = KernelState.CREATED
 
-        KernelState.STOPPED: {
-            KernelState.BOOTING,
-        },
-
-        KernelState.BOOTING: {
-            KernelState.READY,
-            KernelState.STOPPED,
-        },
-
-        KernelState.READY: {
-            KernelState.STOPPING,
-        },
-
-        KernelState.STOPPING: {
-            KernelState.STOPPED,
-        },
-    }
-
-    def __init__(self) -> None:
-
-        self._state = KernelState.STOPPED
-
-    # =====================================================
+    # ==========================================================
     # Properties
-    # =====================================================
+    # ==========================================================
 
     @property
     def state(self) -> KernelState:
+        """Current lifecycle state."""
         return self._state
 
-    @property
-    def running(self) -> bool:
-        return self._state is KernelState.READY
+    # ==========================================================
+    # Lifecycle operations
+    # ==========================================================
 
-    @property
-    def booted(self) -> bool:
-        return self.running
+    def boot(self) -> None:
+        """Boot the kernel into RUNNING state."""
+        if self._state not in {KernelState.CREATED, KernelState.STOPPED}:
+            raise RuntimeError(f"Cannot boot from state {self._state}")
+        self._state = KernelState.RUNNING
 
-    # =====================================================
-    # Transition
-    # =====================================================
-
-    def transition(
-        self,
-        state: KernelState,
-    ) -> None:
-        """
-        Perform a validated lifecycle transition.
-        """
-
-        if state is self._state:
-            return
-
-        allowed = self._ALLOWED[self._state]
-
-        if state not in allowed:
-
-            raise RuntimeError(
-                f"Illegal lifecycle transition: "
-                f"{self._state.value} -> {state.value}"
-            )
-
-        self._state = state
-
-    # =====================================================
-    # Force
-    # =====================================================
-
-    def force(
-        self,
-        state: KernelState,
-    ) -> None:
-        """
-        Force lifecycle state.
-
-        Intended only for emergency recovery
-        during failed boot sequences.
-        """
-
-        self._state = state
-
-    # =====================================================
-    # Helpers
-    # =====================================================
-
-    def reset(self) -> None:
-        """
-        Reset lifecycle.
-        """
-
+    def stop(self) -> None:
+        """Stop the kernel."""
+        if self._state != KernelState.RUNNING:
+            raise RuntimeError(f"Cannot stop from state {self._state}")
         self._state = KernelState.STOPPED
 
-    # =====================================================
-    # Status
-    # =====================================================
+    def restart(self) -> None:
+        """Restart the kernel."""
+        if self._state != KernelState.RUNNING:
+            raise RuntimeError(f"Cannot restart from state {self._state}")
+        self._state = KernelState.RESTARTING
+        # transition back to RUNNING
+        self._state = KernelState.RUNNING
 
-    def status(self) -> dict[str, object]:
+    # ==========================================================
+    # Utilities
+    # ==========================================================
 
-        return {
-            "state": self._state.value,
-            "booted": self.booted,
-            "running": self.running,
-        }
+    def reset(self) -> None:
+        """Reset lifecycle back to CREATED."""
+        self._state = KernelState.CREATED
 
-    # =====================================================
-    # Representation
-    # =====================================================
+    # ==========================================================
+    # Python Protocols
+    # ==========================================================
 
     def __repr__(self) -> str:
-
-        return (
-            "LifecycleManager("
-            f"state='{self._state.value}')"
-        )
+        return f"LifecycleManager(state={self._state})"

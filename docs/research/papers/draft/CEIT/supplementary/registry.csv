@@ -1,0 +1,5 @@
+ID,Title,File,Paper,Version,Status,Author,Created,Modified,Description
+SUP-0001,Extended Derivation,SUP-0001.md,CEIT,v0.1,Draft,Bui Dinh Hoang,2026-07-08,2026-07-08,Full derivation of elasticity equations
+SUP-0002,Raw Experimental Images,SUP-0002.pdf,CEIT,v1.0,Approved,Bui Dinh Hoang,2026-07-08,2026-07-08,Supplementary microscopy images
+SUP-0003,Simulation Log,SUP-0003.txt,CEIT,v0.2,Reviewed,Bui Dinh Hoang,2026-07-08,2026-07-08,Log file of simulation runs
+SUP-0004,Additional References,SUP-0004.bib,CEIT,v1.0,Approved,Bui Dinh Hoang,2026-07-08,2026-07-08,Bibliographic references not in main paper

@@ -1,21 +1,40 @@
 """
-SciOS Runtime
-=============
+SciOS Runtime Package
+=====================
 
-Kernel Runtime subsystem.
+Runtime subsystem of the SciOS Kernel.
 
-This package provides the execution engine responsible for
-dispatching tasks from the Kernel Scheduler to the cognitive
-Agent pipeline.
+The Runtime is responsible for coordinating task execution through:
 
-Public API
-----------
-Runtime
-    Kernel runtime execution engine.
+    Runtime
+        ↓
+    RuntimeExecutor
+        ↓
+    Worker
+        ↓
+    RuntimeLoop
+
+This package intentionally contains no cognitive logic.
 """
 
-from .engine import Runtime
+from .runtime import Runtime, RuntimeState
+from .executor import RuntimeExecutor
+from .worker import Worker
+from .loop import RuntimeLoop
 
 __all__ = [
+    # runtime
     "Runtime",
+    "RuntimeState",
+
+    # execution
+    "RuntimeExecutor",
+
+    # workers
+    "Worker",
+
+    # runtime loop
+    "RuntimeLoop",
 ]
+
+__version__ = "0.2.0"

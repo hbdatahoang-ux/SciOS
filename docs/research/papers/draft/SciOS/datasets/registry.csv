@@ -1,0 +1,6 @@
+ID,Title,Author,Created,LastUpdated,Status,Category,File,Caption
+DATA-0001,Raw Sensor Data,Nguyen Van A,2026-07-01,2026-07-02,Approved,raw,sensor_data.csv,caption.md
+DATA-0002,Processed Training Set,Tran Thi B,2026-07-02,2026-07-03,Draft,processed,training_set.csv,caption.md
+DATA-0003,External Benchmark Dataset,Le Van C,2026-07-03,2026-07-04,Published,external,benchmark_dataset.zip,caption.md
+DATA-0004,Raw Image Collection,Pham Thi D,2026-07-04,2026-07-05,Approved,raw,images_raw.zip,caption.md
+DATA-0005,Processed Validation Set,Hoang Van E,2026-07-05,2026-07-06,Draft,processed,validation_set.csv,caption.md

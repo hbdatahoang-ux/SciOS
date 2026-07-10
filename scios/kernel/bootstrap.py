@@ -1,221 +1,91 @@
 """
-SciOS Bootstrap
-===============
+SciOS Bootstrap (Composition Root)
 
-Kernel bootstrap manager.
-
-Responsible for bootstrapping and shutting down all
-core kernel subsystems in a deterministic order.
-
-Boot Order
-----------
-Lifecycle
-    ↓
-Context
-    ↓
-Registry
-    ↓
-EventBus
-    ↓
-Runtime
-    ↓
-READY
-
-Shutdown Order
---------------
-Runtime
-    ↓
-EventBus
-    ↓
-Registry
-    ↓
-Context
-    ↓
-STOPPED
+Builds the complete SciOS Kernel object graph.
 """
 
 from __future__ import annotations
+from typing import Optional
 
-import logging
+from .artifacts import ArtifactManager
+from .config import KernelConfig
+from .context import ContextManager
+from .dispatcher import Dispatcher
+from .events import EventBus
+from .execution import ExecutionEngine
+from .kernel import Kernel
+from .lifecycle import LifecycleManager
+from .plugins import PluginManager
+from .registry import ServiceRegistry
+from .scheduler import Scheduler
 
-from .lifecycle import KernelState
-
-__all__ = [
-    "Bootstrap",
-]
-
-_LOG = logging.getLogger("SciOS.Bootstrap")
+from .runtime.executor import RuntimeExecutor
+from .runtime.loop import RuntimeLoop
+from .runtime.runtime import Runtime
+from .runtime.worker import Worker
 
 
-class Bootstrap:
-    """
-    SciOS kernel bootstrap manager.
+def _build_infrastructure(config: KernelConfig) -> tuple[EventBus, ServiceRegistry, ContextManager]:
+    event_bus = EventBus()
+    registry = ServiceRegistry()
+    context = ContextManager()
+    return event_bus, registry, context
 
-    This class owns the initialization and shutdown
-    sequence of every core subsystem.
 
-    The operations are fully idempotent.
-    """
+def _build_services(event_bus: EventBus, config: KernelConfig) -> tuple[Scheduler, PluginManager, ArtifactManager]:
+    scheduler = Scheduler()
+    plugins = PluginManager()
+    artifacts = ArtifactManager(event_bus if getattr(config, "enable_events", True) else None)
+    return scheduler, plugins, artifacts
 
-    # ==========================================================
-    # Boot
-    # ==========================================================
 
-    def boot(self, kernel) -> bool:
-        """
-        Boot the SciOS kernel.
+def _build_runtime(scheduler: Scheduler) -> tuple[Dispatcher, ExecutionEngine, RuntimeExecutor, Worker, RuntimeLoop, Runtime]:
+    dispatcher = Dispatcher(scheduler)
+    execution_engine = ExecutionEngine(dispatcher)
+    runtime_executor = RuntimeExecutor(scheduler, execution_engine)
+    worker = Worker(runtime_executor)
+    loop = RuntimeLoop(scheduler, worker)
+    runtime = Runtime(scheduler=scheduler, executor=runtime_executor, worker=worker, loop=loop)
+    return dispatcher, execution_engine, runtime_executor, worker, loop, runtime
 
-        Returns
-        -------
-        bool
-            True if the kernel is running.
-        """
 
-        if kernel.lifecycle.state is KernelState.READY:
-            return True
+def build_kernel(config: Optional[KernelConfig] = None) -> Kernel:
+    config = config or KernelConfig()
 
-        _LOG.info("Bootstrapping SciOS...")
+    event_bus, registry, context = _build_infrastructure(config)
+    scheduler, plugins, artifacts = _build_services(event_bus, config)
+    dispatcher, execution_engine, runtime_executor, worker, loop, runtime = _build_runtime(scheduler)
 
-        try:
+    kernel = Kernel(
+        config=config,
+        event_bus=event_bus,
+        registry=registry,
+        context=context,
+        scheduler=scheduler,
+        plugins=plugins,
+        artifacts=artifacts,
+        dispatcher=dispatcher,
+        execution_engine=execution_engine,
+        runtime=runtime,
+        lifecycle=None,
+    )
 
-            kernel.lifecycle.transition(
-                KernelState.BOOTING
-            )
+    lifecycle = LifecycleManager(kernel)
+    kernel._lifecycle = lifecycle
 
-            # --------------------------------------------------
-            # Reset execution context
-            # --------------------------------------------------
+    # Register all services
+    registry.register("config", config)
+    registry.register("events", event_bus)
+    registry.register("context", context)
+    registry.register("scheduler", scheduler)
+    registry.register("plugins", plugins)
+    registry.register("artifacts", artifacts)
+    registry.register("dispatcher", dispatcher)
+    registry.register("execution", execution_engine)
+    registry.register("runtime_executor", runtime_executor)
+    registry.register("worker", worker)
+    registry.register("runtime_loop", loop)
+    registry.register("runtime", runtime)
+    registry.register("kernel", kernel)
 
-            kernel.context.reset()
-
-            # --------------------------------------------------
-            # Register core services
-            # --------------------------------------------------
-
-            kernel.registry.register(
-                "runtime",
-                kernel.runtime,
-                overwrite=True,
-            )
-
-            kernel.registry.register(
-                "eventbus",
-                kernel.eventbus,
-                overwrite=True,
-            )
-
-            kernel.registry.register(
-                "context",
-                kernel.context,
-                overwrite=True,
-            )
-
-            # --------------------------------------------------
-            # Boot runtime
-            # --------------------------------------------------
-
-            kernel.runtime.boot()
-
-            # --------------------------------------------------
-            # Ready
-            # --------------------------------------------------
-
-            kernel.lifecycle.transition(
-                KernelState.READY
-            )
-
-            _LOG.info("SciOS boot completed.")
-
-            return True
-
-        except Exception:
-
-            _LOG.exception(
-                "Kernel boot failed."
-            )
-
-            # rollback
-            try:
-                kernel.runtime.shutdown()
-            except Exception:
-                pass
-
-            try:
-                kernel.registry.clear()
-            except Exception:
-                pass
-
-            try:
-                kernel.eventbus.clear()
-            except Exception:
-                pass
-
-            try:
-                kernel.context.reset()
-            except Exception:
-                pass
-
-            kernel.lifecycle.force(
-                KernelState.STOPPED
-            )
-
-            raise
-
-    # ==========================================================
-    # Shutdown
-    # ==========================================================
-
-    def shutdown(self, kernel) -> bool:
-        """
-        Shutdown the kernel.
-
-        Returns
-        -------
-        bool
-            True if shutdown succeeds.
-        """
-
-        if kernel.lifecycle.state is KernelState.STOPPED:
-            return True
-
-        _LOG.info("Shutting down SciOS...")
-
-        kernel.lifecycle.transition(
-            KernelState.STOPPING
-        )
-
-        # --------------------------------------------------
-        # Runtime
-        # --------------------------------------------------
-
-        kernel.runtime.shutdown()
-
-        # --------------------------------------------------
-        # EventBus
-        # --------------------------------------------------
-
-        kernel.eventbus.clear()
-
-        # --------------------------------------------------
-        # Registry
-        # --------------------------------------------------
-
-        kernel.registry.clear()
-
-        # --------------------------------------------------
-        # Context
-        # --------------------------------------------------
-
-        kernel.context.reset()
-
-        # --------------------------------------------------
-        # Lifecycle
-        # --------------------------------------------------
-
-        kernel.lifecycle.transition(
-            KernelState.STOPPED
-        )
-
-        _LOG.info("SciOS shutdown completed.")
-
-        return True
+    return kernel

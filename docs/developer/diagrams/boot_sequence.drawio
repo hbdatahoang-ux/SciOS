@@ -1,0 +1,429 @@
+Overall Boot Sequence (UML Sequence)
++--------+
+| Client |
++--------+
+     |
+     | SciOS.boot()
+     |
+     v
++----------------+
+| SciOS API      |
++----------------+
+     |
+     | create()
+     |
+     v
++----------------+
+| Kernel         |
++----------------+
+     |
+     | initialize()
+     |
+     v
++----------------+
+| Bootstrap      |
++----------------+
+     |
+     | configure()
+     |
+     v
++----------------+
+| Configuration  |
++----------------+
+     |
+     | load()
+     |
+     v
++----------------+
+| ServiceRegistry|
++----------------+
+     |
+     | register()
+     |
+     v
++----------------+
+| Event Bus      |
++----------------+
+     |
+     | initialize()
+     |
+     v
++----------------+
+| Runtime        |
++----------------+
+     |
+     | boot()
+     |
+     v
++----------------+
+| Scheduler      |
++----------------+
+     |
+     | initialize()
+     |
+     v
++----------------+
+| PipelineBuilder|
++----------------+
+     |
+     | build()
+     |
+     v
++----------------+
+| CognitivePipeline |
++----------------+
+     |
+     | validate()
+     |
+     v
++----------------+
+| Contracts      |
++----------------+
+     |
+     | ready()
+     |
+     v
++----------------+
+| Kernel         |
++----------------+
+     |
+     | READY
+     |
+     v
++--------+
+| Client |
++--------+
+Boot Lifecycle
+Start
+
+↓
+
+Bootstrap
+
+↓
+
+Load Configuration
+
+↓
+
+Register Services
+
+↓
+
+Initialize Event Bus
+
+↓
+
+Initialize Runtime
+
+↓
+
+Initialize Scheduler
+
+↓
+
+Build Pipeline
+
+↓
+
+Validate Pipeline
+
+↓
+
+READY
+Bootstrap Responsibilities
+Bootstrap
+
+↓
+
+Configuration
+
+↓
+
+Service Registry
+
+↓
+
+Logging
+
+↓
+
+Event Bus
+
+↓
+
+Runtime
+
+↓
+
+Kernel Ready
+
+Lưu ý: Bootstrap không tạo các Cognitive Stage. Việc đó thuộc về PipelineBuilder.
+
+Pipeline Creation
+Kernel
+
+↓
+
+PipelineBuilder
+
+↓
+
+Build Pipeline
+
+↓
+
+Validate
+
+↓
+
+Pipeline Ready
+Service Registration
+Bootstrap
+
+↓
+
+Service Registry
+
+↓
+
+Runtime
+
+Scheduler
+
+Dispatcher
+
+Event Bus
+
+Configuration
+Runtime Initialization
+Bootstrap
+
+↓
+
+Kernel Runtime
+
+↓
+
+Worker Pool
+
+↓
+
+Scheduler
+
+↓
+
+READY
+Event Bus Initialization
+Bootstrap
+
+↓
+
+Event Bus
+
+↓
+
+Subscribe Internal Events
+
+↓
+
+READY
+
+Các sự kiện nội bộ có thể bao gồm:
+
+kernel.boot
+pipeline.created
+runtime.ready
+request.started
+request.completed
+system.shutdown
+Pipeline Validation
+Pipeline Builder
+
+↓
+
+Pipeline
+
+↓
+
+Contracts
+
+↓
+
+Valid?
+
+↓
+
+Yes
+
+↓
+
+READY
+
+Nếu không hợp lệ:
+
+Pipeline
+
+↓
+
+Validation Error
+
+↓
+
+Boot Failed
+Kernel State Transition
+CREATED
+
+↓
+
+BOOTING
+
+↓
+
+INITIALIZING
+
+↓
+
+BUILDING_PIPELINE
+
+↓
+
+VALIDATING
+
+↓
+
+READY
+
+Nếu lỗi:
+
+BOOTING
+
+↓
+
+FAILED
+
+↓
+
+SHUTDOWN
+Complete Boot Flow
+Client
+
+↓
+
+SciOS API
+
+↓
+
+Kernel
+
+↓
+
+Bootstrap
+
+↓
+
+Configuration
+
+↓
+
+Service Registry
+
+↓
+
+Event Bus
+
+↓
+
+Runtime
+
+↓
+
+Scheduler
+
+↓
+
+Pipeline Builder
+
+↓
+
+Pipeline
+
+↓
+
+Contracts
+
+↓
+
+Kernel READY
+Boot Dependencies
+Configuration
+        │
+        ▼
+Bootstrap
+        │
+        ▼
+Service Registry
+        │
+        ▼
+Event Bus
+        │
+        ▼
+Runtime
+        │
+        ▼
+Scheduler
+        │
+        ▼
+Pipeline Builder
+        │
+        ▼
+Pipeline
+Suggested Colors
+Component	Color
+Client	Gray
+SciOS API	Blue
+Kernel	Orange
+Bootstrap	Yellow
+Configuration	Cyan
+Service Registry	Green
+Runtime	Purple
+Scheduler	Red
+Pipeline Builder	Dark Blue
+Pipeline	Teal
+Contracts	Brown
+Footer
+SciOS Developer Handbook
+
+Boot Sequence
+
+Version: v0.2
+
+Phase 8 — Kernel Architecture
+Vai trò trong kiến trúc SciOS
+
+boot_sequence.drawio mô tả chuỗi khởi động của toàn bộ hệ thống và là cầu nối giữa các sơ đồ kiến trúc tĩnh và sơ đồ thực thi.
+
+deployment.drawio
+        │
+        ▼
+boot_sequence.drawio
+        │
+        ▼
+kernel.drawio
+        │
+        ▼
+runtime.drawio
+        │
+        ▼
+runtime_sequence.drawio
+        │
+        ▼
+pipeline.drawio
+Trách nhiệm của từng thành phần
+SciOS API: Điểm vào của ứng dụng, khởi tạo Kernel.
+Kernel: Điều phối toàn bộ quá trình khởi động và quản lý vòng đời hệ thống.
+Bootstrap: Khởi tạo hạ tầng cốt lõi như Configuration, Service Registry, Event Bus và Runtime.
+PipelineBuilder: Lắp ráp CognitivePipeline từ các thành phần nhận thức.
+Contracts: Kiểm tra tính hợp lệ của pipeline trước khi hệ thống chuyển sang trạng thái READY.
+
+Việc tách riêng Bootstrap và PipelineBuilder giúp SciOS tuân thủ mô hình Composition Root: Bootstrap chỉ xây dựng hạ tầng, còn việc cấu hình Cognitive Pipeline được thực hiện ở một lớp chuyên trách. Kiến trúc này giảm coupling, tăng khả năng mở rộng và cho phép hỗ trợ nhiều loại pipeline khác nhau trong các phiên bản tương lai mà không cần thay đổi quá trình khởi động của Kernel.

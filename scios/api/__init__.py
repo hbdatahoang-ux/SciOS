@@ -1,12 +1,17 @@
 """
-SciOS Public API
-================
+SciOS API Layer
+===============
 
-Public interface exposed by the SciOS package.
+Public interface for external clients.
+Provides stable endpoints that interact with SciOS Runtime/Kernel.
 """
 
-from .scios import SciOS
-
 __all__ = [
-    "SciOS",
+    "server",
+    "routes",
+    "controller",
+    "schemas",
+    "middleware",
+    "dependencies",
+    "errors",
 ]

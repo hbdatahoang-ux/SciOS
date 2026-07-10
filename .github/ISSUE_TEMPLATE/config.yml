@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Community Support
+    url: https://github.com/SciOS-NG/SciOS/discussions
+    about: Ask questions, share ideas, or start discussions with the community.
+  - name: 📖 Documentation
+    url: https://github.com/SciOS-NG/SciOS/tree/main/docs
+    about: Check the documentation before filing an issue.
+  - name: 🔒 Security Policy
+    url: https://github.com/SciOS-NG/SciOS/blob/main/.github/SECURITY.md
+    about: Please report security vulnerabilities responsibly.

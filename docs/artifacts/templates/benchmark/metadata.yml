@@ -1,0 +1,57 @@
+# ============================================================
+# SciOS Benchmark Metadata Template
+# ============================================================
+
+ID: BENCH-XXXX
+
+Title: 
+
+Paper: SciOS
+
+Section: 
+
+Version: v0.1
+
+Status: Draft
+
+Author: 
+
+Created: YYYY-MM-DD
+
+LastUpdated: YYYY-MM-DD
+
+Reviewer: 
+
+ApprovedBy: 
+
+Keywords: []
+
+Description: >
+  Short description of the benchmark, its purpose, and context.
+
+Purpose: >
+  Why this benchmark exists and what it demonstrates.
+
+Caption: caption.md
+
+Files:
+  Protocol: protocol.md
+  Results: results.csv
+
+Dependencies:
+  Datasets: []
+  Workflows: []
+  Models: []
+  Figures: []
+  Tables: []
+  Equations: []
+  Supplementary: []
+
+RelatedSections: []
+
+License: CC-BY-4.0
+
+DOI: 
+
+Notes: >
+  Any additional notes or comments.

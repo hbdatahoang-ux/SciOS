@@ -1,0 +1,241 @@
+# ============================================================
+# SciOS Pipeline Configuration Schema
+# Version: 1.0
+# ============================================================
+
+schema:
+  name: SciOS Pipeline Configuration
+  version: "1.0"
+
+required:
+  - version
+  - pipeline
+  - stages
+  - graph
+
+# ============================================================
+# Pipeline
+# ============================================================
+
+pipeline:
+
+  type: object
+
+  required:
+    - name
+    - execution_mode
+
+  properties:
+
+    name:
+      type: string
+
+    description:
+      type: string
+
+    execution_mode:
+      type: enum
+      values:
+        - sequential
+        - parallel
+        - hybrid
+
+    max_workers:
+      type: integer
+      minimum: 1
+
+    retry_attempts:
+      type: integer
+      minimum: 0
+
+    timeout:
+      type: integer
+      minimum: 1
+
+    logging:
+      type: boolean
+
+    tracing:
+      type: boolean
+
+    metrics:
+      type: boolean
+
+    profiling:
+      type: boolean
+
+    confidence_threshold:
+      type: float
+      minimum: 0.0
+      maximum: 1.0
+
+    auto_memory_update:
+      type: boolean
+
+    fail_fast:
+      type: boolean
+
+# ============================================================
+# Stages
+# ============================================================
+
+stages:
+
+  type: object
+
+  required:
+    - perception
+    - memory
+    - reasoning
+    - planning
+    - tool_use
+    - reflection
+    - memory_update
+
+  stage_schema:
+
+    enabled:
+      type: boolean
+
+    implementation:
+      type: string
+
+    timeout:
+      type: integer
+      minimum: 1
+
+# ============================================================
+# Execution Graph
+# ============================================================
+
+graph:
+
+  type: object
+
+  required:
+    - type
+
+  properties:
+
+    type:
+      type: enum
+      values:
+        - DAG
+        - Pipeline
+
+    allow_cycles:
+      type: boolean
+
+    validate_before_run:
+      type: boolean
+
+    auto_topological_sort:
+      type: boolean
+
+# ============================================================
+# Dispatcher
+# ============================================================
+
+dispatcher:
+
+  type: object
+
+  properties:
+
+    strategy:
+      type: enum
+      values:
+        - sequential
+        - parallel
+        - priority
+
+    continue_on_error:
+      type: boolean
+
+    emit_events:
+      type: boolean
+
+# ============================================================
+# Event Bus
+# ============================================================
+
+events:
+
+  type: object
+
+  properties:
+
+    enabled:
+      type: boolean
+
+    history_size:
+      type: integer
+      minimum: 0
+
+# ============================================================
+# Memory
+# ============================================================
+
+memory:
+
+  type: object
+
+  properties:
+
+    semantic:
+      type: boolean
+
+    episodic:
+      type: boolean
+
+    working:
+      type: boolean
+
+    auto_save:
+      type: boolean
+
+# ============================================================
+# Artifact Manager
+# ============================================================
+
+artifacts:
+
+  type: object
+
+  properties:
+
+    enabled:
+      type: boolean
+
+    validate_metadata:
+      type: boolean
+
+    registry_cache:
+      type: boolean
+
+# ============================================================
+# Output
+# ============================================================
+
+output:
+
+  type: object
+
+  properties:
+
+    format:
+      type: enum
+      values:
+        - dict
+        - json
+        - yaml
+        - markdown
+
+    pretty:
+      type: boolean
+
+    include_trace:
+      type: boolean
+
+    include_metrics:
+      type: boolean

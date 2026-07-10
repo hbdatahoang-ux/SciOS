@@ -1,135 +1,42 @@
 # SciOS
 
-> **Scientific Cognitive Operating System**
-
-SciOS is an experimental operating system architecture for autonomous scientific intelligence.
-
-Unlike traditional AI frameworks, SciOS is designed as a **cognitive operating system** with a microkernel architecture where reasoning, memory, planning, execution, and autonomous scientific agents operate as coordinated subsystems.
+> Scientific Cognitive Operating System
+>
+> A research-grade cognitive operating system for autonomous scientific discovery.
 
 ---
 
-# Vision
+## Overview
 
-SciOS aims to become a general cognitive infrastructure for:
+SciOS is an open, modular, and extensible operating system for scientific AI.
 
-- Autonomous Scientific Discovery
-- Cognitive Computing
-- Scientific AI
-- Distributed AI Systems
-- Planetary-scale AI Runtime
-- AI Operating Systems
+The project integrates:
 
----
+- Cognitive Kernel
+- Runtime Engine
+- Memory System
+- Reasoning Engine
+- Planning
+- Reflection
+- Tool Use
+- Artifact Management
+- Research Workflow
 
-# Core Architecture
-
-```
-SciOS
-│
-├── API
-├── Kernel
-│   ├── Bootstrap
-│   ├── Lifecycle
-│   ├── Runtime
-│   ├── Scheduler
-│   ├── Registry
-│   ├── EventBus
-│   └── Context
-│
-├── Agents
-│   ├── Memory
-│   ├── Reasoning
-│   ├── Planner
-│   ├── Reflection
-│   ├── Collaboration
-│   └── ToolUse
-│
-├── Runtime
-├── Substrate
-├── Infrastructure
-└── Applications
-```
+SciOS is designed to support reproducible research, autonomous scientific agents, and large-scale cognitive systems.
 
 ---
 
-# Current Status
+# Features
 
-Current development milestone:
-
-**SciOS Boot Kernel v0.2**
-
-Implemented:
-
-- Boot sequence
-- Shutdown sequence
-- Runtime engine
-- Scheduler
-- Component registry
-- Event bus
-- Execution context
-- Agent executor
-- Semantic memory
-- Reasoning engine
-- CLI application
-- Boot integration tests
-
-Current test status:
-
-```
-12 Boot Tests Passed
-```
-
----
-
-# Installation
-
-Clone the repository
-
-```bash
-git clone <repository-url>
-
-cd SciOS
-```
-
-Install in editable mode
-
-```bash
-pip install -e .
-```
-
----
-
-# Quick Start
-
-Create a SciOS instance
-
-```python
-from scios import SciOS
-
-os = SciOS()
-
-os.boot()
-
-result = os.run("Analyze this system")
-
-print(result)
-
-os.shutdown()
-```
-
----
-
-# Run Tests
-
-```bash
-pytest
-```
-
-or
-
-```bash
-pytest -v
-```
+- Modular Cognitive Architecture
+- Research-grade Artifact Management
+- Reproducible Scientific Workflow
+- Plugin-based Runtime
+- Distributed Execution
+- Experiment Tracking
+- Benchmark Framework
+- Dataset Registry
+- Built-in Documentation System
 
 ---
 
@@ -137,96 +44,223 @@ pytest -v
 
 ```
 SciOS/
-│
-├── apps/
-├── benchmarks/
-├── docs/
-├── examples/
-├── scripts/
-├── tests/
-│
-├── scios/
-│   ├── api/
-│   ├── agents/
-│   ├── kernel/
-│   ├── runtime/
-│   ├── substrate/
-│   └── shared/
-│
-├── README.md
-├── LICENSE
-├── pyproject.toml
-└── .gitignore
+
+.github/
+docs/
+governance/
+
+scios/
+
+tests/
+
+examples/
+
+scripts/
+
+README.md
 ```
 
 ---
 
-# Development Roadmap
+# Documentation
 
-## Version 0.2
+## Architecture
 
-- Boot Kernel
-- Runtime
-- Scheduler
-- Registry
-- Event Bus
-- Context
-- Agent Executor
+- docs/architecture/
 
-## Version 0.3
+## API
 
-- Long-Term Memory
-- Planning Engine
-- Reflection Engine
-- Tool Execution
+- docs/api/
 
-## Version 0.4
+## Contracts
 
-- Distributed Runtime
-- Remote Nodes
-- Resource Scheduling
-- Fault Recovery
+- docs/contracts/
 
-## Version 0.5
+## Artifact Specification
 
-- GPU Runtime
-- High Performance Tensor Backend
-- Scientific Computing Pipeline
+- docs/artifacts/
 
-## Version 1.0
+## Research Papers
 
-- Autonomous Scientific Agent
-- Planetary Cognitive Operating System
-- Scientific Discovery Platform
+- docs/research/papers/
 
 ---
 
-# Design Principles
+# Research
 
-SciOS follows several architectural principles.
+Current research projects include
 
-- Microkernel architecture
-- Component isolation
-- Modular reasoning
-- Explicit lifecycle management
-- Typed public APIs
-- Autonomous cognition
-- Extensible execution pipeline
+- SciOS
+- CEIT
+- QTC
+- MUSES
+
+See
+
+```
+docs/research/
+```
+
+---
+
+# Artifact System
+
+SciOS treats every scientific object as an independent artifact.
+
+Supported artifacts
+
+- Figures
+- Tables
+- Equations
+- Datasets
+- Benchmarks
+- Experiments
+- Models
+- Workflows
+- Supplementary Materials
+
+See
+
+```
+docs/artifacts/
+```
+
+---
+
+# Getting Started
+
+Clone
+
+```bash
+git clone https://github.com/...
+```
+
+Install
+
+```bash
+pip install -e .
+```
+
+Run
+
+```bash
+python -m scios
+```
+
+---
+
+# Development
+
+Developer Guide
+
+```
+docs/developer/
+```
+
+Contribution Guide
+
+```
+.github/CONTRIBUTING.md
+```
+
+Coding Standards
+
+```
+docs/design/
+```
+
+---
+
+# Governance
+
+Project governance
+
+```
+governance/
+```
+
+Includes
+
+- roadmap
+- release policy
+- decision process
+- maintainers
+
+---
+
+# Documentation Index
+
+| Area | Location |
+|------|----------|
+| Architecture | docs/architecture |
+| API | docs/api |
+| Design | docs/design |
+| Contracts | docs/contracts |
+| Tutorials | docs/tutorials |
+| Examples | docs/examples |
+| Research | docs/research |
+| Artifact Specification | docs/artifacts |
+| Benchmarks | docs/benchmarks |
+| Developer Guide | docs/developer |
+
+---
+
+# Roadmap
+
+See
+
+```
+ROADMAP.md
+```
+
+---
+
+# Citation
+
+```
+CITATION.cff
+```
 
 ---
 
 # License
 
-SciOS is released under the MIT License.
+See
 
-See the LICENSE file for details.
+```
+LICENSE
+```
 
 ---
 
-# Author
+# Version
 
-**Bui Dinh Hoang**
+Current version
 
-Scientific Cognitive Operating System (SciOS)
+```
+VERSION
+```
 
-2026
+---
+
+# Community
+
+- Issues
+- Discussions
+- Pull Requests
+- Research Proposals
+- Architecture RFCs
+
+---
+
+# SciOS Philosophy
+
+Everything is modular.
+
+Everything is reproducible.
+
+Everything is traceable.
+
+Everything is versioned.
+
+Everything is an artifact.

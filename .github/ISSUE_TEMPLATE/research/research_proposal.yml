@@ -1,0 +1,229 @@
+name: 📑 Research Proposal (RFP)
+description: Propose a new research direction, algorithm, benchmark, experiment, or scientific contribution.
+title: "[Research]: "
+labels:
+  - research
+  - proposal
+  - discussion
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Research Proposal (RFP)
+
+        Đây là template dành cho **Research Proposal (RFP)**.  
+        RFP bắt đầu từ giả thuyết khoa học và câu hỏi nghiên cứu, khác với RFC kiến trúc.  
+        Vui lòng điền đầy đủ thông tin để đảm bảo minh bạch và khả năng tái lập.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the research idea.
+      placeholder: "Introduce hierarchical reflection for planning consistency..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Research Domain
+      description: Select the primary domain.
+      options:
+        - AI Architecture
+        - Reasoning
+        - Planning
+        - Memory
+        - Reflection
+        - Tool Use
+        - Runtime
+        - Distributed Systems
+        - Optimization
+        - Evaluation
+        - Benchmark
+        - Theory
+        - Other
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: Current state of the art, related work, and limitations.
+      placeholder: |
+        - State of the art: ...
+        - Related work: ...
+        - Limitations: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis
+      description: State the scientific hypothesis.
+      placeholder: |
+        We hypothesize that introducing a hierarchical reflection mechanism will reduce planning failures while improving reasoning consistency.
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: research_questions
+    attributes:
+      label: Research Questions
+      description: List the key research questions.
+      placeholder: |
+        - RQ1: ...
+        - RQ2: ...
+        - RQ3: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: methodology
+    attributes:
+      label: Proposed Methodology
+      description: Algorithm, architecture, mathematics, training, evaluation.
+      render: markdown
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: experimental_design
+    attributes:
+      label: Experimental Design
+      description: Dataset, environment, hardware, metrics, baselines.
+      placeholder: |
+        - Dataset: ...
+        - Environment: ...
+        - Hardware: ...
+        - Metrics: ...
+        - Baselines: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: evaluation_metrics
+    attributes:
+      label: Evaluation Metrics
+      description: Define metrics for success.
+      placeholder: |
+        - Accuracy
+        - Latency
+        - Memory usage
+        - Planning success
+        - Tool efficiency
+        - Energy consumption
+        - Scalability
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: expected_contribution
+    attributes:
+      label: Expected Contribution
+      description: Theory, engineering, open-source, scientific, industrial.
+      placeholder: |
+        - Theory: ...
+        - Engineering: ...
+        - Open-source: ...
+        - Scientific: ...
+        - Industrial: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: Technical, research, engineering, reproducibility.
+      placeholder: |
+        - Technical: ...
+        - Research: ...
+        - Engineering: ...
+        - Reproducibility: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: Code, dataset, seeds, environment, documentation.
+      placeholder: |
+        - Code available: ...
+        - Dataset available: ...
+        - Seeds fixed: ...
+        - Environment reproducible: ...
+        - Documentation complete: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: integration
+    attributes:
+      label: Integration Plan
+      description: Which modules are affected.
+      placeholder: |
+        - Planner
+        - Memory
+        - Reasoning
+        - Reflection
+        - Tool Use
+        - Kernel
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Papers, RFCs, ADRs, external projects, books.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: roadmap
+    attributes:
+      label: Roadmap
+      description: Phased plan for research and integration.
+      placeholder: |
+        - Phase 1: ...
+        - Phase 2: ...
+        - Phase 3: ...
+        - Phase 4: ...
+
+# --------------------------------------------------
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: Research question defined
+        - label: Hypothesis defined
+        - label: Evaluation defined
+        - label: Baseline identified
+        - label: Metrics selected
+        - label: Risks analyzed
+        - label: Reproducibility ensured
+        - label: Documentation planned

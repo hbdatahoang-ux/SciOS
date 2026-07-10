@@ -1,55 +1,94 @@
 """
-SciOS Kernel
-============
+SciOS Kernel Package
+====================
 
-Control Plane of the Scientific Cognitive Operating System.
+Core microkernel infrastructure for SciOS.
 
-The kernel is responsible for:
+This package provides:
 
-- System bootstrapping
-- Lifecycle management
-- Component registration
-- Dependency injection
-- Runtime execution
-- Task scheduling
-- Event dispatching
-- Global execution context
+- Kernel (microkernel orchestrator)
+- KernelState (enum of kernel lifecycle states)
+- LifecycleManager (service lifecycle controller)
+- KernelConfig (configuration dataclass)
+- build_kernel() (Composition Root factory)
 
-Public Components
------------------
-Kernel
-    Main kernel facade.
+Infrastructure services:
+- EventBus
+- ServiceRegistry
+- ContextManager
+- Scheduler
+- PluginManager
+- ArtifactManager
 
-Bootstrap
-    Kernel boot sequence.
+Execution subsystem:
+- Dispatcher
+- ExecutionEngine
+- Runtime
 
-LifecycleManager
-    Kernel lifecycle controller.
-
-Scheduler
-    Kernel task scheduler.
-
-Registry
-    Global component registry.
-
-DependencyContainer
-    Dependency injection container.
+The public API exposed here is considered stable.
 """
 
-from .bootstrap import Bootstrap
-from .dependency import DependencyContainer
+from .bootstrap import build_kernel
 from .kernel import Kernel
+from .state import KernelState
 from .lifecycle import LifecycleManager
-from .registry import Registry
-from .scheduler import Scheduler
+from .config import KernelConfig
 
-__version__ = "0.1.3"
+# Infrastructure
+from .events import EventBus
+from .registry import ServiceRegistry
+from .context import ContextManager
+
+# Scheduling
+from .scheduler import Scheduler, Task
+
+# Plugins
+from .plugins import PluginManager
+
+# Artifacts
+from .artifacts import Artifact, ArtifactManager, ArtifactStatus, ArtifactType
+
+# Execution
+from .dispatcher import Dispatcher
+from .execution import ExecutionEngine
+
+# Runtime
+from .runtime.runtime import Runtime
+
+__version__ = "0.2.0"
 
 __all__ = [
+    # bootstrap
+    "build_kernel",
+
+    # kernel
     "Kernel",
-    "Bootstrap",
+    "KernelState",
     "LifecycleManager",
+    "KernelConfig",
+
+    # infrastructure
+    "EventBus",
+    "ServiceRegistry",
+    "ContextManager",
+
+    # scheduling
     "Scheduler",
-    "Registry",
-    "DependencyContainer",
+    "Task",
+
+    # plugins
+    "PluginManager",
+
+    # artifacts
+    "Artifact",
+    "ArtifactType",
+    "ArtifactStatus",
+    "ArtifactManager",
+
+    # execution
+    "Dispatcher",
+    "ExecutionEngine",
+
+    # runtime
+    "Runtime",
 ]
