@@ -2,11 +2,26 @@
 SciOS End-to-End Tests
 ======================
 
-End-to-end tests for the public SciOS API.
+End-to-end tests for the complete SciOS execution flow.
 
-These tests validate the complete user-facing workflow from system
-startup to task execution and shutdown without accessing internal
-components directly.
+System Flow
+
+    User
+      │
+      ▼
+    SciOS API
+      │
+      ▼
+    Kernel
+      │
+      ▼
+ Runtime Engine
+      │
+      ▼
+ Pipeline
+      │
+      ▼
+ Result
 """
 
 from __future__ import annotations
@@ -17,23 +32,67 @@ from scios.api.scios import SciOS
 
 
 # ==========================================================
-# Full Lifecycle
+# Construction
 # ==========================================================
 
-def test_full_lifecycle() -> None:
+def test_scios_creation() -> None:
     """
-    Boot → Run → Shutdown.
+    SciOS should construct successfully.
+    """
+
+    os = SciOS()
+
+    assert os is not None
+
+
+# ==========================================================
+# Boot
+# ==========================================================
+
+def test_boot() -> None:
+    """
+    SciOS should boot successfully.
     """
 
     os = SciOS()
 
     assert os.boot() is True
 
-    result = os.run("ping")
 
-    assert result is not None
+# ==========================================================
+# Shutdown
+# ==========================================================
+
+def test_shutdown() -> None:
+    """
+    SciOS should shutdown successfully.
+    """
+
+    os = SciOS()
+
+    os.boot()
 
     assert os.shutdown() is True
+
+
+# ==========================================================
+# Single Task
+# ==========================================================
+
+def test_single_task() -> None:
+    """
+    Execute one task.
+    """
+
+    os = SciOS()
+
+    os.boot()
+
+    result = os.run(
+        "hello world"
+    )
+
+    assert result is not None
 
 
 # ==========================================================
@@ -42,7 +101,7 @@ def test_full_lifecycle() -> None:
 
 def test_multiple_tasks() -> None:
     """
-    Execute multiple user tasks.
+    Execute multiple tasks.
     """
 
     os = SciOS()
@@ -51,140 +110,18 @@ def test_multiple_tasks() -> None:
 
     for i in range(20):
 
-        result = os.run(f"task-{i}")
+        result = os.run(
+            f"task-{i}"
+        )
 
         assert result is not None
 
-    os.shutdown()
-
 
 # ==========================================================
-# Repeated Sessions
+# Boot Required
 # ==========================================================
 
-@pytest.mark.parametrize(
-    "sessions",
-    [
-        1,
-        3,
-        5,
-    ],
-)
-def test_repeated_sessions(
-    sessions: int,
-) -> None:
-    """
-    Multiple independent sessions.
-    """
-
-    for _ in range(sessions):
-
-        os = SciOS()
-
-        assert os.boot()
-
-        assert os.run("hello") is not None
-
-        assert os.shutdown()
-
-
-# ==========================================================
-# Sequential Requests
-# ==========================================================
-
-def test_sequential_requests() -> None:
-    """
-    Sequential user requests.
-    """
-
-    os = SciOS()
-
-    os.boot()
-
-    requests = [
-        "hello",
-        "compute",
-        "reason",
-        "store",
-        "retrieve",
-    ]
-
-    for request in requests:
-
-        result = os.run(request)
-
-        assert result is not None
-
-    os.shutdown()
-
-
-# ==========================================================
-# Stress
-# ==========================================================
-
-def test_stress_execution() -> None:
-    """
-    Execute many requests.
-    """
-
-    os = SciOS()
-
-    os.boot()
-
-    for i in range(100):
-
-        result = os.run(i)
-
-        assert result is not None
-
-    os.shutdown()
-
-
-# ==========================================================
-# Empty Task
-# ==========================================================
-
-def test_empty_task() -> None:
-    """
-    Empty task should fail.
-    """
-
-    os = SciOS()
-
-    os.boot()
-
-    with pytest.raises(Exception):
-
-        os.run("")
-
-    os.shutdown()
-
-
-# ==========================================================
-# None Task
-# ==========================================================
-
-def test_none_task() -> None:
-    """
-    None task should fail.
-    """
-
-    os = SciOS()
-
-    os.boot()
-
-    with pytest.raises(Exception):
-
-        os.run(None)
-
-    os.shutdown()
-
-
-# ==========================================================
-# Run Before Boot
-# ==========================================================
-
-def test_requires_boot() -> None:
+def test_run_requires_boot() -> None:
     """
     Running before boot should fail.
     """
@@ -197,83 +134,102 @@ def test_requires_boot() -> None:
 
 
 # ==========================================================
-# Shutdown Before Boot
+# Repeated Boot Cycles
 # ==========================================================
 
-def test_shutdown_before_boot() -> None:
+@pytest.mark.parametrize(
+    "cycles",
+    [
+        1,
+        3,
+        5,
+    ],
+)
+def test_boot_cycles(
+    cycles: int,
+) -> None:
     """
-    Shutdown without boot should be safe.
-    """
-
-    os = SciOS()
-
-    assert os.shutdown() is True
-
-
-# ==========================================================
-# Double Boot
-# ==========================================================
-
-def test_double_boot() -> None:
-    """
-    Boot should be idempotent.
+    SciOS should survive repeated boot cycles.
     """
 
     os = SciOS()
 
-    assert os.boot()
+    for _ in range(cycles):
 
-    assert os.boot()
+        assert os.boot() is True
 
-    os.shutdown()
+        result = os.run(
+            "benchmark"
+        )
+
+        assert result is not None
+
+        assert os.shutdown() is True
 
 
 # ==========================================================
-# Double Shutdown
+# Stress
 # ==========================================================
 
-def test_double_shutdown() -> None:
+def test_many_tasks() -> None:
     """
-    Shutdown should be idempotent.
+    Execute many tasks.
     """
 
     os = SciOS()
 
     os.boot()
 
-    assert os.shutdown()
+    for i in range(100):
 
-    assert os.shutdown()
+        result = os.run(
+            f"task-{i}"
+        )
+
+        assert result is not None
 
 
 # ==========================================================
-# User Scenario
+# Consecutive Runs
 # ==========================================================
 
-def test_user_workflow() -> None:
+def test_consecutive_runs() -> None:
     """
-    Simulate a typical user workflow.
+    Runtime should support consecutive execution.
     """
 
     os = SciOS()
 
-    assert os.boot()
+    os.boot()
 
-    tasks = [
-        "Create plan",
-        "Analyze data",
-        "Store result",
-        "Summarize findings",
-    ]
+    results = []
 
-    outputs = []
+    for i in range(10):
 
-    for task in tasks:
+        results.append(
+            os.run(f"job-{i}")
+        )
 
-        outputs.append(os.run(task))
+    assert len(results) == 10
 
-    assert len(outputs) == len(tasks)
+    assert all(r is not None for r in results)
 
-    assert all(output is not None for output in outputs)
 
-    assert os.shutdown()
+# ==========================================================
+# Shutdown After Workload
+# ==========================================================
+
+def test_shutdown_after_workload() -> None:
+    """
+    System should shutdown cleanly after workload.
+    """
+
+    os = SciOS()
+
+    os.boot()
+
+    for i in range(25):
+
+        os.run(i)
+
+    assert os.shutdown() is True

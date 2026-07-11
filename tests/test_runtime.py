@@ -2,239 +2,158 @@
 SciOS Runtime Tests
 ===================
 
-Unit tests for the SciOS Runtime Engine.
-
-The runtime is responsible for executing tasks after the kernel has
-been booted. These tests validate the runtime contract independent of
-the kernel lifecycle.
+Unit tests for the SciOS Runtime subsystem.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from scios.kernel.runtime.engine import Runtime
+from scios.runtime import (
+    ExecutionContext,
+    ExecutionEngine,
+    Pipeline,
+    Stage,
+)
 
 
 # ==========================================================
-# Construction
+# Test Stage
 # ==========================================================
 
-def test_runtime_construction() -> None:
+class DummyStage(Stage):
     """
-    Runtime should be constructible.
-    """
-
-    runtime = Runtime()
-
-    assert runtime is not None
-
-
-# ==========================================================
-# Initial Status
-# ==========================================================
-
-def test_runtime_initial_status() -> None:
-    """
-    Runtime should start idle.
+    Simple stage used for runtime testing.
     """
 
-    runtime = Runtime()
-
-    status = runtime.status()
-
-    assert isinstance(status, dict)
-    assert status["running"] is False
+    def execute(self, context: ExecutionContext) -> None:
+        context.log("DummyStage executed")
+        context.set_artifact("dummy", True)
+        context.set_result("ok")
 
 
 # ==========================================================
-# Start
+# Fixtures
 # ==========================================================
 
-def test_runtime_start() -> None:
-    """
-    Runtime should start successfully.
-    """
+@pytest.fixture
+def pipeline() -> Pipeline:
+    pipe = Pipeline()
+    pipe.add_stage(DummyStage())
+    return pipe
 
-    runtime = Runtime()
 
-    assert runtime.start() is True
-
-    status = runtime.status()
-
-    assert status["running"] is True
+@pytest.fixture
+def engine(pipeline: Pipeline) -> ExecutionEngine:
+    return ExecutionEngine(pipeline=pipeline)
 
 
 # ==========================================================
-# Stop
+# ExecutionContext
 # ==========================================================
 
-def test_runtime_stop() -> None:
-    """
-    Runtime should stop successfully.
-    """
+def test_context_creation() -> None:
 
-    runtime = Runtime()
+    ctx = ExecutionContext("hello")
 
-    runtime.start()
-
-    assert runtime.stop() is True
-
-    status = runtime.status()
-
-    assert status["running"] is False
+    assert ctx.task == "hello"
+    assert ctx.status == "created"
+    assert ctx.result is None
 
 
-# ==========================================================
-# Start Idempotence
-# ==========================================================
+def test_context_logging() -> None:
 
-def test_runtime_double_start() -> None:
-    """
-    Starting twice should be safe.
-    """
+    ctx = ExecutionContext("task")
 
-    runtime = Runtime()
+    ctx.log("running")
 
-    assert runtime.start() is True
-    assert runtime.start() is True
+    assert len(ctx.logs) == 1
+    assert ctx.logs[0] == "running"
 
-    assert runtime.status()["running"] is True
+
+def test_context_artifacts() -> None:
+
+    ctx = ExecutionContext("task")
+
+    ctx.set_artifact("answer", 42)
+
+    assert ctx.get_artifact("answer") == 42
 
 
 # ==========================================================
-# Stop Idempotence
+# Pipeline
 # ==========================================================
 
-def test_runtime_double_stop() -> None:
-    """
-    Stopping twice should be safe.
-    """
+def test_pipeline_execution(
+    pipeline: Pipeline,
+) -> None:
 
-    runtime = Runtime()
+    ctx = ExecutionContext("pipeline")
 
-    runtime.start()
+    pipeline.execute(ctx)
 
-    assert runtime.stop() is True
-    assert runtime.stop() is True
-
-    assert runtime.status()["running"] is False
+    assert ctx.get_artifact("dummy") is True
+    assert ctx.result == "ok"
 
 
 # ==========================================================
-# Execute
+# Engine
 # ==========================================================
 
-def test_runtime_execute() -> None:
-    """
-    Runtime should execute a simple task.
-    """
+def test_engine_run(
+    engine: ExecutionEngine,
+) -> None:
 
-    runtime = Runtime()
+    ctx = engine.run("runtime task")
 
-    runtime.start()
-
-    result = runtime.execute("ping")
-
-    assert result is not None
+    assert ctx.status == "completed"
+    assert ctx.result == "ok"
 
 
-# ==========================================================
-# Execute Multiple Tasks
-# ==========================================================
+def test_engine_execute(
+    engine: ExecutionEngine,
+) -> None:
 
-def test_runtime_multiple_tasks() -> None:
-    """
-    Runtime should execute multiple tasks.
-    """
+    result = engine.execute("runtime task")
 
-    runtime = Runtime()
-
-    runtime.start()
-
-    for i in range(20):
-
-        result = runtime.execute(f"task-{i}")
-
-        assert result is not None
+    assert result == "ok"
 
 
 # ==========================================================
-# Execute Without Start
+# Events
 # ==========================================================
 
-def test_execute_without_start() -> None:
-    """
-    Runtime should reject execution while stopped.
-    """
+def test_pipeline_events(
+    pipeline: Pipeline,
+) -> None:
 
-    runtime = Runtime()
+    ctx = ExecutionContext("events")
 
-    with pytest.raises(Exception):
+    pipeline.execute(ctx)
 
-        runtime.execute("task")
-
-
-# ==========================================================
-# Status Schema
-# ==========================================================
-
-def test_runtime_status_schema() -> None:
-    """
-    Runtime should expose a stable status schema.
-    """
-
-    runtime = Runtime()
-
-    runtime.start()
-
-    status = runtime.status()
-
-    required = {
-        "running",
-        "tasks_executed",
-    }
-
-    assert required.issubset(status.keys())
+    assert len(ctx.events) >= 2
 
 
 # ==========================================================
-# Task Counter
+# Stress
 # ==========================================================
 
-def test_runtime_task_counter() -> None:
-    """
-    Runtime should count executed tasks.
-    """
+@pytest.mark.parametrize(
+    "count",
+    [
+        1,
+        10,
+        50,
+    ],
+)
+def test_runtime_multiple_tasks(
+    engine: ExecutionEngine,
+    count: int,
+) -> None:
 
-    runtime = Runtime()
+    for i in range(count):
 
-    runtime.start()
+        ctx = engine.run(f"task-{i}")
 
-    for i in range(5):
-        runtime.execute(f"task-{i}")
-
-    status = runtime.status()
-
-    assert status["tasks_executed"] == 5
-
-
-# ==========================================================
-# Lifecycle
-# ==========================================================
-
-@pytest.mark.parametrize("cycles", [1, 3, 5])
-def test_runtime_lifecycle(cycles: int) -> None:
-    """
-    Runtime should survive repeated start/stop cycles.
-    """
-
-    runtime = Runtime()
-
-    for _ in range(cycles):
-
-        assert runtime.start() is True
-        assert runtime.status()["running"] is True
-
-        assert runtime.stop() is True
-        assert runtime.status()["running"] is False
+        assert ctx.status == "completed"
+        assert ctx.result == "ok"

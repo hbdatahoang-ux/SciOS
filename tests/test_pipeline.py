@@ -1,288 +1,191 @@
 """
-SciOS End-to-End Pipeline Tests
-===============================
+SciOS Runtime Pipeline Integration Tests
+========================================
 
-Integration tests for the complete SciOS execution pipeline.
-
-Pipeline
-
-    Kernel
-        ↓
-    Planner
-        ↓
-    Scheduler
-        ↓
-    Runtime
-        ↓
-    Agent
-        ↓
-    QTC
-        ↓
-    Memory
-        ↓
-      Result
+Integration tests for the runtime execution pipeline.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from scios.api.scios import SciOS
+from scios.runtime import (
+    ExecutionContext,
+    ExecutionEngine,
+    Pipeline,
+    Stage,
+)
 
 
 # ==========================================================
-# Construction
+# Test Stages
 # ==========================================================
 
-def test_pipeline_construction() -> None:
-    """
-    SciOS should construct successfully.
-    """
+class PlannerStage(Stage):
 
-    os = SciOS()
-
-    assert os is not None
-
-
-# ==========================================================
-# Boot
-# ==========================================================
-
-def test_pipeline_boot() -> None:
-    """
-    Entire system should boot.
-    """
-
-    os = SciOS()
-
-    assert os.boot() is True
+    def execute(self, context: ExecutionContext) -> None:
+        context.log("planner")
+        context.set_artifact(
+            "plan",
+            [
+                "collect",
+                "analyze",
+                "report",
+            ],
+        )
 
 
-# ==========================================================
-# Single Task
-# ==========================================================
+class ExecutorStage(Stage):
 
-def test_single_task() -> None:
-    """
-    Execute one task.
-    """
+    def execute(self, context: ExecutionContext) -> None:
+        plan = context.get_artifact("plan")
 
-    os = SciOS()
+        assert plan is not None
 
-    os.boot()
+        context.log("executor")
 
-    result = os.run("ping")
-
-    assert result is not None
+        context.set_artifact(
+            "execution",
+            True,
+        )
 
 
-# ==========================================================
-# Multiple Tasks
-# ==========================================================
+class ReflectionStage(Stage):
 
-def test_multiple_tasks() -> None:
-    """
-    Execute multiple tasks sequentially.
-    """
+    def execute(self, context: ExecutionContext) -> None:
 
-    os = SciOS()
+        context.log("reflection")
 
-    os.boot()
-
-    for i in range(20):
-
-        result = os.run(f"task-{i}")
-
-        assert result is not None
+        context.set_result(
+            {
+                "status": "success",
+                "task": context.task,
+            }
+        )
 
 
 # ==========================================================
-# Memory Persistence
+# Fixture
 # ==========================================================
 
-def test_pipeline_memory() -> None:
-    """
-    Pipeline should remember previous tasks.
-    """
+@pytest.fixture
+def engine() -> ExecutionEngine:
 
-    os = SciOS()
+    pipeline = Pipeline()
 
-    os.boot()
+    pipeline.add_stage(
+        PlannerStage()
+    )
 
-    os.run("first")
+    pipeline.add_stage(
+        ExecutorStage()
+    )
 
-    os.run("second")
+    pipeline.add_stage(
+        ReflectionStage()
+    )
 
-    memory = os.kernel.context.memory
-
-    assert len(memory) >= 2
-
-
-# ==========================================================
-# Scheduler Queue
-# ==========================================================
-
-def test_scheduler_pipeline() -> None:
-    """
-    Scheduler should become empty after execution.
-    """
-
-    os = SciOS()
-
-    os.boot()
-
-    for i in range(10):
-
-        os.run(i)
-
-    scheduler = os.kernel.scheduler
-
-    assert scheduler.empty()
+    return ExecutionEngine(
+        pipeline=pipeline,
+    )
 
 
 # ==========================================================
-# Runtime Counter
+# Pipeline
 # ==========================================================
 
-def test_runtime_counter() -> None:
-    """
-    Runtime should count executed tasks.
-    """
+def test_pipeline_execution(
+    engine: ExecutionEngine,
+) -> None:
 
-    os = SciOS()
+    ctx = engine.run(
+        "battery analysis"
+    )
 
-    os.boot()
+    assert ctx.status == "completed"
 
-    for i in range(5):
+    assert ctx.result["status"] == "success"
 
-        os.run(i)
+    assert ctx.get_artifact(
+        "plan"
+    ) is not None
 
-    runtime = os.kernel.runtime
-
-    assert runtime.status()["tasks_executed"] == 5
-
-
-# ==========================================================
-# Agent State
-# ==========================================================
-
-def test_agent_pipeline() -> None:
-    """
-    Agent should finish idle.
-    """
-
-    os = SciOS()
-
-    os.boot()
-
-    os.run("hello")
-
-    agent = os.kernel.agent
-
-    assert agent.status()["state"] == "idle"
+    assert ctx.get_artifact(
+        "execution"
+    ) is True
 
 
-# ==========================================================
-# Kernel Status
-# ==========================================================
+def test_pipeline_stage_order(
+    engine: ExecutionEngine,
+) -> None:
 
-def test_kernel_pipeline_status() -> None:
-    """
-    Kernel should remain running.
-    """
+    ctx = engine.run(
+        "pipeline ordering"
+    )
 
-    os = SciOS()
-
-    os.boot()
-
-    os.run("task")
-
-    assert os.kernel.status()["state"] == "running"
-
-
-# ==========================================================
-# Shutdown
-# ==========================================================
-
-def test_pipeline_shutdown() -> None:
-    """
-    Entire pipeline should shutdown correctly.
-    """
-
-    os = SciOS()
-
-    os.boot()
-
-    os.shutdown()
-
-    assert os.kernel.status()["state"] == "stopped"
+    assert ctx.logs == [
+        "Task received: pipeline ordering",
+        "Pipeline started",
+        "Executing stage: PlannerStage",
+        "planner",
+        "Executing stage: ExecutorStage",
+        "executor",
+        "Executing stage: ReflectionStage",
+        "reflection",
+        "Pipeline completed",
+    ]
 
 
-# ==========================================================
-# Boot -> Run -> Shutdown Cycles
-# ==========================================================
+def test_pipeline_events(
+    engine: ExecutionEngine,
+) -> None:
+
+    ctx = engine.run(
+        "events"
+    )
+
+    assert "PlannerStage.started" in ctx.events
+    assert "PlannerStage.completed" in ctx.events
+
+    assert "ExecutorStage.started" in ctx.events
+    assert "ExecutorStage.completed" in ctx.events
+
+    assert "ReflectionStage.started" in ctx.events
+    assert "ReflectionStage.completed" in ctx.events
+
 
 @pytest.mark.parametrize(
-    "cycles",
+    "task",
     [
-        1,
-        3,
-        5,
+        "simulation",
+        "optimization",
+        "battery",
+        "protein",
+        "climate",
     ],
 )
-def test_pipeline_cycles(
-    cycles: int,
+def test_pipeline_multiple_tasks(
+    engine: ExecutionEngine,
+    task: str,
 ) -> None:
-    """
-    Entire system should survive repeated cycles.
-    """
 
-    os = SciOS()
+    ctx = engine.run(task)
 
-    for _ in range(cycles):
+    assert ctx.status == "completed"
 
-        assert os.boot() is True
-
-        result = os.run("hello")
-
-        assert result is not None
-
-        assert os.shutdown() is True
+    assert ctx.result["task"] == task
 
 
-# ==========================================================
-# Run Without Boot
-# ==========================================================
-
-def test_pipeline_requires_boot() -> None:
-    """
-    Running before boot should fail.
-    """
-
-    os = SciOS()
-
-    with pytest.raises(Exception):
-
-        os.run("task")
-
-
-# ==========================================================
-# End-to-End Stability
-# ==========================================================
-
-def test_pipeline_stress() -> None:
-    """
-    Execute many tasks without failure.
-    """
-
-    os = SciOS()
-
-    os.boot()
+def test_pipeline_stress(
+    engine: ExecutionEngine,
+) -> None:
 
     for i in range(100):
 
-        result = os.run(i)
+        ctx = engine.run(
+            f"task-{i}"
+        )
 
-        assert result is not None
+        assert ctx.status == "completed"
 
-    assert os.kernel.status()["state"] == "running"
+        assert ctx.result["status"] == "success"
