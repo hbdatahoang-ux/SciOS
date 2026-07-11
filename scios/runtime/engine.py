@@ -4,28 +4,20 @@ SciOS Runtime Execution Engine
 
 Central orchestration engine for SciOS Runtime.
 
-Responsibilities
-----------------
-- Coordinate Scheduler, Worker and Executor.
-- Manage ExecutionContext lifecycle.
-- Execute tasks.
-- Publish runtime events.
-- Provide runtime hooks.
-- Maintain execution statistics.
-
-Design Goals
-------------
-- Python 3.11+
-- Deterministic execution
-- Event-driven
-- Dependency Injection friendly
+Features
+--------
+- Scheduler coordination
+- Worker execution
+- ExecutionContext lifecycle
+- EventBus integration
+- HookRegistry integration
 - Plugin-ready architecture
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Callable
 from typing import Any
 
 from scios.shared import EventBus
@@ -35,6 +27,7 @@ from .exceptions import (
     ExecutionError,
     InvalidTaskError,
 )
+from .hook_registry import HookRegistry
 from .result import ExecutionResult
 from .scheduler import Scheduler
 from .state import RuntimeState
@@ -46,15 +39,11 @@ __all__ = [
 ]
 
 
-HookHandler = Callable[..., None]
-
-
 class ExecutionEngine:
     """
-    Central Runtime coordinator.
+    SciOS Runtime execution coordinator.
 
     Pipeline
-    --------
 
         Task
          |
@@ -68,16 +57,12 @@ class ExecutionEngine:
        Worker
          |
          v
-     Executor
-         |
-         v
     ExecutionResult
     """
 
-
-    # ======================================================
-    # Supported Hooks
-    # ======================================================
+    # ------------------------------------------------------
+    # Runtime hooks
+    # ------------------------------------------------------
 
     DEFAULT_HOOKS = {
         "before_submit",
@@ -116,14 +101,15 @@ class ExecutionEngine:
         self._executions = 0
 
 
-        # Hook registry
-        self._hooks: dict[
-            str,
-            list[HookHandler],
-        ] = defaultdict(list)
+        #
+        # Phase 3 Hook System
+        #
+        self._hook_registry = HookRegistry()
 
 
-        # Allowed hooks (Phase 1)
+        #
+        # Supported hook names
+        #
         self._valid_hooks = set(
             self.DEFAULT_HOOKS
         )
@@ -134,36 +120,32 @@ class ExecutionEngine:
     # ======================================================
 
     @property
-    def scheduler(self) -> Scheduler:
+    def scheduler(self):
         return self._scheduler
 
 
     @property
-    def worker(self) -> Worker:
+    def worker(self):
         return self._worker
 
 
     @property
-    def state(self) -> RuntimeState:
+    def state(self):
         return self._state
 
 
     @property
-    def executions(self) -> int:
+    def executions(self):
         return self._executions
 
 
     @property
-    def hooks(self):
+    def hooks(self) -> HookRegistry:
         """
-        Read-only hook snapshot.
+        Plugin access point.
         """
 
-        return {
-            name: tuple(items)
-            for name, items
-            in self._hooks.items()
-        }
+        return self._hook_registry
 
 
     @property
@@ -171,18 +153,19 @@ class ExecutionEngine:
         return self._scheduler.pending
 
 
-
     # ======================================================
-    # Hook System
+    # Hook Compatibility API
     # ======================================================
 
     def register_hook(
         self,
         name: str,
-        handler: HookHandler,
-    ) -> None:
+        handler,
+    ):
         """
-        Register runtime hook.
+        Backward compatible hook API.
+
+        Used by runtime tests.
         """
 
         if name not in self._valid_hooks:
@@ -190,85 +173,46 @@ class ExecutionEngine:
                 f"Unknown hook: {name}"
             )
 
-        if not callable(handler):
-            raise TypeError(
-                "Hook handler must be callable."
-            )
-
-        self._hooks[name].append(
-            handler
+        return self._hook_registry.register(
+            name,
+            handler,
         )
 
 
     def unregister_hook(
         self,
         name: str,
-        handler: HookHandler,
-    ) -> None:
-        """
-        Remove hook handler.
-        """
-
-        hooks = self._hooks.get(name)
-
-        if not hooks:
-            return
-
-
-        if handler in hooks:
-            hooks.remove(handler)
-
+        handler,
+    ):
+        return self._hook_registry.unregister(
+            name,
+            handler,
+        )
 
 
     def _emit_hook(
         self,
         name: str,
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        """
-        Execute hooks safely.
-
-        Hook failure never breaks runtime.
-        """
-
-        for handler in tuple(
-            self._hooks.get(name, ())
-        ):
-
-            try:
-
-                handler(
-                    *args,
-                    **kwargs,
-                )
-
-            except Exception:
-                pass
-
-
-
-    def clear_hooks(self) -> int:
-        """
-        Remove all hooks.
-        """
-
-        count = sum(
-            len(v)
-            for v in self._hooks.values()
+        *args,
+        **kwargs,
+    ):
+        self._hook_registry.emit(
+            name,
+            *args,
+            **kwargs,
         )
 
-        self._hooks.clear()
 
-        return count
+    def clear_hooks(self):
 
+        return self._hook_registry.clear()
 
 
     # ======================================================
     # Lifecycle
     # ======================================================
 
-    def initialize(self) -> None:
+    def initialize(self):
 
         self._scheduler.initialize()
 
@@ -278,7 +222,7 @@ class ExecutionEngine:
 
 
 
-    def shutdown(self) -> None:
+    def shutdown(self):
 
         self._scheduler.shutdown()
 
@@ -296,23 +240,17 @@ class ExecutionEngine:
         self,
         task: Any,
         *,
-        metadata: dict[str, Any] | None = None,
-    ) -> ExecutionContext:
-        """
-        Create execution context.
-        """
+        metadata=None,
+    ):
 
         if task is None:
             raise InvalidTaskError(
                 "Task cannot be None."
             )
 
-
         return ExecutionContext(
             task=task,
-            metadata=dict(
-                metadata or {}
-            ),
+            metadata=dict(metadata or {}),
         )
 
 
@@ -323,12 +261,12 @@ class ExecutionEngine:
 
     def submit(
         self,
-        task: Any,
+        task,
         *,
-        metadata: dict[str, Any] | None = None,
-    ) -> ExecutionContext:
+        metadata=None,
+    ):
 
-        context = self.create_context(
+        ctx = self.create_context(
             task,
             metadata=metadata,
         )
@@ -336,22 +274,22 @@ class ExecutionEngine:
 
         self._emit_hook(
             "before_submit",
-            context,
+            ctx,
         )
 
 
         self._scheduler.submit(
-            context
+            ctx
         )
 
 
         self._publish(
             "task.submitted",
-            context=context,
+            context=ctx,
         )
 
 
-        return context
+        return ctx
 
 
 
@@ -361,11 +299,10 @@ class ExecutionEngine:
 
     def run(
         self,
-        task: Any,
+        task,
         *,
-        metadata: dict[str, Any] | None = None,
-    ) -> ExecutionContext:
-
+        metadata=None,
+    ):
 
         if self._state == "created":
             self.initialize()
@@ -374,38 +311,34 @@ class ExecutionEngine:
         self._state = "running"
 
 
-        context = self.submit(
+        ctx = self.submit(
             task,
             metadata=metadata,
         )
 
 
-        scheduled = (
-            self._scheduler.next()
-        )
+        current = self._scheduler.next()
 
 
-        scheduled.start()
+        current.start()
 
 
         self._emit_hook(
             "before_execute",
-            scheduled,
+            current,
         )
 
 
         self._publish(
             "task.started",
-            context=scheduled,
+            context=current,
         )
 
 
         try:
 
-            result = (
-                self._worker.execute(
-                    scheduled
-                )
+            result = self._worker.execute(
+                current
             )
 
 
@@ -414,20 +347,19 @@ class ExecutionEngine:
                 ExecutionResult,
             ):
                 raise ExecutionError(
-                    "Worker returned invalid result."
+                    "Invalid ExecutionResult"
                 )
-
 
 
             if result.success:
 
-                scheduled.finish(
+                current.finish(
                     result
                 )
 
 
                 self._scheduler.complete(
-                    scheduled
+                    current
                 )
 
 
@@ -436,58 +368,43 @@ class ExecutionEngine:
 
                 self._emit_hook(
                     "after_execute",
-                    scheduled,
+                    current,
                     result,
                 )
 
 
                 self._publish(
                     "task.completed",
-                    context=scheduled,
+                    context=current,
                     result=result,
                 )
 
 
-
             else:
 
-                error = (
-                    result.error
-                    or ExecutionError(
-                        result.message
-                        or "Execution failed."
-                    )
+                error = result.error or ExecutionError(
+                    result.message
                 )
 
 
-                scheduled.fail(
+                current.fail(
                     error
                 )
 
 
                 self._emit_hook(
                     "after_failure",
-                    scheduled,
+                    current,
                     error,
                 )
 
 
-                self._publish(
-                    "task.failed",
-                    context=scheduled,
-                    result=result,
-                    error=error,
-                )
-
-
-            return scheduled
-
+            return current
 
 
         except Exception as exc:
 
-
-            scheduled.fail(
+            current.fail(
                 exc
             )
 
@@ -496,27 +413,17 @@ class ExecutionEngine:
                 exc
             )
 
-
-            scheduled.result = failed
+            current.result = failed
 
 
             self._emit_hook(
                 "after_failure",
-                scheduled,
+                current,
                 exc,
             )
 
 
-            self._publish(
-                "task.failed",
-                context=scheduled,
-                result=failed,
-                error=exc,
-            )
-
-
-            return scheduled
-
+            return current
 
 
         finally:
@@ -533,9 +440,8 @@ class ExecutionEngine:
     def _publish(
         self,
         topic: str,
-        **payload: Any,
-    ) -> None:
-
+        **payload,
+    ):
 
         if self._event_bus is None:
             return
@@ -557,9 +463,7 @@ class ExecutionEngine:
     # Status
     # ======================================================
 
-    def status(
-        self,
-    ) -> dict[str, Any]:
+    def status(self):
 
         return {
 
@@ -569,58 +473,10 @@ class ExecutionEngine:
 
             "pending": self.pending,
 
-            "scheduler":
-                self._scheduler.status(),
-
-            "worker":
-                self._worker.status(),
-
             "hooks":
-            {
-                k: len(v)
-                for k, v
-                in self._hooks.items()
-            },
+                self._hook_registry.status(),
+
         }
-
-
-
-    # ======================================================
-    # Maintenance
-    # ======================================================
-
-    def reset(self) -> None:
-
-        self._executions = 0
-
-        self._scheduler.clear()
-
-        self._worker.reset()
-
-        self.clear_hooks()
-
-        self._state = "idle"
-
-
-
-    # ======================================================
-    # Helpers
-    # ======================================================
-
-    def is_initialized(self) -> bool:
-        return self._state != "created"
-
-
-    def is_running(self) -> bool:
-        return self._state == "running"
-
-
-    def is_idle(self) -> bool:
-        return self._state == "idle"
-
-
-    def is_stopped(self) -> bool:
-        return self._state == "stopped"
 
 
 
@@ -628,11 +484,12 @@ class ExecutionEngine:
     # Protocols
     # ======================================================
 
-    def __len__(self) -> int:
+    def __len__(self):
+
         return self._executions
 
 
-    def __bool__(self) -> bool:
+    def __bool__(self):
 
         return self._state not in {
             "created",
@@ -640,25 +497,11 @@ class ExecutionEngine:
         }
 
 
-    def __contains__(
-        self,
-        hook_name: str,
-    ) -> bool:
-
-        return bool(
-            self._hooks.get(
-                hook_name
-            )
-        )
-
-
-    def __repr__(self) -> str:
+    def __repr__(self):
 
         return (
-            f"ExecutionEngine("
+            "ExecutionEngine("
             f"state={self._state!r}, "
-            f"executions={self._executions}, "
-            f"pending={self.pending}, "
-            f"hooks={len(self._hooks)}"
-            f")"
-        )         
+            f"executions={self._executions}"
+            ")"
+        )
