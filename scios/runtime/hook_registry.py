@@ -7,17 +7,18 @@ Central hook registry for the SciOS Runtime.
 Responsibilities
 ----------------
 - Register runtime hooks.
-- Unregister hooks.
-- Emit hooks.
+- Manage Hook lifecycle.
+- Return HookHandle.
+- Support priority ordering.
+- Support once hooks.
 - Isolate hook failures.
-- Preserve deterministic execution order.
+- Preserve deterministic execution.
 
 Design Goals
 ------------
 - Python 3.11+
 - Lightweight
 - Deterministic
-- Thread-safe friendly
 - Plugin-ready
 """
 
@@ -27,39 +28,46 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
+from .hook import (
+    Hook,
+    HookHandle,
+)
+
 __all__ = [
     "HookRegistry",
 ]
 
-HookHandler = Callable[..., None]
-
 
 class HookRegistry:
     """
-    Runtime hook registry.
+    Runtime Hook Registry.
 
     Example
     -------
 
-        hooks = HookRegistry()
+    registry = HookRegistry()
 
-        hooks.register(
-            "before_execute",
-            callback,
-        )
+    handle = registry.register(
+        "runtime.after_execute",
+        callback,
+        priority=10,
+    )
 
-        hooks.emit(
-            "before_execute",
-            context,
-        )
+    registry.emit(
+        "runtime.after_execute",
+        context,
+    )
+
+    handle.disable()
     """
 
     def __init__(self) -> None:
 
         self._hooks: dict[
             str,
-            list[HookHandler],
+            list[Hook],
         ] = defaultdict(list)
+
 
     # ==========================================================
     # Registration
@@ -68,18 +76,18 @@ class HookRegistry:
     def register(
         self,
         name: str,
-        handler: HookHandler,
-    ) -> None:
+        handler: Callable[..., None],
+        *,
+        priority: int = 100,
+        once: bool = False,
+    ) -> HookHandle:
         """
-        Register a hook handler.
+        Register a hook.
 
-        Parameters
-        ----------
-        name:
-            Hook name.
-
-        handler:
-            Callable hook.
+        Returns
+        -------
+        HookHandle
+            Lifecycle controller.
         """
 
         if not callable(handler):
@@ -87,30 +95,52 @@ class HookRegistry:
                 "Hook handler must be callable."
             )
 
-        handlers = self._hooks[name]
+        hook = Hook(
+            name=name,
+            handler=handler,
+            priority=priority,
+            once=once,
+        )
 
-        if handler not in handlers:
-            handlers.append(handler)
+        self._hooks[name].append(
+            hook
+        )
+
+        return HookHandle(
+            registry=self,
+            hook=hook,
+        )
+
 
     def unregister(
         self,
         name: str,
-        handler: HookHandler,
+        handler: Callable[..., None],
     ) -> None:
         """
-        Remove a hook handler.
+        Remove hook handler.
         """
 
-        handlers = self._hooks.get(name)
+        hooks = self._hooks.get(name)
 
-        if not handlers:
+        if not hooks:
             return
 
-        if handler in handlers:
-            handlers.remove(handler)
 
-        if not handlers:
-            self._hooks.pop(name, None)
+        self._hooks[name] = [
+            hook
+            for hook in hooks
+            if hook.handler != handler
+        ]
+
+
+        if not self._hooks[name]:
+
+            self._hooks.pop(
+                name,
+                None,
+            )
+
 
     # ==========================================================
     # Execution
@@ -123,30 +153,46 @@ class HookRegistry:
         **kwargs: Any,
     ) -> None:
         """
-        Execute every handler registered
-        under one hook name.
+        Execute hooks by priority.
 
-        Hook failures never interrupt
-        Runtime execution.
+        Lower priority number runs first.
         """
 
-        handlers = tuple(
-            self._hooks.get(name, ())
+        hooks = sorted(
+            self._hooks.get(name, ()),
+            key=lambda h: h.priority,
         )
 
-        for handler in handlers:
+
+        for hook in tuple(hooks):
+
+            if not hook.enabled:
+                continue
+
 
             try:
-                handler(
+
+                hook(
                     *args,
                     **kwargs,
                 )
 
+
+                if hook.once:
+
+                    self.unregister(
+                        hook.name,
+                        hook.handler,
+                    )
+
+
             except Exception:
                 #
-                # Hook failures are isolated.
+                # Hook failures never
+                # break Runtime.
                 #
                 pass
+
 
     # ==========================================================
     # Queries
@@ -155,75 +201,104 @@ class HookRegistry:
     def handlers(
         self,
         name: str,
-    ) -> tuple[HookHandler, ...]:
+    ) -> tuple[Callable[..., None], ...]:
         """
-        Return handlers of one hook.
+        Return raw handlers.
         """
 
         return tuple(
-            self._hooks.get(name, ())
+            hook.handler
+            for hook in self._hooks.get(
+                name,
+                (),
+            )
         )
+
+
+    def hooks(
+        self,
+        name: str,
+    ) -> tuple[Hook, ...]:
+        """
+        Return Hook objects.
+        """
+
+        return tuple(
+            self._hooks.get(
+                name,
+                (),
+            )
+        )
+
 
     def registered(
         self,
         name: str,
     ) -> bool:
-        """
-        Whether a hook exists.
-        """
 
-        return (
-            name in self._hooks
-            and len(self._hooks[name]) > 0
+        return bool(
+            self._hooks.get(name)
         )
+
 
     def count(
         self,
-        name: str,
+        name: str | None = None,
     ) -> int:
         """
-        Number of handlers.
+        Count hooks.
+
+        count()
+            total hooks
+
+        count(name)
+            hooks under name
         """
 
+        if name is None:
+
+            return sum(
+                len(v)
+                for v in self._hooks.values()
+            )
+
         return len(
-            self._hooks.get(name, ())
+            self._hooks.get(
+                name,
+                (),
+            )
         )
+
 
     # ==========================================================
     # Maintenance
     # ==========================================================
 
-    def clear(
-        self,
-    ) -> None:
+    def clear(self) -> None:
         """
         Remove all hooks.
         """
 
         self._hooks.clear()
 
+
     # ==========================================================
-    # Serialization
+    # Status
     # ==========================================================
 
-    def status(
-        self,
-    ) -> dict[str, int]:
-        """
-        Runtime snapshot.
-        """
+    def status(self) -> dict[str, int]:
 
         return {
 
-            name: len(handlers)
+            name: len(hooks)
 
-            for name, handlers
-
+            for name, hooks
             in self._hooks.items()
         }
 
+
     # ==========================================================
-    # Python Protocols
+    # Protocols
     # ==========================================================
 
     def __contains__(
@@ -233,23 +308,22 @@ class HookRegistry:
 
         return self.registered(name)
 
+
     def __len__(
         self,
     ) -> int:
-        """
-        Total registered handlers.
-        """
 
-        return sum(
-            len(v)
-            for v in self._hooks.values()
-        )
+        return self.count()
+
 
     def __bool__(
         self,
     ) -> bool:
 
-        return bool(self._hooks)
+        return bool(
+            self._hooks
+        )
+
 
     def __repr__(
         self,
@@ -258,5 +332,5 @@ class HookRegistry:
         return (
             f"{self.__class__.__name__}("
             f"hooks={len(self._hooks)}, "
-            f"handlers={len(self)})"
+            f"handlers={self.count()})"
         )
