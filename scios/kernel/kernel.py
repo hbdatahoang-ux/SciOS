@@ -1,158 +1,149 @@
 """
-SciOS Kernel
-============
+SciOS Kernel Core
+=================
 
-Core microkernel orchestrator.
+Central orchestration component of the Scientific Cognitive
+Operating System (SciOS).
 
 Responsibilities
 ----------------
-- Hold references to all infrastructure services.
-- Provide unified API surface for integration.
-- Delegate lifecycle control to LifecycleManager.
-- Route execution requests into the Runtime subsystem.
+- Own all kernel subsystems.
+- Manage kernel lifecycle.
+- Execute tasks.
+- Provide service lookup.
+- Expose kernel status.
 """
 
 from __future__ import annotations
-from typing import Any, Optional
 
-from .config import KernelConfig
-from .events import EventBus
-from .registry import ServiceRegistry
-from .context import ContextManager
-from .scheduler import Scheduler, Task
-from .dispatcher import Dispatcher
-from .execution import ExecutionEngine
-from .runtime.runtime import Runtime
-from .lifecycle import LifecycleManager
+from typing import Any
+
+from .bootstrap import build_components
 from .state import KernelState
-from .plugins import PluginManager
-from .artifacts import ArtifactManager
-
-
-__all__ = ["Kernel"]
 
 
 class Kernel:
     """
-    SciOS Kernel orchestrator.
+    SciOS Kernel.
+
+    The Kernel is the central coordinator responsible for
+    orchestrating all core subsystems.
     """
 
-    def __init__(
-        self,
-        config: KernelConfig,
-        event_bus: EventBus,
-        registry: ServiceRegistry,
-        context: ContextManager,
-        scheduler: Scheduler,
-        plugins: PluginManager,
-        artifacts: ArtifactManager,
-        dispatcher: Dispatcher,
-        execution_engine: ExecutionEngine,
-        runtime: Runtime,
-        lifecycle: Optional[LifecycleManager] = None,
-    ) -> None:
-        self._config = config
-        self._event_bus = event_bus
-        self._registry = registry
-        self._context = context
-        self._scheduler = scheduler
-        self._plugins = plugins
-        self._artifacts = artifacts
-        self._dispatcher = dispatcher
-        self._execution_engine = execution_engine
-        self._runtime = runtime
-        self._lifecycle = lifecycle
+    def __init__(self) -> None:
+        components = build_components()
+
+        self.event_bus = components.event_bus
+        self.lifecycle = components.lifecycle
+        self.registry = components.registry
+        self.scheduler = components.scheduler
+        self.runtime = components.runtime
+        self.dispatcher = components.dispatcher
+
+        self._state: KernelState = "created"
 
     # ==========================================================
     # Lifecycle
     # ==========================================================
 
-    def boot(self) -> None:
-        if not self._lifecycle:
-            raise RuntimeError("LifecycleManager not attached")
-        self._lifecycle.boot()
+    def boot(self) -> bool:
+        """
+        Boot the kernel.
+        """
 
-    def stop(self) -> None:
-        if not self._lifecycle:
-            raise RuntimeError("LifecycleManager not attached")
-        self._lifecycle.stop()
+        if self._state == "running":
+            return True
 
-    def restart(self) -> None:
-        if not self._lifecycle:
-            raise RuntimeError("LifecycleManager not attached")
-        self._lifecycle.restart()
+        self.lifecycle.initialize()
+        self.lifecycle.start()
 
-    @property
-    def state(self) -> KernelState:
-        return self._lifecycle.state if self._lifecycle else KernelState.CREATED
+        self._state = "running"
+
+        return True
+
+    def shutdown(self) -> bool:
+        """
+        Shutdown the kernel.
+        """
+
+        if self._state == "stopped":
+            return True
+
+        self.lifecycle.shutdown()
+
+        self._state = "stopped"
+
+        return True
 
     # ==========================================================
     # Execution
     # ==========================================================
 
-    def run(self, request: Any) -> Any:
+    def run(
+        self,
+        task: Any,
+        **metadata: Any,
+    ) -> Any:
         """
-        Submit a request into the runtime pipeline.
+        Execute one task.
         """
-        task = Task(name="request", payload=request)
-        self._scheduler.submit(task)
-        return self._runtime.run(task)
 
-    def submit(self, task: Task) -> None:
-        """Submit a task directly to the scheduler."""
-        self._scheduler.submit(task)
+        if self._state != "running":
+            raise RuntimeError(
+                "Kernel is not running."
+            )
 
-    # ==========================================================
-    # Services
-    # ==========================================================
+        context = self.runtime.run(
+            task=task,
+            metadata=metadata,
+        )
 
-    @property
-    def config(self) -> KernelConfig:
-        return self._config
-
-    @property
-    def event_bus(self) -> EventBus:
-        return self._event_bus
-
-    @property
-    def registry(self) -> ServiceRegistry:
-        return self._registry
-
-    @property
-    def context(self) -> ContextManager:
-        return self._context
-
-    @property
-    def scheduler(self) -> Scheduler:
-        return self._scheduler
-
-    @property
-    def plugins(self) -> PluginManager:
-        return self._plugins
-
-    @property
-    def artifacts(self) -> ArtifactManager:
-        return self._artifacts
-
-    @property
-    def dispatcher(self) -> Dispatcher:
-        return self._dispatcher
-
-    @property
-    def execution_engine(self) -> ExecutionEngine:
-        return self._execution_engine
-
-    @property
-    def runtime(self) -> Runtime:
-        return self._runtime
+        return context.result
 
     # ==========================================================
-    # Utilities
+    # Registry
     # ==========================================================
 
-    def service(self, name: str) -> Any:
-        """Lookup a service by name from the registry."""
-        return self._registry.lookup(name)
+    def service(
+        self,
+        name: str,
+    ) -> Any:
+        """
+        Retrieve a registered service.
+        """
+
+        return self.registry.require(name)
+
+    # ==========================================================
+    # Status
+    # ==========================================================
+
+    @property
+    def state(self) -> KernelState:
+        """
+        Current kernel state.
+        """
+
+        return self._state
+
+    def status(self) -> dict[str, Any]:
+        """
+        Return kernel status.
+        """
+
+        return {
+            "state": self._state,
+            "services": self.registry.count(),
+            "scheduler_queue": len(self.scheduler),
+        }
+
+    # ==========================================================
+    # Magic Methods
+    # ==========================================================
 
     def __repr__(self) -> str:
-        return f"Kernel(state={self.state}, plugins={len(self._plugins)})"
+        return (
+            f"{self.__class__.__name__}("
+            f"state={self._state}, "
+            f"services={self.registry.count()})"
+        )

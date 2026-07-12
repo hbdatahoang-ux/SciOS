@@ -1,91 +1,215 @@
 """
-SciOS Bootstrap (Composition Root)
+SciOS Kernel Bootstrap
+======================
 
-Builds the complete SciOS Kernel object graph.
+Composition Root for the SciOS Kernel.
+
+Responsibilities
+----------------
+- Construct all kernel subsystems.
+- Wire subsystem dependencies.
+- Register default services.
+- Attach lifecycle hooks.
+
+This module intentionally DOES NOT import Kernel in order to
+avoid circular imports. Kernel construction should be performed
+by the public API (kernel/__init__.py).
 """
 
 from __future__ import annotations
-from typing import Optional
 
-from .artifacts import ArtifactManager
-from .config import KernelConfig
-from .context import ContextManager
+from dataclasses import dataclass
+
+from scios.runtime import ExecutionEngine
+from scios.shared import EventBus
+
+from .artifact_manager import ArtifactManager
 from .dispatcher import Dispatcher
-from .events import EventBus
-from .execution import ExecutionEngine
-from .kernel import Kernel
 from .lifecycle import LifecycleManager
-from .plugins import PluginManager
+from .plugin_manager import PluginManager
 from .registry import ServiceRegistry
 from .scheduler import Scheduler
 
-from .runtime.executor import RuntimeExecutor
-from .runtime.loop import RuntimeLoop
-from .runtime.runtime import Runtime
-from .runtime.worker import Worker
+__all__ = [
+    "KernelComponents",
+    "Bootstrap",
+    "build_components",
+]
 
 
-def _build_infrastructure(config: KernelConfig) -> tuple[EventBus, ServiceRegistry, ContextManager]:
-    event_bus = EventBus()
-    registry = ServiceRegistry()
-    context = ContextManager()
-    return event_bus, registry, context
+# ==========================================================
+# Kernel Components
+# ==========================================================
 
 
-def _build_services(event_bus: EventBus, config: KernelConfig) -> tuple[Scheduler, PluginManager, ArtifactManager]:
-    scheduler = Scheduler()
-    plugins = PluginManager()
-    artifacts = ArtifactManager(event_bus if getattr(config, "enable_events", True) else None)
-    return scheduler, plugins, artifacts
+@dataclass(slots=True)
+class KernelComponents:
+    """
+    Fully wired kernel components.
+
+    This object is consumed by Kernel during construction.
+    """
+
+    event_bus: EventBus
+
+    lifecycle: LifecycleManager
+
+    registry: ServiceRegistry
+
+    scheduler: Scheduler
+
+    runtime: ExecutionEngine
+
+    dispatcher: Dispatcher
+
+    plugin_manager: PluginManager
+
+    artifact_manager: ArtifactManager
 
 
-def _build_runtime(scheduler: Scheduler) -> tuple[Dispatcher, ExecutionEngine, RuntimeExecutor, Worker, RuntimeLoop, Runtime]:
-    dispatcher = Dispatcher(scheduler)
-    execution_engine = ExecutionEngine(dispatcher)
-    runtime_executor = RuntimeExecutor(scheduler, execution_engine)
-    worker = Worker(runtime_executor)
-    loop = RuntimeLoop(scheduler, worker)
-    runtime = Runtime(scheduler=scheduler, executor=runtime_executor, worker=worker, loop=loop)
-    return dispatcher, execution_engine, runtime_executor, worker, loop, runtime
+# ==========================================================
+# Bootstrap
+# ==========================================================
 
 
-def build_kernel(config: Optional[KernelConfig] = None) -> Kernel:
-    config = config or KernelConfig()
+class Bootstrap:
+    """
+    Kernel composition root.
 
-    event_bus, registry, context = _build_infrastructure(config)
-    scheduler, plugins, artifacts = _build_services(event_bus, config)
-    dispatcher, execution_engine, runtime_executor, worker, loop, runtime = _build_runtime(scheduler)
+    Responsible for wiring together all kernel infrastructure.
+    """
 
-    kernel = Kernel(
-        config=config,
-        event_bus=event_bus,
-        registry=registry,
-        context=context,
-        scheduler=scheduler,
-        plugins=plugins,
-        artifacts=artifacts,
-        dispatcher=dispatcher,
-        execution_engine=execution_engine,
-        runtime=runtime,
-        lifecycle=None,
-    )
+    def __init__(self) -> None:
 
-    lifecycle = LifecycleManager(kernel)
-    kernel._lifecycle = lifecycle
+        # --------------------------------------------------
+        # Shared Infrastructure
+        # --------------------------------------------------
 
-    # Register all services
-    registry.register("config", config)
-    registry.register("events", event_bus)
-    registry.register("context", context)
-    registry.register("scheduler", scheduler)
-    registry.register("plugins", plugins)
-    registry.register("artifacts", artifacts)
-    registry.register("dispatcher", dispatcher)
-    registry.register("execution", execution_engine)
-    registry.register("runtime_executor", runtime_executor)
-    registry.register("worker", worker)
-    registry.register("runtime_loop", loop)
-    registry.register("runtime", runtime)
-    registry.register("kernel", kernel)
+        self.event_bus = EventBus()
 
-    return kernel
+        # --------------------------------------------------
+        # Core Infrastructure
+        # --------------------------------------------------
+
+        self.lifecycle = LifecycleManager()
+
+        self.registry = ServiceRegistry()
+
+        # --------------------------------------------------
+        # Execution
+        # --------------------------------------------------
+
+        self.scheduler = Scheduler()
+
+        self.runtime = ExecutionEngine(
+            event_bus=self.event_bus,
+        )
+
+        self.dispatcher = Dispatcher(
+            scheduler=self.scheduler,
+            engine=self.runtime,
+        )
+
+        # --------------------------------------------------
+        # Managers
+        # --------------------------------------------------
+
+        self.plugin_manager = PluginManager()
+
+        self.artifact_manager = ArtifactManager()
+
+    # ======================================================
+    # Registration
+    # ======================================================
+
+    def register_services(self) -> None:
+        """
+        Register all default kernel services.
+        """
+
+        services = {
+            "event_bus": self.event_bus,
+            "lifecycle": self.lifecycle,
+            "registry": self.registry,
+            "scheduler": self.scheduler,
+            "runtime": self.runtime,
+            "dispatcher": self.dispatcher,
+            "plugin_manager": self.plugin_manager,
+            "artifact_manager": self.artifact_manager,
+        }
+
+        for name, service in services.items():
+
+            self.registry.register(
+                name=name,
+                service=service,
+                overwrite=True,
+            )
+
+    # ======================================================
+    # Lifecycle Hooks
+    # ======================================================
+
+    def attach_hooks(self) -> None:
+        """
+        Register lifecycle-aware components.
+        """
+
+        hooks = (
+            self.runtime,
+            self.scheduler,
+            self.dispatcher,
+            self.plugin_manager,
+            self.artifact_manager,
+        )
+
+        for hook in hooks:
+
+            self.lifecycle.add_hook(hook)
+
+    # ======================================================
+    # Build
+    # ======================================================
+
+    def build(self) -> KernelComponents:
+        """
+        Build a fully wired kernel dependency graph.
+
+        Returns
+        -------
+        KernelComponents
+            Ready-to-use kernel components.
+        """
+
+        self.register_services()
+
+        self.attach_hooks()
+
+        return KernelComponents(
+            event_bus=self.event_bus,
+            lifecycle=self.lifecycle,
+            registry=self.registry,
+            scheduler=self.scheduler,
+            runtime=self.runtime,
+            dispatcher=self.dispatcher,
+            plugin_manager=self.plugin_manager,
+            artifact_manager=self.artifact_manager,
+        )
+
+
+# ==========================================================
+# Public Factory
+# ==========================================================
+
+
+def build_components() -> KernelComponents:
+    """
+    Build the complete kernel dependency graph.
+
+    Unlike build_kernel(), this function does NOT construct
+    a Kernel instance. It only returns fully wired components,
+    preventing circular imports between bootstrap.py and
+    kernel.py.
+    """
+
+    return Bootstrap().build()

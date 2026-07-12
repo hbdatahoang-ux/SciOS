@@ -1,134 +1,228 @@
-# scios/kernel/scheduler.py
 """
-SciOS Task Scheduler
+SciOS Kernel Scheduler
+======================
+
+Task scheduler for the SciOS Kernel.
 
 Responsibilities
 ----------------
-- Submit tasks into a queue.
-- Retrieve next/peek tasks.
-- Cancel tasks by id.
-- Track task status and priority.
-- Clear and inspect queue.
+- Maintain a thread-safe task queue.
+- Provide FIFO scheduling.
+- Support enqueue/dequeue operations.
+- Maintain scheduling statistics.
 
-The Scheduler does NOT execute tasks.
-Execution belongs to the Execution Engine.
+Design Goals
+------------
+- Thread-safe
+- Lightweight
+- Deterministic FIFO
+- Runtime independent
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum, auto
-from typing import Any, Optional
-import threading
-import collections
-import uuid
-
-
-class TaskPriority(Enum):
-    LOW = auto()
-    NORMAL = auto()
-    HIGH = auto()
-    CRITICAL = auto()
-
-
-class TaskStatus(Enum):
-    PENDING = auto()
-    RUNNING = auto()
-    COMPLETED = auto()
-    FAILED = auto()
-    CANCELLED = auto()
-
-
-@dataclass(slots=True)
-class Task:
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = ""
-    payload: Any = None
-    priority: TaskPriority = TaskPriority.NORMAL
-    status: TaskStatus = TaskStatus.PENDING
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def __repr__(self) -> str:
-        return (
-            f"Task(id={self.id}, name={self.name}, "
-            f"priority={self.priority.name}, status={self.status.name})"
-        )
+from collections import deque
+from collections.abc import Iterable
+from threading import RLock
+from typing import Any
 
 
 class Scheduler:
     """
-    Thread-safe task scheduler for SciOS Kernel.
+    FIFO task scheduler.
     """
 
     def __init__(self) -> None:
-        self._queue: collections.deque[Task] = collections.deque()
-        self._lock = threading.RLock()
+        self._queue: deque[Any] = deque()
+        self._lock = RLock()
 
-    # ------------------------------------------------------------------
-    # Core API
-    # ------------------------------------------------------------------
+        self._running = False
 
-    def submit(self, task: Task) -> None:
-        """Submit a new task into the queue."""
+        self._tasks_enqueued = 0
+        self._tasks_dequeued = 0
+
+    # ==========================================================
+    # Lifecycle
+    # ==========================================================
+
+    def initialize(self) -> None:
+        """Initialize scheduler."""
+        self._running = False
+
+    def start(self) -> None:
+        """Start scheduler."""
+        self._running = True
+
+    def shutdown(self) -> None:
+        """Shutdown scheduler."""
+        self._running = False
+        self.clear()
+
+    # ==========================================================
+    # Queue Operations
+    # ==========================================================
+
+    def enqueue(
+        self,
+        task: Any,
+    ) -> None:
+        """
+        Add a task to the queue.
+        """
+
         with self._lock:
             self._queue.append(task)
+            self._tasks_enqueued += 1
 
-    def next(self) -> Optional[Task]:
-        """Pop and return the next task."""
+    def extend(
+        self,
+        tasks: Iterable[Any],
+    ) -> None:
+        """
+        Add multiple tasks.
+        """
+
+        for task in tasks:
+            self.enqueue(task)
+
+    def dequeue(self) -> Any:
+        """
+        Remove and return the next task.
+
+        Raises
+        ------
+        IndexError
+            If queue is empty.
+        """
+
         with self._lock:
+
+            if not self._queue:
+                raise IndexError(
+                    "Scheduler queue is empty."
+                )
+
+            self._tasks_dequeued += 1
+
+            return self._queue.popleft()
+
+    def peek(self) -> Any | None:
+        """
+        Return the next task without removing it.
+        """
+
+        with self._lock:
+
             if not self._queue:
                 return None
-            task = self._queue.popleft()
-            task.status = TaskStatus.RUNNING
-            return task
 
-    def peek(self) -> Optional[Task]:
-        """Return the next task without removing it."""
-        with self._lock:
-            return self._queue[0] if self._queue else None
-
-    def cancel(self, task_id: str) -> bool:
-        """Cancel a task by id."""
-        with self._lock:
-            for task in list(self._queue):
-                if task.id == task_id:
-                    task.status = TaskStatus.CANCELLED
-                    self._queue.remove(task)
-                    return True
-            return False
+            return self._queue[0]
 
     def clear(self) -> None:
-        """Clear all tasks."""
+        """
+        Remove all queued tasks.
+        """
+
         with self._lock:
             self._queue.clear()
 
-    def count(self) -> int:
-        """Number of tasks in queue."""
+    # ==========================================================
+    # Query
+    # ==========================================================
+
+    def empty(self) -> bool:
+        """
+        True if queue is empty.
+        """
+
+        with self._lock:
+            return len(self._queue) == 0
+
+    @property
+    def running(self) -> bool:
+        """
+        Scheduler running state.
+        """
+
+        return self._running
+
+    @property
+    def queue_size(self) -> int:
+        """
+        Number of queued tasks.
+        """
+
+        return len(self)
+
+    # ==========================================================
+    # Statistics
+    # ==========================================================
+
+    @property
+    def tasks_enqueued(self) -> int:
+        return self._tasks_enqueued
+
+    @property
+    def tasks_dequeued(self) -> int:
+        return self._tasks_dequeued
+
+    # ==========================================================
+    # Status
+    # ==========================================================
+
+    def status(self) -> dict[str, Any]:
+        """
+        Scheduler status.
+        """
+
+        return {
+            "running": self._running,
+            "queue_size": len(self),
+            "tasks_enqueued": self._tasks_enqueued,
+            "tasks_dequeued": self._tasks_dequeued,
+        }
+
+    # ==========================================================
+    # Reset
+    # ==========================================================
+
+    def reset(self) -> None:
+        """
+        Reset scheduler.
+        """
+
+        self.clear()
+
+        self._tasks_enqueued = 0
+        self._tasks_dequeued = 0
+
+    # ==========================================================
+    # Magic Methods
+    # ==========================================================
+
+    def __len__(self) -> int:
         with self._lock:
             return len(self._queue)
 
-    def is_empty(self) -> bool:
-        """Return True if queue is empty."""
-        return self.count() == 0
-
-    # ------------------------------------------------------------------
-    # Pythonic helpers
-    # ------------------------------------------------------------------
-
-    def __len__(self) -> int:
-        return self.count()
+    def __bool__(self) -> bool:
+        return not self.empty()
 
     def __iter__(self):
         with self._lock:
             return iter(tuple(self._queue))
 
-    def __contains__(self, task: object) -> bool:
-        if not isinstance(task, Task):
-            return False
+    def __contains__(
+        self,
+        task: object,
+    ) -> bool:
         with self._lock:
-            return any(t.id == task.id for t in self._queue)
+            return task in self._queue
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(tasks={len(self)})"
+        return (
+            f"{self.__class__.__name__}("
+            f"running={self._running}, "
+            f"queue_size={len(self)}, "
+            f"enqueued={self._tasks_enqueued}, "
+            f"dequeued={self._tasks_dequeued})"
+        )

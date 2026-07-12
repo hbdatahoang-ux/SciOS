@@ -1,41 +1,152 @@
-# scios/cognitive_core/memory/episodic.py
+"""
+SciOS Episodic Memory
+=====================
 
-from typing import Any, Dict, Optional, List
+Concrete episodic memory implementation.
+
+Responsibilities
+----------------
+- Store experiences
+- Retrieve experiences
+- Forget experiences
+- Clear memory
+- Enumerate records
+"""
+
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Any
+
 from .base import AbstractMemory
 from .record import MemoryRecord
 
+
 class EpisodicMemory(AbstractMemory):
     """
-    EpisodicMemory: lưu giữ ký ức sự kiện, trải nghiệm cụ thể.
-    Mỗi record thường có timestamp và context.
+    Stores episodic memories (events and experiences).
     """
 
-    def __init__(self, name: str = "EpisodicMemory"):
+    def __init__(
+        self,
+        name: str = "EpisodicMemory",
+    ) -> None:
+
         super().__init__(name)
-        self._records: List[MemoryRecord] = []
 
-    def store(self, record: Dict[str, Any]) -> None:
-        """Thêm một sự kiện mới vào EpisodicMemory."""
+        self._records: list[MemoryRecord] = []
+
+    # ======================================================
+    # Store
+    # ======================================================
+
+    def store(
+        self,
+        record: dict[str, Any],
+    ) -> None:
+        """
+        Store a new memory.
+        """
+
         if "timestamp" not in record:
-            record["timestamp"] = datetime.utcnow().isoformat()
-        self._records.append(MemoryRecord(**record))
+            record["timestamp"] = (
+                datetime.utcnow().isoformat()
+            )
 
-    def retrieve(self, query: Dict[str, Any]) -> Optional[MemoryRecord]:
+        self._records.append(
+            MemoryRecord(**record)
+        )
+
+    # ======================================================
+    # Retrieve
+    # ======================================================
+
+    def retrieve(
+        self,
+        query: dict[str, Any],
+    ) -> MemoryRecord | None:
         """
-        Truy xuất ký ức theo query.
-        Có thể tìm theo thời gian, ngữ cảnh hoặc keyword.
+        Retrieve the first matching memory.
         """
+
         keyword = query.get("keyword")
         timestamp = query.get("timestamp")
 
         for rec in self._records:
-            if keyword and keyword.lower() in rec.content.lower():
+
+            if (
+                keyword is not None
+                and keyword.lower()
+                in rec.content.lower()
+            ):
                 return rec
-            if timestamp and rec.metadata.get("timestamp") == timestamp:
+
+            metadata = getattr(rec, "metadata", {})
+
+            if (
+                timestamp is not None
+                and metadata.get("timestamp")
+                == timestamp
+            ):
                 return rec
+
         return None
 
-    def forget(self, record_id: str) -> None:
-        """Xóa một ký ức sự kiện theo ID."""
-        self._records = [rec for rec in self._records if rec.id != record_id
+    # ======================================================
+    # Forget
+    # ======================================================
+
+    def forget(
+        self,
+        record_id: str,
+    ) -> None:
+        """
+        Remove a memory by ID.
+        """
+
+        self._records = [
+            rec
+            for rec in self._records
+            if rec.id != record_id
+        ]
+
+    # ======================================================
+    # Utilities
+    # ======================================================
+
+    def clear(self) -> None:
+        """
+        Remove every memory.
+        """
+
+        self._records.clear()
+
+    def all(self) -> list[MemoryRecord]:
+        """
+        Return every stored memory.
+        """
+
+        return list(self._records)
+
+    def size(self) -> int:
+        """
+        Number of stored memories.
+        """
+
+        return len(self._records)
+
+    # ======================================================
+    # Python Protocols
+    # ======================================================
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+    def __iter__(self):
+        return iter(self._records)
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}"
+            f"(records={len(self._records)})"
+        )

@@ -1,94 +1,110 @@
 """
-SciOS Kernel Package
-====================
+SciOS Kernel
+============
 
-Core microkernel infrastructure for SciOS.
-
-This package provides:
-
-- Kernel (microkernel orchestrator)
-- KernelState (enum of kernel lifecycle states)
-- LifecycleManager (service lifecycle controller)
-- KernelConfig (configuration dataclass)
-- build_kernel() (Composition Root factory)
-
-Infrastructure services:
-- EventBus
-- ServiceRegistry
-- ContextManager
-- Scheduler
-- PluginManager
-- ArtifactManager
-
-Execution subsystem:
-- Dispatcher
-- ExecutionEngine
-- Runtime
-
-The public API exposed here is considered stable.
+Core orchestration layer of the Scientific Cognitive Operating System.
 """
 
-from .bootstrap import build_kernel
+from __future__ import annotations
+
+# ==========================================================
+# Core
+# ==========================================================
+
 from .kernel import Kernel
-from .state import KernelState
-from .lifecycle import LifecycleManager
-from .config import KernelConfig
+from .bootstrap import Bootstrap
 
+
+# ==========================================================
+# Factory
+# ==========================================================
+
+def build_kernel() -> Kernel:
+    """
+    Build a default SciOS Kernel.
+
+    Returns
+    -------
+    Kernel
+        A fully initialized Kernel instance.
+    """
+    return Kernel()
+
+
+# ==========================================================
 # Infrastructure
-from .events import EventBus
+# ==========================================================
+
+from .lifecycle import LifecycleManager
 from .registry import ServiceRegistry
-from .context import ContextManager
-
-# Scheduling
-from .scheduler import Scheduler, Task
-
-# Plugins
-from .plugins import PluginManager
-
-# Artifacts
-from .artifacts import Artifact, ArtifactManager, ArtifactStatus, ArtifactType
-
-# Execution
+from .scheduler import Scheduler
 from .dispatcher import Dispatcher
-from .execution import ExecutionEngine
+from .plugin_manager import PluginManager
+from .artifact_manager import ArtifactManager
 
-# Runtime
-from .runtime.runtime import Runtime
 
-__version__ = "0.2.0"
+# ==========================================================
+# State
+# ==========================================================
+
+from .state import KernelState, KernelStatus
+
+
+# ==========================================================
+# Services
+# ==========================================================
+
+from .services import (
+    Service,
+    LifecycleService,
+    ExecutionService,
+    ConfigurableService,
+    HealthCheckService,
+    KernelService,
+)
+
+
+# ==========================================================
+# Exceptions
+# ==========================================================
+
+from .exceptions import *
+
+
+# ==========================================================
+# Version
+# ==========================================================
+
+__version__ = "0.3.0-alpha"
+
+
+# ==========================================================
+# Public API
+# ==========================================================
 
 __all__ = [
-    # bootstrap
+    # Core
+    "Kernel",
+    "Bootstrap",
     "build_kernel",
 
-    # kernel
-    "Kernel",
-    "KernelState",
+    # Infrastructure
     "LifecycleManager",
-    "KernelConfig",
-
-    # infrastructure
-    "EventBus",
     "ServiceRegistry",
-    "ContextManager",
-
-    # scheduling
     "Scheduler",
-    "Task",
-
-    # plugins
+    "Dispatcher",
     "PluginManager",
-
-    # artifacts
-    "Artifact",
-    "ArtifactType",
-    "ArtifactStatus",
     "ArtifactManager",
 
-    # execution
-    "Dispatcher",
-    "ExecutionEngine",
+    # State
+    "KernelState",
+    "KernelStatus",
 
-    # runtime
-    "Runtime",
+    # Services
+    "Service",
+    "LifecycleService",
+    "ExecutionService",
+    "ConfigurableService",
+    "HealthCheckService",
+    "KernelService",
 ]

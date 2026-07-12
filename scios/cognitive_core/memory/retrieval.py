@@ -1,70 +1,275 @@
-# scios/cognitive_core/memory/retrieval.py
+"""
+SciOS Cognitive Core Memory Retrieval
+=====================================
 
-from typing import List, Optional
+Memory retrieval strategies.
+
+Supported:
+- Keyword retrieval
+- Temporal retrieval
+- Semantic retrieval
+
+Design:
+- Lightweight local retrieval.
+- Vector backend replaceable.
+- Compatible with future Qdrant integration.
+"""
+
+from __future__ import annotations
+
+import math
+from abc import ABC, abstractmethod
+from typing import Any
+
 from .record import MemoryRecord
 
-class RetrievalStrategy:
+
+__all__ = [
+    "RetrievalStrategy",
+    "KeywordRetrieval",
+    "TemporalRetrieval",
+    "SemanticRetrieval",
+]
+
+
+# ==========================================================
+# Base Strategy
+# ==========================================================
+
+
+class RetrievalStrategy(ABC):
     """
-    Base class cho các chiến lược truy xuất memory.
+    Base retrieval strategy.
     """
 
-    def retrieve(self, records: List[MemoryRecord], query: dict) -> Optional[MemoryRecord]:
-        raise NotImplementedError("Subclasses must implement retrieve()")
+    @abstractmethod
+    def retrieve(
+        self,
+        records: list[MemoryRecord],
+        query: dict[str, Any],
+    ) -> MemoryRecord | None:
+        """
+        Retrieve best matching memory.
+        """
+
+        raise NotImplementedError
 
 
-class KeywordRetrieval(RetrievalStrategy):
+
+# ==========================================================
+# Keyword Retrieval
+# ==========================================================
+
+
+class KeywordRetrieval(
+    RetrievalStrategy
+):
     """
-    Truy xuất theo từ khóa (keyword match).
+    Simple keyword based retrieval.
     """
 
-    def retrieve(self, records: List[MemoryRecord], query: dict) -> Optional[MemoryRecord]:
-        keyword = query.get("keyword")
+    def retrieve(
+        self,
+        records: list[MemoryRecord],
+        query: dict[str, Any],
+    ) -> MemoryRecord | None:
+
+        keyword = query.get(
+            "keyword"
+        )
+
         if not keyword:
             return None
-        for rec in records:
-            if keyword.lower() in rec.content.lower():
-                return rec
+
+
+        keyword = str(
+            keyword
+        ).lower()
+
+
+        for record in records:
+
+            content = str(
+                record.content
+            ).lower()
+
+
+            if keyword in content:
+                return record
+
+
         return None
 
 
-class TemporalRetrieval(RetrievalStrategy):
+
+# ==========================================================
+# Temporal Retrieval
+# ==========================================================
+
+
+class TemporalRetrieval(
+    RetrievalStrategy
+):
     """
-    Truy xuất theo thời gian (timestamp).
+    Retrieve memory by timestamp.
     """
 
-    def retrieve(self, records: List[MemoryRecord], query: dict) -> Optional[MemoryRecord]:
-        timestamp = query.get("timestamp")
+    def retrieve(
+        self,
+        records: list[MemoryRecord],
+        query: dict[str, Any],
+    ) -> MemoryRecord | None:
+
+
+        timestamp = query.get(
+            "timestamp"
+        )
+
         if not timestamp:
             return None
-        for rec in records:
-            if rec.metadata.get("timestamp") == timestamp:
-                return rec
+
+
+        for record in records:
+
+            if (
+                record.metadata.get(
+                    "timestamp"
+                )
+                ==
+                timestamp
+            ):
+                return record
+
+
         return None
 
 
-class SemanticRetrieval(RetrievalStrategy):
+
+# ==========================================================
+# Semantic Retrieval
+# ==========================================================
+
+
+class SemanticRetrieval(
+    RetrievalStrategy
+):
     """
-    Truy xuất theo độ tương đồng ngữ nghĩa (embedding similarity).
-    (Ở đây skeleton, chưa triển khai thực tế embedding).
+    Embedding similarity retrieval.
+
+    Current:
+        Local cosine similarity.
+
+    Future:
+        Replace with:
+        - Qdrant
+        - FAISS
+        - Vector DB
     """
 
-    def retrieve(self, records: List[MemoryRecord], query: dict) -> Optional[MemoryRecord]:
-        # Giả định có trường "embedding" trong metadata
-        target_embedding = query.get("embedding")
+    def retrieve(
+        self,
+        records: list[MemoryRecord],
+        query: dict[str, Any],
+    ) -> MemoryRecord | None:
+
+
+        target_embedding = query.get(
+            "embedding"
+        )
+
+
         if not target_embedding:
             return None
 
-        # TODO: triển khai tính cosine similarity
-        # Hiện tại chỉ skeleton
-        best_match = None
-        best_score = -1
-        for rec in records:
-            embedding = rec.metadata.get("embedding")
-            if embedding:
-                score = self._cosine_similarity(target_embedding, embedding)
-                if score > best_score:
-                    best_score = score
-                    best_match = rec
-        return best_match
 
-    def _cosine_similarity
+        best_record = None
+
+        best_score = -1.0
+
+
+        for record in records:
+
+            embedding = (
+                record.metadata.get(
+                    "embedding"
+                )
+            )
+
+
+            if embedding is None:
+                continue
+
+
+            score = self._cosine_similarity(
+                target_embedding,
+                embedding,
+            )
+
+
+            if score > best_score:
+
+                best_score = score
+
+                best_record = record
+
+
+        return best_record
+
+
+
+    # ======================================================
+    # Math
+    # ======================================================
+
+    @staticmethod
+    def _cosine_similarity(
+        vec1: list[float],
+        vec2: list[float],
+    ) -> float:
+        """
+        Compute cosine similarity.
+
+        Returns:
+            -1.0 ... 1.0
+        """
+
+        if not vec1 or not vec2:
+            return 0.0
+
+
+        if len(vec1) != len(vec2):
+            return 0.0
+
+
+        dot = sum(
+            a * b
+            for a, b in zip(
+                vec1,
+                vec2,
+            )
+        )
+
+
+        norm1 = math.sqrt(
+            sum(
+                a * a
+                for a in vec1
+            )
+        )
+
+
+        norm2 = math.sqrt(
+            sum(
+                b * b
+                for b in vec2
+            )
+        )
+
+
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+
+
+        return dot / (
+            norm1 * norm2
+        )

@@ -1,6 +1,6 @@
 """
-SciOS Execution Result
-======================
+SciOS Runtime Execution Result
+==============================
 
 Canonical execution result for the SciOS Runtime.
 
@@ -9,18 +9,40 @@ Responsibilities
 - Represent the outcome of one execution.
 - Capture success or failure.
 - Store execution output and diagnostics.
-- Provide serialization helpers.
+- Provide metadata helpers.
+- Support serialization.
+- Be immutable in API semantics.
+- Provide a stable Runtime v0.2 contract.
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+
 __all__ = [
     "ExecutionResult",
 ]
+
+
+# ==========================================================
+# Helpers
+# ==========================================================
+
+
+def utc_now() -> str:
+    """
+    Return current UTC ISO timestamp.
+    """
+
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
 
 
 # ==========================================================
@@ -31,7 +53,31 @@ __all__ = [
 @dataclass(slots=True)
 class ExecutionResult:
     """
-    Immutable representation of one execution result.
+    Canonical runtime execution result.
+
+    Construction
+    ------------
+
+    Success:
+
+        ExecutionResult.ok(value)
+
+    Failure:
+
+        ExecutionResult.fail(error)
+
+    Truth value:
+
+        if result:
+            ...
+
+    Success state:
+
+        result.success
+
+    Failure state:
+
+        result.failed
     """
 
     # ------------------------------------------------------
@@ -55,7 +101,7 @@ class ExecutionResult:
     message: str | None = None
 
     # ------------------------------------------------------
-    # Metrics
+    # Runtime Metrics
     # ------------------------------------------------------
 
     duration: float = 0.0
@@ -69,13 +115,25 @@ class ExecutionResult:
     # ------------------------------------------------------
 
     timestamp: str = field(
-        default_factory=lambda: datetime.now(
-            timezone.utc
-        ).isoformat()
+        default_factory=utc_now
     )
 
     # ======================================================
-    # Constructors
+    # Initialization
+    # ======================================================
+
+    def __post_init__(self) -> None:
+        """
+        Normalize runtime values.
+        """
+
+        self.metadata = dict(self.metadata)
+
+        if self.message is None and self.error is not None:
+            self.message = str(self.error)
+
+    # ======================================================
+    # Factory Methods
     # ======================================================
 
     @classmethod
@@ -88,7 +146,7 @@ class ExecutionResult:
         **metadata: Any,
     ) -> "ExecutionResult":
         """
-        Create a successful execution result.
+        Create a successful result.
         """
 
         return cls(
@@ -109,7 +167,7 @@ class ExecutionResult:
         **metadata: Any,
     ) -> "ExecutionResult":
         """
-        Create a failed execution result.
+        Create a failed result.
         """
 
         return cls(
@@ -119,6 +177,32 @@ class ExecutionResult:
             duration=duration,
             metadata=metadata,
         )
+
+    # ------------------------------------------------------
+    # Convenience Constructors
+    # ------------------------------------------------------
+
+    @classmethod
+    def from_value(
+        cls,
+        value: Any,
+    ) -> "ExecutionResult":
+        """
+        Alias for ok().
+        """
+
+        return cls.ok(value)
+
+    @classmethod
+    def from_error(
+        cls,
+        error: Exception,
+    ) -> "ExecutionResult":
+        """
+        Alias for fail().
+        """
+
+        return cls.fail(error)
 
     # ======================================================
     # Convenience Properties
@@ -135,10 +219,18 @@ class ExecutionResult:
     @property
     def has_value(self) -> bool:
         """
-        Whether a value is available.
+        Whether a value exists.
         """
 
         return self.value is not None
+
+    @property
+    def is_success(self) -> bool:
+        """
+        Explicit success alias.
+        """
+
+        return self.success
 
     # ======================================================
     # Metadata
@@ -170,12 +262,23 @@ class ExecutionResult:
         )
 
     # ======================================================
+    # Copy
+    # ======================================================
+
+    def copy(self) -> "ExecutionResult":
+        """
+        Deep copy.
+        """
+
+        return deepcopy(self)
+
+    # ======================================================
     # Serialization
     # ======================================================
 
     def to_dict(self) -> dict[str, Any]:
         """
-        Serialize to dictionary.
+        Serialize execution result.
         """
 
         return {
@@ -186,15 +289,15 @@ class ExecutionResult:
 
             "message": self.message,
 
-            "error": (
+            "error":
                 str(self.error)
                 if self.error
-                else None
-            ),
+                else None,
 
             "duration": self.duration,
 
-            "metadata": dict(self.metadata),
+            "metadata":
+                deepcopy(self.metadata),
 
             "timestamp": self.timestamp,
         }
@@ -206,39 +309,56 @@ class ExecutionResult:
     ) -> "ExecutionResult":
         """
         Restore from serialized dictionary.
+
+        Note:
+            Original exception types cannot be faithfully
+            reconstructed from serialized data. Therefore
+            the error field is restored as RuntimeError.
         """
 
+        error = data.get("error")
+
         return cls(
+
             success=data.get(
                 "success",
                 True,
             ),
+
             value=data.get(
                 "value",
             ),
+
+            error=(
+                RuntimeError(error)
+                if error
+                else None
+            ),
+
             message=data.get(
                 "message",
             ),
+
             duration=data.get(
                 "duration",
                 0.0,
             ),
+
             metadata=dict(
                 data.get(
                     "metadata",
                     {},
                 )
             ),
+
             timestamp=data.get(
                 "timestamp",
-                datetime.now(
-                    timezone.utc
-                ).isoformat(),
+                utc_now(),
             ),
         )
 
     # ======================================================
-    # Representation
+    # Protocols
     # ======================================================
 
     def __bool__(self) -> bool:
@@ -250,10 +370,18 @@ class ExecutionResult:
 
     def __repr__(self) -> str:
 
-        status = "SUCCESS" if self.success else "FAILED"
+        if self.success:
+
+            return (
+                f"{self.__class__.__name__}("
+                f"status='SUCCESS', "
+                f"value={self.value!r}, "
+                f"duration={self.duration:.6f}s)"
+            )
 
         return (
             f"{self.__class__.__name__}("
-            f"status={status}, "
-            f"value={self.value!r})"
+            f"status='FAILED', "
+            f"error={self.message!r}, "
+            f"duration={self.duration:.6f}s)"
         )

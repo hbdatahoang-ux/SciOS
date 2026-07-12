@@ -2,14 +2,7 @@
 SciOS Base Agent
 ================
 
-Abstract base class for all cognitive agents in SciOS.
-
-Responsibilities
-----------------
-- Define the common agent interface
-- Manage lifecycle
-- Maintain agent metadata
-- Expose execution status
+Base implementation for every cognitive agent inside SciOS.
 """
 
 from __future__ import annotations
@@ -17,30 +10,32 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 __all__ = [
+    "Agent",
     "BaseAgent",
 ]
 
 
-class BaseAgent(ABC):
+class Agent(ABC):
     """
-    Abstract base class for all SciOS agents.
-
-    Every cognitive subsystem (Planner, Memory, Reasoning,
-    ToolUse, Reflection, Collaboration) derives from this
-    class to provide a consistent execution interface.
+    Root abstraction of every SciOS agent.
     """
 
     def __init__(
         self,
         name: str,
-        version: str = "0.1.3",
+        version: str = "0.3.0",
     ) -> None:
+
+        self._id = str(uuid4())
 
         self._name = name
 
         self._version = version
+
+        self._state = "idle"
 
         self._enabled = True
 
@@ -50,121 +45,157 @@ class BaseAgent(ABC):
 
         self._executions = 0
 
-    # ======================================================
+    # -------------------------------------------------------
     # Metadata
-    # ======================================================
+    # -------------------------------------------------------
+
+    @property
+    def id(self) -> str:
+        return self._id
 
     @property
     def name(self) -> str:
-        """
-        Agent name.
-        """
         return self._name
 
     @property
     def version(self) -> str:
-        """
-        Agent version.
-        """
         return self._version
 
-    # ======================================================
-    # Lifecycle
-    # ======================================================
-
-    def enable(self) -> None:
-        """
-        Enable the agent.
-        """
-        self._enabled = True
-
-    def disable(self) -> None:
-        """
-        Disable the agent.
-        """
-        self._enabled = False
+    @property
+    def state(self) -> str:
+        return self._state
 
     @property
     def enabled(self) -> bool:
-        """
-        Whether the agent is enabled.
-        """
         return self._enabled
 
-    # ======================================================
-    # Execution
-    # ======================================================
+    # -------------------------------------------------------
+    # Lifecycle
+    # -------------------------------------------------------
+
+    def enable(self) -> None:
+        self._enabled = True
+
+    def disable(self) -> None:
+        self._enabled = False
+
+    def reset(self) -> None:
+        """
+        Restore initial runtime state.
+        """
+
+        self._state = "idle"
+        self._executions = 0
+
+    # -------------------------------------------------------
+    # Invocation
+    # -------------------------------------------------------
 
     def __call__(
         self,
+        task: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """
-        Callable interface.
-        """
 
-        return self.execute(*args, **kwargs)
+        return self.execute(
+            task,
+            *args,
+            **kwargs,
+        )
+
+    # -------------------------------------------------------
+    # Execution Wrapper
+    # -------------------------------------------------------
 
     def execute(
         self,
+        task: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
         """
-        Execute the agent.
-
-        This wrapper checks lifecycle state before delegating
-        to the concrete implementation.
+        Common execution wrapper.
         """
+
+        if task is None:
+            raise ValueError(
+                "Task cannot be None."
+            )
 
         if not self._enabled:
             raise RuntimeError(
                 f"Agent '{self._name}' is disabled."
             )
 
-        self._executions += 1
+        self._state = "running"
 
-        return self.run(*args, **kwargs)
+        try:
+
+            result = self.run(
+                task,
+                *args,
+                **kwargs,
+            )
+
+            return result
+
+        finally:
+
+            self._executions += 1
+            self._state = "idle"
+
+    # -------------------------------------------------------
+    # Implementation
+    # -------------------------------------------------------
 
     @abstractmethod
     def run(
         self,
+        task: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
         """
-        Agent-specific implementation.
-
-        Must be implemented by subclasses.
+        Concrete implementation.
         """
 
-    # ======================================================
+    # -------------------------------------------------------
     # Status
-    # ======================================================
+    # -------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
-        """
-        Return runtime status.
-        """
 
         return {
+
+            "id": self._id,
+
             "name": self._name,
+
+            "state": self._state,
+
             "version": self._version,
+
             "enabled": self._enabled,
+
             "executions": self._executions,
+
             "created_at": self._created_at,
         }
 
-    # ======================================================
-    # Python Protocols
-    # ======================================================
+    # -------------------------------------------------------
+    # Representation
+    # -------------------------------------------------------
 
     def __repr__(self) -> str:
 
         return (
             f"{self.__class__.__name__}("
+            f"id='{self._id}', "
             f"name='{self._name}', "
-            f"enabled={self._enabled}, "
-            f"executions={self._executions})"
+            f"state='{self._state}')"
         )
+
+
+# Backward compatibility
+BaseAgent = Agent

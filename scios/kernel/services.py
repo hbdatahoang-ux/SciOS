@@ -1,71 +1,244 @@
+"""
+SciOS Kernel Service Interfaces
+===============================
+
+Abstract service interfaces used throughout the SciOS Kernel.
+
+Responsibilities
+----------------
+- Define lifecycle contracts.
+- Define execution contracts.
+- Provide common service interfaces.
+- Enable dependency injection.
+
+Design Goals
+------------
+- Framework independent
+- Strong typing
+- ABC based
+- Compatible with Kernel, Runtime and Plugins
+"""
+
 from __future__ import annotations
-from abc import ABC, abstractmethod
+
+from abc import ABC
+from abc import abstractmethod
 from typing import Any
+from typing import Protocol
+from typing import runtime_checkable
 
 
-class KernelService(ABC):
+__all__ = [
+    "Service",
+    "LifecycleService",
+    "ExecutionService",
+    "NamedService",
+    "ConfigurableService",
+    "HealthCheckService",
+]
+
+
+# ==========================================================
+# Base Service
+# ==========================================================
+
+class Service(ABC):
     """
-    KernelService = Abstract base class for all services managed by Kernel.
+    Root interface for every SciOS service.
     """
 
+    @property
     @abstractmethod
-    def start(self) -> None:
+    def name(self) -> str:
         """
-        Start the service.
+        Unique service name.
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def stop(self) -> None:
+    @property
+    def version(self) -> str:
         """
-        Stop the service.
+        Service version.
         """
-        raise NotImplementedError
+        return "0.1.0"
+
+    @property
+    def description(self) -> str:
+        """
+        Human-readable description.
+        """
+        return self.__class__.__name__
 
     @abstractmethod
     def status(self) -> dict[str, Any]:
         """
-        Return service status information.
+        Return current service status.
         """
         raise NotImplementedError
 
 
-# ----------------------------------------------------------
-# Example concrete services
-# ----------------------------------------------------------
+# ==========================================================
+# Lifecycle Service
+# ==========================================================
 
-class LoggingService(KernelService):
+class LifecycleService(Service):
     """
-    LoggingService = Example service for logging.
+    Service supporting lifecycle operations.
     """
 
-    def __init__(self) -> None:
-        self.active = False
+    @abstractmethod
+    def initialize(self) -> None:
+        """
+        Initialize service.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def start(self) -> None:
+        """
+        Start service.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def shutdown(self) -> None:
+        """
+        Shutdown service.
+        """
+        raise NotImplementedError
+
+
+# ==========================================================
+# Execution Service
+# ==========================================================
+
+class ExecutionService(Service):
+    """
+    Service capable of executing work.
+    """
+
+    @abstractmethod
+    def execute(
+        self,
+        task: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Execute a task.
+        """
+        raise NotImplementedError
+
+
+# ==========================================================
+# Configurable Service
+# ==========================================================
+
+class ConfigurableService(Service):
+    """
+    Service supporting runtime configuration.
+    """
+
+    @abstractmethod
+    def configure(
+        self,
+        **config: Any,
+    ) -> None:
+        """
+        Apply configuration.
+        """
+        raise NotImplementedError
+
+
+# ==========================================================
+# Health Check Service
+# ==========================================================
+
+class HealthCheckService(Service):
+    """
+    Service exposing health information.
+    """
+
+    @abstractmethod
+    def healthy(self) -> bool:
+        """
+        Return True if healthy.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def health(self) -> dict[str, Any]:
+        """
+        Detailed health report.
+        """
+        raise NotImplementedError
+
+
+# ==========================================================
+# Runtime Protocols
+# ==========================================================
+
+@runtime_checkable
+class NamedService(Protocol):
+    """
+    Lightweight runtime protocol.
+    """
+
+    @property
+    def name(self) -> str:
+        ...
+
+
+@runtime_checkable
+class Initializable(Protocol):
+
+    def initialize(self) -> None:
+        ...
+
+
+@runtime_checkable
+class Startable(Protocol):
 
     def start(self) -> None:
-        self.active = True
-
-    def stop(self) -> None:
-        self.active = False
-
-    def status(self) -> dict[str, Any]:
-        return {"service": "logging", "active": self.active}
+        ...
 
 
-class MetricsService(KernelService):
+@runtime_checkable
+class Shutdownable(Protocol):
+
+    def shutdown(self) -> None:
+        ...
+
+
+@runtime_checkable
+class Executable(Protocol):
+
+    def execute(
+        self,
+        task: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+
+# ==========================================================
+# Composite Service
+# ==========================================================
+
+class KernelService(
+    LifecycleService,
+    ExecutionService,
+):
     """
-    MetricsService = Example service for metrics collection.
+    Complete kernel service interface.
+
+    Used by:
+        - Scheduler
+        - Dispatcher
+        - Runtime
+        - Agent
+        - Planner
+        - Memory
+        - PluginManager
     """
 
-    def __init__(self) -> None:
-        self.active = False
-        self.metrics: dict[str, Any] = {}
-
-    def start(self) -> None:
-        self.active = True
-
-    def stop(self) -> None:
-        self.active = False
-
-    def status(self) -> dict[str, Any]:
-        return {"service": "metrics", "active": self.active, "metrics": self.metrics}
+    pass

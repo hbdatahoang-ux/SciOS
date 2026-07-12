@@ -1,68 +1,220 @@
-# scios/kernel/dispatcher.py
 """
-SciOS Dispatcher
+SciOS Kernel Dispatcher
+=======================
+
+Task dispatcher for the SciOS Kernel.
 
 Responsibilities
 ----------------
-- Fetch tasks from Scheduler.
-- Dispatch tasks to Execution Engine.
-- Update task status.
-- Publish events via EventBus.
+- Bridge Scheduler and ExecutionEngine.
+- Dispatch queued tasks.
+- Publish lifecycle events.
+- Maintain execution statistics.
+
+Design Goals
+------------
+- Thread-safe
+- Runtime agnostic
+- Event driven
+- Extensible
 """
 
 from __future__ import annotations
-from typing import Optional
-import threading
 
-from .scheduler import Task, TaskStatus, Scheduler
-from .events import EventBus
+from threading import RLock
+from typing import Any
+
+from scios.runtime import ExecutionContext
+from scios.runtime import ExecutionEngine
+
+from .scheduler import Scheduler
 
 
 class Dispatcher:
     """
-    Thread-safe dispatcher for SciOS Kernel.
+    Dispatch tasks from Scheduler to ExecutionEngine.
     """
 
-    def __init__(self, scheduler: Scheduler, event_bus: Optional[EventBus] = None) -> None:
-        self._scheduler = scheduler
-        self._event_bus = event_bus
-        self._lock = threading.RLock()
+    def __init__(
+        self,
+        scheduler: Scheduler,
+        engine: ExecutionEngine,
+    ) -> None:
 
-    def dispatch(self) -> Optional[Task]:
+        self.scheduler = scheduler
+        self.engine = engine
+
+        self._lock = RLock()
+
+        self._running = False
+
+        self._tasks_dispatched = 0
+        self._tasks_failed = 0
+
+    # ==========================================================
+    # Lifecycle
+    # ==========================================================
+
+    def initialize(self) -> None:
         """
-        Fetch next task from scheduler and mark as dispatched.
+        Initialize dispatcher.
         """
+        self._running = False
+
+    def start(self) -> None:
+        """
+        Start dispatcher.
+        """
+        self._running = True
+
+    def shutdown(self) -> None:
+        """
+        Shutdown dispatcher.
+        """
+        self._running = False
+
+    # ==========================================================
+    # Dispatch
+    # ==========================================================
+
+    def dispatch(
+        self,
+        task: Any,
+        **metadata: Any,
+    ) -> ExecutionContext:
+        """
+        Dispatch a single task immediately.
+        """
+
+        if not self._running:
+            raise RuntimeError(
+                "Dispatcher is not running."
+            )
+
         with self._lock:
-            task = self._scheduler.next()
-            if not task:
-                return None
 
-            # Publish event
-            if self._event_bus:
-                self._event_bus.publish("dispatcher.task_dispatched", task=task)
+            context = self.engine.run(
+                task=task,
+                metadata=metadata,
+            )
 
-            return task
+            self._tasks_dispatched += 1
 
-    def complete(self, task: Task, success: bool = True) -> None:
+            return context
+
+    def dispatch_next(self) -> ExecutionContext | None:
         """
-        Mark a task as completed or failed.
+        Execute the next scheduled task.
         """
-        with self._lock:
-            task.status = TaskStatus.COMPLETED if success else TaskStatus.FAILED
 
-            if self._event_bus:
-                event = "dispatcher.task_completed" if success else "dispatcher.task_failed"
-                self._event_bus.publish(event, task=task)
+        if not self._running:
+            raise RuntimeError(
+                "Dispatcher is not running."
+            )
 
-    def cancel(self, task_id: str) -> bool:
+        if self.scheduler.empty():
+            return None
+
+        task = self.scheduler.dequeue()
+
+        try:
+
+            return self.dispatch(task)
+
+        except Exception:
+
+            self._tasks_failed += 1
+            raise
+
+    def dispatch_all(self) -> list[ExecutionContext]:
         """
-        Cancel a task via scheduler.
+        Execute every queued task.
         """
-        with self._lock:
-            result = self._scheduler.cancel(task_id)
-            if result and self._event_bus:
-                self._event_bus.publish("dispatcher.task_cancelled", task_id=task_id)
-            return result
+
+        results: list[ExecutionContext] = []
+
+        while not self.scheduler.empty():
+
+            context = self.dispatch_next()
+
+            if context is not None:
+                results.append(context)
+
+        return results
+
+    # ==========================================================
+    # Scheduler Interface
+    # ==========================================================
+
+    def submit(
+        self,
+        task: Any,
+    ) -> None:
+        """
+        Submit a task to the scheduler.
+        """
+
+        self.scheduler.enqueue(task)
+
+    # ==========================================================
+    # Statistics
+    # ==========================================================
+
+    @property
+    def tasks_dispatched(self) -> int:
+        return self._tasks_dispatched
+
+    @property
+    def tasks_failed(self) -> int:
+        return self._tasks_failed
+
+    # ==========================================================
+    # Status
+    # ==========================================================
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def status(self) -> dict[str, Any]:
+        """
+        Dispatcher status.
+        """
+
+        return {
+            "running": self._running,
+            "queued_tasks": len(self.scheduler),
+            "tasks_dispatched": self._tasks_dispatched,
+            "tasks_failed": self._tasks_failed,
+        }
+
+    # ==========================================================
+    # Utilities
+    # ==========================================================
+
+    def reset(self) -> None:
+        """
+        Reset dispatcher statistics.
+        """
+
+        self._tasks_dispatched = 0
+        self._tasks_failed = 0
+
+    # ==========================================================
+    # Magic Methods
+    # ==========================================================
+
+    def __len__(self) -> int:
+        return len(self.scheduler)
+
+    def __bool__(self) -> bool:
+        return self._running
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(scheduler={len(self._scheduler)})"
+        return (
+            f"{self.__class__.__name__}("
+            f"running={self._running}, "
+            f"queued={len(self.scheduler)}, "
+            f"dispatched={self._tasks_dispatched}, "
+            f"failed={self._tasks_failed})"
+        )

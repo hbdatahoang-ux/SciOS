@@ -3,16 +3,15 @@ SciOS Common Types
 ==================
 
 Canonical type definitions shared across the Scientific Cognitive
-Operating System.
+Operating System (SciOS).
 
-This module centralizes common type aliases and protocols used by
-Kernel, Runtime, Agents, Memory, Vector Store, and QTC.
-
-Guidelines
-----------
-- No business logic.
-- No runtime dependencies.
-- Only reusable type definitions.
+Design Goals
+------------
+- Python 3.11+
+- Zero runtime dependencies
+- Shared across all SciOS subsystems
+- Strong typing
+- IDE and static-analysis friendly
 """
 
 from __future__ import annotations
@@ -26,95 +25,89 @@ from typing import Literal
 from typing import Protocol
 from typing import TypeAlias
 
-__all__ = [
+from .json_types import (
+    JSONArray,
+    JSONObject,
+    JSONValue,
+)
 
-    # Generic
+__all__ = [
+    # JSON
     "JSONValue",
     "JSONObject",
     "JSONArray",
 
+    # Generic
     "ConfigDict",
     "Metadata",
 
     # Runtime
+    "TaskID",
     "Task",
     "TaskResult",
 
-    # Memory
+    # Vector Store
     "Embedding",
     "Embeddings",
 
     # Events
+    "EventName",
     "Event",
 
     # States
     "KernelState",
+    "RuntimeState",
+    "PipelineState",
     "AgentState",
 
-    # Callbacks
+    # Callback
     "Callback",
 
     # Protocols
     "Executable",
     "Serializable",
+    "Identifiable",
+    "Named",
+    "Initializable",
+    "Shutdownable",
 ]
 
-
 # ==========================================================
-# JSON
-# ==========================================================
-
-JSONValue: TypeAlias = (
-    str
-    | int
-    | float
-    | bool
-    | None
-    | "JSONObject"
-    | "JSONArray"
-)
-
-JSONObject: TypeAlias = dict[str, JSONValue]
-
-JSONArray: TypeAlias = list[JSONValue]
-
-
-# ==========================================================
-# Generic
+# Generic Types
 # ==========================================================
 
 ConfigDict: TypeAlias = dict[str, Any]
 
 Metadata: TypeAlias = dict[str, Any]
 
+# ==========================================================
+# Runtime Types
+# ==========================================================
 
-# ==========================================================
-# Runtime
-# ==========================================================
+TaskID: TypeAlias = str
 
 Task: TypeAlias = str | Mapping[str, Any]
 
 TaskResult: TypeAlias = MutableMapping[str, Any]
 
-
 # ==========================================================
-# Vector Store
+# Vector / Embedding Types
 # ==========================================================
 
 Embedding: TypeAlias = Sequence[float]
 
 Embeddings: TypeAlias = Sequence[Embedding]
 
+# ==========================================================
+# Event Types
+# ==========================================================
 
-# ==========================================================
-# Events
-# ==========================================================
+EventName: TypeAlias = str
 
 Event: TypeAlias = Mapping[str, Any]
 
-
 # ==========================================================
-# Kernel States
+# Kernel State
 # ==========================================================
 
 KernelState: TypeAlias = Literal[
@@ -126,26 +119,48 @@ KernelState: TypeAlias = Literal[
     "failed",
 ]
 
+# ==========================================================
+# Runtime State
+# ==========================================================
+
+RuntimeState: TypeAlias = Literal[
+    "created",
+    "idle",
+    "running",
+    "completed",
+    "failed",
+]
 
 # ==========================================================
-# Agent States
+# Pipeline State
+# ==========================================================
+
+PipelineState: TypeAlias = Literal[
+    "created",
+    "running",
+    "completed",
+    "failed",
+]
+
+# ==========================================================
+# Agent State
 # ==========================================================
 
 AgentState: TypeAlias = Literal[
     "idle",
+    "planning",
     "running",
     "waiting",
+    "reflecting",
     "finished",
     "failed",
 ]
-
 
 # ==========================================================
 # Callback
 # ==========================================================
 
 Callback: TypeAlias = Callable[..., Any]
-
 
 # ==========================================================
 # Protocols
@@ -166,8 +181,46 @@ class Executable(Protocol):
 
 class Serializable(Protocol):
     """
-    Serialization interface.
+   Common serialization interface.
     """
 
     def to_dict(self) -> JSONObject:
+        ...
+
+
+class Identifiable(Protocol):
+    """
+    Object exposing a globally unique identifier.
+    """
+
+    @property
+    def id(self) -> str:
+        ...
+
+
+class Named(Protocol):
+    """
+    Object exposing a human-readable name.
+    """
+
+    @property
+    def name(self) -> str:
+        ...
+
+
+class Initializable(Protocol):
+    """
+    Lifecycle initialization interface.
+    """
+
+    def initialize(self) -> None:
+        ...
+
+
+class Shutdownable(Protocol):
+    """
+    Lifecycle shutdown interface.
+    """
+
+    def shutdown(self) -> None:
         ...
