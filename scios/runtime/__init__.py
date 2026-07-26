@@ -4,39 +4,45 @@ SciOS Runtime
 
 Runtime execution layer of the Scientific Cognitive Operating System.
 
-The Runtime is responsible for transforming executable tasks into
-ExecutionResult objects through the coordinated operation of the
-ExecutionEngine, Scheduler, Worker, and Executor.
+The Runtime transforms executable tasks into Runtime results through
+ExecutionEngine, Pipeline, Stage, Scheduler, Worker, and Executor coordination.
 
 Architecture
 ------------
+
     ExecutionEngine
-            │
-     ┌──────┴──────┐
-     │             │
- Scheduler      Worker
-     │             │
-     ▼             ▼
-ExecutionContext Executor
-            │
-            ▼
-     ExecutionResult
+            |
+        Pipeline
+            |
+        +---+---+
+        |       |
+      Stage   Stage
+        |
+     Executor
+
 
 Public API
 ----------
-Core
+
+Core Components
     ExecutionEngine
+    Pipeline
+    Stage
     Scheduler
     Worker
     Executor
 
-Data Models
+Models
     ExecutionContext
     ExecutionResult
 
 State
     RuntimeState
     RuntimeStatus
+
+Events
+    RuntimeEvent
+    EventType
 
 Exceptions
     RuntimeError
@@ -55,23 +61,37 @@ Exceptions
     ExecutorError
 """
 
+
 from __future__ import annotations
+
 
 # ==========================================================
 # Core Runtime Components
 # ==========================================================
 
 from .engine import ExecutionEngine
+
+from .pipeline import Pipeline
+
+from .stage import Stage
+
 from .scheduler import Scheduler
+
 from .worker import Worker
+
 from .executor import Executor
 
+
+
 # ==========================================================
-# Data Models
+# Execution Models
 # ==========================================================
 
 from .context import ExecutionContext
+
 from .result import ExecutionResult
+
+
 
 # ==========================================================
 # Runtime State
@@ -82,32 +102,70 @@ from .state import (
     RuntimeStatus,
 )
 
+
+
 # ==========================================================
-# Exceptions
+# Runtime Events
+# ==========================================================
+
+try:
+
+    from .events import (
+        RuntimeEvent,
+        EventType,
+    )
+
+except ImportError:
+
+    RuntimeEvent = None
+
+    EventType = None
+
+
+
+# ==========================================================
+# Runtime Exceptions
 # ==========================================================
 
 from .exceptions import (
+
     RuntimeError,
+
     RuntimeInitializationError,
 
+
     ExecutionError,
+
     ExecutionTimeoutError,
+
     ExecutionCancelledError,
 
+
+    InvalidTaskError,
+
+
     ContextError,
+
     InvalidContextError,
 
+
     SchedulerError,
+
     QueueEmptyError,
+
     TaskRejectedError,
 
+
     WorkerError,
+
     WorkerUnavailableError,
+
 
     ExecutorError,
 
-    InvalidTaskError,
 )
+
+
 
 # ==========================================================
 # Version
@@ -115,46 +173,118 @@ from .exceptions import (
 
 __version__ = "0.3.0-alpha"
 
+
+
 # ==========================================================
 # Public API
 # ==========================================================
 
 __all__ = [
+
+    # ------------------------------------------------------
     # Engine
+    # ------------------------------------------------------
+
     "ExecutionEngine",
 
-    # Core
+
+
+    # ------------------------------------------------------
+    # Pipeline
+    # ------------------------------------------------------
+
+    "Pipeline",
+
+    "Stage",
+
+
+
+    # ------------------------------------------------------
+    # Runtime Components
+    # ------------------------------------------------------
+
     "Scheduler",
+
     "Worker",
+
     "Executor",
 
-    # Models
+
+
+    # ------------------------------------------------------
+    # Execution Models
+    # ------------------------------------------------------
+
     "ExecutionContext",
+
     "ExecutionResult",
 
-    # State
+
+
+    # ------------------------------------------------------
+    # Runtime State
+    # ------------------------------------------------------
+
     "RuntimeState",
+
     "RuntimeStatus",
 
+
+
+    # ------------------------------------------------------
+    # Events
+    # ------------------------------------------------------
+
+    "RuntimeEvent",
+
+    "EventType",
+
+
+
+    # ------------------------------------------------------
     # Exceptions
+    # ------------------------------------------------------
+
     "RuntimeError",
+
     "RuntimeInitializationError",
 
+
     "ExecutionError",
+
     "ExecutionTimeoutError",
+
     "ExecutionCancelledError",
 
+
+    "InvalidTaskError",
+
+
     "ContextError",
+
     "InvalidContextError",
 
+
     "SchedulerError",
+
     "QueueEmptyError",
+
     "TaskRejectedError",
 
+
     "WorkerError",
+
     "WorkerUnavailableError",
+
 
     "ExecutorError",
 
-    "InvalidTaskError",
+
+
+    # ------------------------------------------------------
+    # Metadata
+    # ------------------------------------------------------
+
+    "__version__",
+
 ]

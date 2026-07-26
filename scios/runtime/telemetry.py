@@ -1,327 +1,428 @@
 """
-SciOS Runtime Telemetry Tests
-=============================
+SciOS Runtime Telemetry
+=======================
 
-Tests for the Runtime TelemetryPlugin.
+Runtime observability plugin layer.
 
-Coverage
---------
-- Plugin construction
-- Installation
-- Successful execution metrics
-- Failed execution metrics
-- Latency collection
-- Multiple executions
-- Plugin uninstall
-- Metrics snapshot
+Responsibilities
+-----------------
+- Listen to Runtime lifecycle hooks.
+- Collect execution telemetry.
+- Measure execution latency.
+- Update TelemetryMetrics.
+- Provide snapshots for exporters.
 
-Runtime API
------------
-ExecutionResult.ok(...)
-ExecutionResult.fail(...)
+Architecture
+------------
+
+ExecutionEngine
+        |
+        |
+        v
+   Runtime Hooks
+        |
+        |
+        v
+ TelemetryPlugin
+        |
+        |
+        v
+ TelemetryMetrics
+        |
+        +------------+
+        |            |
+       JSON     Prometheus
+                    |
+             OpenTelemetry
+
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
+
 import time
 
-from scios.runtime.engine import ExecutionEngine
-from scios.runtime.result import ExecutionResult
-from scios.runtime.telemetry import TelemetryPlugin
+from typing import Any, Callable
+
+
+from .telemetry_metrics import TelemetryMetrics
+
+
+
+__all__ = [
+    "TelemetryPlugin",
+]
+
 
 
 # ==========================================================
-# Test Workers
+# Telemetry Plugin
 # ==========================================================
 
 
-class SuccessWorker:
+class TelemetryPlugin:
     """
-    Worker returning a successful ExecutionResult.
+    Runtime telemetry hook plugin.
+
+    The plugin is intentionally lightweight.
+
+    It does NOT calculate metrics itself.
+    All metric storage and aggregation belongs to:
+
+        TelemetryMetrics
     """
 
-    def initialize(self) -> None:
-        pass
 
-    def shutdown(self) -> None:
-        pass
 
-    def reset(self) -> None:
-        pass
+    # ======================================================
+    # Construction
+    # ======================================================
 
-    def status(self):
-        return {}
 
-    def execute(self, context):
+    def __init__(
+        self,
+        engine: Any,
+    ) -> None:
 
-        time.sleep(0.01)
 
-        return ExecutionResult.ok(
-            value="ok"
+        self.engine = engine
+
+
+        self.metrics = TelemetryMetrics()
+
+
+        self.installed = False
+
+
+        self.handles: list[Any] = []
+
+
+        self._starts: dict[int, float] = {}
+
+
+
+    # ======================================================
+    # Install
+    # ======================================================
+
+
+    def install(self) -> None:
+        """
+        Attach telemetry hooks.
+        """
+
+
+        if self.installed:
+
+            return
+
+
+
+        self.handles = [
+
+            self._register(
+                "execution_started",
+                self._execution_started,
+            ),
+
+
+            self._register(
+                "before_execute",
+                self._before_execute,
+            ),
+
+
+            self._register(
+                "execution_completed",
+                self._execution_completed,
+            ),
+
+
+            self._register(
+                "execution_failed",
+                self._execution_failed,
+            ),
+
+
+            self._register(
+                "execution_finished",
+                self._execution_finished,
+            ),
+        ]
+
+
+
+        self.installed = True
+
+
+
+
+
+    def uninstall(self) -> None:
+        """
+        Remove telemetry hooks.
+        """
+
+
+        if not self.installed:
+
+            return
+
+
+
+        for handle in self.handles:
+
+            try:
+
+                if hasattr(
+                    handle,
+                    "disable",
+                ):
+
+                    handle.disable()
+
+
+                elif callable(handle):
+
+                    handle()
+
+
+            except Exception:
+
+                pass
+
+
+
+        self.handles.clear()
+
+
+        self._starts.clear()
+
+
+        self.installed = False
+
+
+
+
+    # ======================================================
+    # Hook Registration
+    # ======================================================
+
+
+    def _register(
+        self,
+        name: str,
+        callback: Callable,
+    ):
+
+
+        return self.engine.register_hook(
+            name,
+            callback,
         )
 
 
-class FailureWorker:
-    """
-    Worker returning a failed ExecutionResult.
-    """
 
-    def initialize(self) -> None:
-        pass
+    # ======================================================
+    # Lifecycle Hooks
+    # ======================================================
 
-    def shutdown(self) -> None:
-        pass
 
-    def reset(self) -> None:
-        pass
+    def _execution_started(
+        self,
+        context,
+        *args,
+        **kwargs,
+    ):
+        """
+        Mark execution start timestamp.
+        """
 
-    def status(self):
-        return {}
 
-    def execute(self, context):
+        self._starts[
+            id(context)
+        ] = time.perf_counter()
 
-        time.sleep(0.01)
 
-        return ExecutionResult.fail(
-            RuntimeError("boom")
+
+
+
+    def _before_execute(
+        self,
+        context,
+        *args,
+        **kwargs,
+    ):
+        """
+        Count execution.
+        """
+
+
+        self.metrics.start_task()
+
+
+
+
+    def _execution_completed(
+        self,
+        context,
+        result,
+        *args,
+        **kwargs,
+    ):
+        """
+        Successful execution.
+        """
+
+
+        latency = self._latency(
+            context
         )
 
 
-# ==========================================================
-# Construction
-# ==========================================================
+        self.metrics.complete_task(
+            latency
+        )
 
 
-def test_construct():
 
-    engine = ExecutionEngine()
 
-    plugin = TelemetryPlugin(engine)
 
-    assert plugin.metrics.total_tasks == 0
-    assert plugin.metrics.running_tasks == 0
-    assert plugin.metrics.completed_tasks == 0
-    assert plugin.metrics.failed_tasks == 0
-    assert plugin.metrics.latencies == []
+    def _execution_failed(
+        self,
+        context,
+        error,
+        *args,
+        **kwargs,
+    ):
+        """
+        Failed execution.
+        """
 
 
-# ==========================================================
-# Installation
-# ==========================================================
+        latency = self._latency(
+            context
+        )
 
 
-def test_install():
+        self.metrics.fail_task(
+            latency
+        )
 
-    engine = ExecutionEngine()
 
-    plugin = TelemetryPlugin(engine)
 
-    plugin.install()
 
-    assert plugin.installed
 
-    assert len(plugin.handles) == 4
+    def _execution_finished(
+        self,
+        context,
+        *args,
+        **kwargs,
+    ):
+        """
+        Cleanup execution state.
+        """
 
 
-# ==========================================================
-# Successful execution
-# ==========================================================
+        self._starts.pop(
+            id(context),
+            None,
+        )
 
 
-def test_success_metrics():
 
-    engine = ExecutionEngine(
-        worker=SuccessWorker(),
-    )
+    # ======================================================
+    # Helpers
+    # ======================================================
 
-    plugin = TelemetryPlugin(engine)
 
-    plugin.install()
+    def _latency(
+        self,
+        context,
+    ) -> float:
+        """
+        Calculate execution latency.
+        """
 
-    context = engine.run("task")
 
-    report = plugin.report()
+        start = self._starts.get(
+            id(context)
+        )
 
-    assert context.completed
-    assert context.result.success
 
-    assert report["total_tasks"] == 1
-    assert report["running_tasks"] == 0
-    assert report["completed_tasks"] == 1
-    assert report["failed_tasks"] == 0
+        if start is None:
 
-    assert report["success_rate"] == 1.0
+            return 0.0
 
-    assert report["average_latency"] > 0.0
-    assert report["max_latency"] >= report["min_latency"]
 
 
-# ==========================================================
-# Failed execution
-# ==========================================================
+        return (
+            time.perf_counter()
+            -
+            start
+        )
 
 
-def test_failure_metrics():
 
-    engine = ExecutionEngine(
-        worker=FailureWorker(),
-    )
+    # ======================================================
+    # Public API
+    # ======================================================
 
-    plugin = TelemetryPlugin(engine)
 
-    plugin.install()
+    def report(
+        self,
+    ):
+        """
+        Human readable metrics report.
+        """
 
-    context = engine.run("task")
 
-    report = plugin.report()
+        return self.metrics.report()
 
-    assert context.failed
-    assert context.result.failed
 
-    assert report["total_tasks"] == 1
-    assert report["running_tasks"] == 0
-    assert report["completed_tasks"] == 0
-    assert report["failed_tasks"] == 1
 
-    assert report["success_rate"] == 0.0
 
+    def snapshot(
+        self,
+    ):
+        """
+        Exporter-ready snapshot.
+        """
 
-# ==========================================================
-# Latency
-# ==========================================================
 
+        return self.metrics.snapshot()
 
-def test_latency():
 
-    engine = ExecutionEngine(
-        worker=SuccessWorker(),
-    )
 
-    plugin = TelemetryPlugin(engine)
 
-    plugin.install()
+    def reset(
+        self,
+    ):
+        """
+        Reset telemetry state.
+        """
 
-    engine.run("task")
 
-    report = plugin.report()
+        self.metrics.reset()
 
-    assert report["average_latency"] > 0.0
-    assert report["max_latency"] > 0.0
-    assert report["min_latency"] > 0.0
 
-    assert report["max_latency"] >= report["average_latency"]
-    assert report["average_latency"] >= report["min_latency"]
+        self._starts.clear()
 
 
-# ==========================================================
-# Multiple executions
-# ==========================================================
 
+    # ======================================================
+    # Protocols
+    # ======================================================
 
-def test_multiple_tasks():
 
-    engine = ExecutionEngine(
-        worker=SuccessWorker(),
-    )
+    def __repr__(self) -> str:
 
-    plugin = TelemetryPlugin(engine)
 
-    plugin.install()
-
-    for _ in range(5):
-
-        context = engine.run("task")
-
-        assert context.completed
-
-    report = plugin.report()
-
-    assert report["total_tasks"] == 5
-    assert report["completed_tasks"] == 5
-    assert report["failed_tasks"] == 0
-    assert report["running_tasks"] == 0
-
-    assert report["success_rate"] == 1.0
-
-    assert len(plugin.metrics.latencies) == 5
-
-
-# ==========================================================
-# Plugin lifecycle
-# ==========================================================
-
-
-def test_uninstall():
-
-    engine = ExecutionEngine()
-
-    plugin = TelemetryPlugin(engine)
-
-    plugin.install()
-
-    assert plugin.installed
-    assert len(plugin.handles) == 4
-
-    plugin.uninstall()
-
-    assert not plugin.installed
-    assert len(plugin.handles) == 0
-
-
-# ==========================================================
-# Snapshot
-# ==========================================================
-
-
-def test_snapshot():
-
-    engine = ExecutionEngine()
-
-    plugin = TelemetryPlugin(engine)
-
-    report = plugin.report()
-
-    expected = {
-        "total_tasks",
-        "running_tasks",
-        "completed_tasks",
-        "failed_tasks",
-        "success_rate",
-        "average_latency",
-        "max_latency",
-        "min_latency",
-    }
-
-    assert expected <= report.keys()
-
-
-# ==========================================================
-# Metrics consistency
-# ==========================================================
-
-
-def test_metrics_consistency():
-
-    engine = ExecutionEngine(
-        worker=SuccessWorker(),
-    )
-
-    plugin = TelemetryPlugin(engine)
-
-    plugin.install()
-
-    for _ in range(3):
-        engine.run("task")
-
-    report = plugin.report()
-
-    assert (
-        report["completed_tasks"]
-        +
-        report["failed_tasks"]
-        ==
-        report["total_tasks"]
-    )
-
-    assert report["running_tasks"] == 0
-
+        return (
+            "TelemetryPlugin("
+            f"installed={self.installed}, "
+            f"metrics={self.metrics!r}"
+            ")"
+        )

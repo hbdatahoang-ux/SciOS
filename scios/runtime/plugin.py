@@ -187,3 +187,35 @@ class RuntimePlugin(ABC):
             f"running={self._running}, "
             f"hooks={len(self._handles)})"
         )
+# ==========================================================
+# Compatibility Alias
+# ==========================================================
+
+# ==========================================================
+# Compatibility
+# ==========================================================
+
+class PluginManager:
+    """
+    Compatibility wrapper for cognitive_core.plugins.
+    """
+
+    def __init__(self):
+        self.plugins = {}
+
+    def register(self, plugin):
+        name = getattr(plugin, "name", plugin.__class__.__name__)
+        self.plugins[name] = plugin
+        return plugin
+
+    def unregister(self, name):
+        return self.plugins.pop(name, None)
+
+    def get(self, name):
+        return self.plugins.get(name)
+
+    def list(self):
+        return list(self.plugins.values())
+
+    def __contains__(self, name):
+        return name in self.plugins      
