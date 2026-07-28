@@ -42,7 +42,7 @@ import copy as copy_module
 import json
 import threading
 import time
-import uuid
+import uuid as uuid_module
 
 from collections import defaultdict
 
@@ -262,6 +262,9 @@ class ExportMode(str, Enum):
     BATCH = "batch"
 
 
+from enum import Flag, auto
+
+
 class ExportCapability(Flag):
     """
     Exporter capabilities.
@@ -269,25 +272,36 @@ class ExportCapability(Flag):
 
     NONE = 0
 
+    # Serialization
     SERIALIZE = auto()
+    SERIALIZATION = SERIALIZE
 
+    # Deserialization
     DESERIALIZE = auto()
+    DESERIALIZATION = DESERIALIZE
 
+    # Data transport
     STREAM = auto()
-
     BATCH = auto()
 
+    # Processing
     FILTER = auto()
 
+    # Security / optimization
     COMPRESS = auto()
+    COMPRESSION = COMPRESS
 
     ENCRYPT = auto()
+    ENCRYPTION = ENCRYPT
 
+    # Reliability
     RETRY = auto()
+    RETRYABLE = RETRY
 
+    # Lifecycle
     FLUSH = auto()
-
     SNAPSHOT = auto()
+    
 
 # ==============================================================================
 # Dataclasses
@@ -301,7 +315,7 @@ class ExportRecord:
     """
 
     id: str = field(
-        default_factory=lambda: str(uuid.uuid4())
+        default_factory=lambda: str(uuid_module.uuid4())
     )
 
     timestamp: float = field(
@@ -392,9 +406,9 @@ class BaseExporter(ABC):
         # Identity
         # ------------------------------------------------------------------
 
-        self._id: str = str(uuid.uuid4())
+        self._id: str = str(uuid_module.uuid4())
 
-        self._uuid: uuid.UUID = uuid.UUID(self._id)
+        self._uuid: uuid_module.UUID = uuid_module.UUID(self._id)
 
         self._name: str = str(name)
 
@@ -529,7 +543,7 @@ def id(self) -> str:
 
 
 @property
-def uuid(self) -> uuid.UUID:
+def uuid_value(self) -> uuid_module.UUID:
     """Exporter UUID."""
     return self._uuid
 

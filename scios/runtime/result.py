@@ -7,12 +7,12 @@ Canonical execution result model for SciOS Runtime.
 Responsibilities
 -----------------
 - Represent execution outcome.
+- Store execution payload.
 - Capture success/failure state.
-- Store returned values.
-- Store errors and diagnostics.
-- Provide stable factory APIs.
+- Store diagnostics.
+- Support dictionary compatibility.
 - Support serialization.
-- Provide runtime compatibility API.
+- Support runtime pipelines.
 
 Python 3.11+
 """
@@ -34,8 +34,8 @@ from datetime import (
 
 from typing import (
     Any,
+    Iterator,
 )
-
 
 
 __all__ = [
@@ -51,7 +51,7 @@ __all__ = [
 
 def utc_now() -> str:
     """
-    Return UTC ISO timestamp.
+    Current UTC timestamp.
     """
 
     return datetime.now(
@@ -61,72 +61,61 @@ def utc_now() -> str:
 
 
 # ==========================================================
-# Execution Result
+# ExecutionResult
 # ==========================================================
 
 
 @dataclass(slots=True)
 class ExecutionResult:
     """
-    Canonical SciOS runtime result.
+    Canonical SciOS execution result.
 
-    Compatible with:
+    Example:
 
-    Executor:
-        ExecutionResult(
-            success=True,
-            value=x,
-            error=None,
-            duration=t,
-            metadata={}
+        result = ExecutionResult.ok(
+            {
+                "task": "battery",
+                "status": "success"
+            }
         )
 
-    Factory:
-
-        ExecutionResult.ok(
-            value
-        )
-
-        ExecutionResult.fail(
-            error
-        )
+        result.success
+        result["task"]
+        result.value
     """
 
 
-
-    # ======================================================
-    # Public compatibility status
-    # ======================================================
+    # ------------------------------------------------------
+    # Status
+    # ------------------------------------------------------
 
     success: bool = True
 
 
 
-    # ======================================================
+    # ------------------------------------------------------
     # Payload
-    # ======================================================
+    # ------------------------------------------------------
 
     value: Any = None
 
 
 
-    # ======================================================
+    # ------------------------------------------------------
     # Diagnostics
-    # ======================================================
+    # ------------------------------------------------------
 
     error: Exception | None = None
-
 
     message: str | None = None
 
 
 
-    # ======================================================
+    # ------------------------------------------------------
     # Runtime metrics
-    # ======================================================
+    # ------------------------------------------------------
 
     duration: float = 0.0
-
 
 
     metadata: dict[str, Any] = field(
@@ -135,9 +124,9 @@ class ExecutionResult:
 
 
 
-    # ======================================================
+    # ------------------------------------------------------
     # Timestamp
-    # ======================================================
+    # ------------------------------------------------------
 
     timestamp: str = field(
         default_factory=utc_now
@@ -146,29 +135,13 @@ class ExecutionResult:
 
 
     # ======================================================
-    # Compatibility internal alias
-    # ======================================================
-
-    _status: bool = field(
-        init=False,
-        repr=False,
-    )
-
-
-
-    # ======================================================
-    # Init
+    # Initialization
     # ======================================================
 
     def __post_init__(self):
 
         self.metadata = dict(
             self.metadata
-        )
-
-
-        self._status = bool(
-            self.success
         )
 
 
@@ -215,24 +188,15 @@ class ExecutionResult:
 
 
     @property
-    def has_value(
-        self,
-    ) -> bool:
-
-        return self.value is not None
-
-
-
-    @property
     def status(
         self,
     ) -> str:
 
         return (
-            "SUCCESS"
+            "success"
             if self.success
             else
-            "FAILED"
+            "error"
         )
 
 
@@ -241,40 +205,27 @@ class ExecutionResult:
     def result(
         self,
     ):
+
         """
         Compatibility alias.
-
-        Some runtime code uses result.value
-        and some uses result.result.
         """
 
         return self.value
 
 
 
+    @property
+    def has_value(
+        self,
+    ) -> bool:
+
+        return self.value is not None
+
+
+
     # ======================================================
-    # Factory Methods
+    # Factory API
     # ======================================================
-
-    @classmethod
-    def success(
-        cls,
-        *,
-        result=None,
-        message=None,
-        duration=0.0,
-        **metadata,
-    ):
-
-        return cls(
-            success=True,
-            value=result,
-            message=message,
-            duration=duration,
-            metadata=metadata,
-        )
-
-
 
     @classmethod
     def ok(
@@ -282,16 +233,22 @@ class ExecutionResult:
         value=None,
         *,
         message=None,
-        duration=0.0,
+        duration: float = 0.0,
         **metadata,
-    ):
+    ) -> "ExecutionResult":
 
         return cls(
+
             success=True,
+
             value=value,
+
             message=message,
+
             duration=duration,
+
             metadata=metadata,
+
         )
 
 
@@ -302,26 +259,28 @@ class ExecutionResult:
         error: Exception,
         *,
         message=None,
-        duration=0.0,
+        duration: float = 0.0,
         **metadata,
-    ):
+    ) -> "ExecutionResult":
 
         return cls(
+
             success=False,
+
             error=error,
+
             message=(
                 message
                 or str(error)
             ),
+
             duration=duration,
+
             metadata=metadata,
+
         )
 
 
-
-    # ======================================================
-    # Convenience
-    # ======================================================
 
     @classmethod
     def from_value(
@@ -348,7 +307,7 @@ class ExecutionResult:
 
 
     # ======================================================
-    # Metadata
+    # Metadata API
     # ======================================================
 
     def set(
@@ -375,40 +334,34 @@ class ExecutionResult:
 
 
     # ======================================================
-    # Copy
-    # ======================================================
-
-    def copy(
-        self,
-    ):
-
-        return deepcopy(
-            self
-        )
-
-
-
-    # ======================================================
     # Serialization
     # ======================================================
 
     def to_dict(
         self,
-    ):
+    ) -> dict[str, Any]:
 
         return {
 
             "status":
                 self.status,
 
+
             "success":
                 self.success,
+
 
             "value":
                 self.value,
 
+
+            "result":
+                self.value,
+
+
             "message":
                 self.message,
+
 
             "error":
                 (
@@ -417,13 +370,16 @@ class ExecutionResult:
                     else None
                 ),
 
+
             "duration":
                 self.duration,
+
 
             "metadata":
                 deepcopy(
                     self.metadata
                 ),
+
 
             "timestamp":
                 self.timestamp,
@@ -450,12 +406,20 @@ class ExecutionResult:
                 data.get(
                     "status"
                 )
-                == "SUCCESS",
+                in {
+                    "success",
+                    "SUCCESS",
+                },
             ),
 
+
             value=data.get(
-                "value"
+                "value",
+                data.get(
+                    "result"
+                ),
             ),
+
 
             error=(
                 RuntimeError(error)
@@ -463,14 +427,17 @@ class ExecutionResult:
                 else None
             ),
 
+
             message=data.get(
                 "message"
             ),
+
 
             duration=data.get(
                 "duration",
                 0.0,
             ),
+
 
             metadata=dict(
                 data.get(
@@ -478,6 +445,7 @@ class ExecutionResult:
                     {},
                 )
             ),
+
 
             timestamp=data.get(
                 "timestamp",
@@ -489,7 +457,135 @@ class ExecutionResult:
 
 
     # ======================================================
-    # Protocols
+    # Mapping Compatibility
+    # ======================================================
+
+    def __getitem__(
+        self,
+        key: str,
+    ):
+
+        data = self.to_dict()
+
+
+        if key in data:
+
+            return data[key]
+
+
+
+        if isinstance(
+            self.value,
+            dict,
+        ):
+
+            if key in self.value:
+
+                return self.value[key]
+
+
+
+        raise KeyError(
+            key
+        )
+
+
+
+    def __contains__(
+        self,
+        key: str,
+    ) -> bool:
+
+        if key in self.to_dict():
+
+            return True
+
+
+        return (
+
+            isinstance(
+                self.value,
+                dict,
+            )
+
+            and
+
+            key in self.value
+
+        )
+
+
+
+    def keys(
+        self,
+    ):
+
+        keys = set(
+            self.to_dict().keys()
+        )
+
+
+        if isinstance(
+            self.value,
+            dict,
+        ):
+
+            keys.update(
+                self.value.keys()
+            )
+
+
+        return keys
+
+
+
+    def items(
+        self,
+    ):
+
+        data = self.to_dict()
+
+
+        if isinstance(
+            self.value,
+            dict,
+        ):
+
+            data.update(
+                self.value
+            )
+
+
+        return data.items()
+
+
+
+    def __iter__(
+        self,
+    ) -> Iterator:
+
+        return iter(
+            self.keys()
+        )
+
+
+
+    # ======================================================
+    # Copy
+    # ======================================================
+
+    def copy(
+        self,
+    ):
+
+        return deepcopy(
+            self
+        )
+
+
+
+    # ======================================================
+    # Protocol
     # ======================================================
 
     def __bool__(
@@ -500,23 +596,31 @@ class ExecutionResult:
 
 
 
+    def __len__(
+        self,
+    ):
+
+        if isinstance(
+            self.value,
+            dict,
+        ):
+
+            return len(
+                self.value
+            )
+
+        return 0
+
+
+
     def __repr__(
         self,
     ):
 
-        if self.success:
-
-            return (
-                "ExecutionResult("
-                "status='SUCCESS', "
-                f"value={self.value!r}, "
-                f"duration={self.duration:.6f}s)"
-            )
-
-
         return (
+
             "ExecutionResult("
-            "status='FAILED', "
-            f"error={self.message!r}, "
+            f"status={self.status!r}, "
+            f"value={self.value!r}, "
             f"duration={self.duration:.6f}s)"
         )

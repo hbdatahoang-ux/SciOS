@@ -2,64 +2,56 @@
 SciOS Runtime Hook Registry
 ===========================
 
-Central hook registry for the SciOS Runtime.
+Central hook registry for SciOS Runtime.
 
 Responsibilities
 ----------------
 - Register runtime hooks.
-- Manage Hook lifecycle.
-- Return HookHandle.
+- Manage hook lifecycle.
+- Provide HookHandle.
 - Support priority ordering.
 - Support once hooks.
 - Isolate hook failures.
 - Preserve deterministic execution.
 
-Design Goals
-------------
-- Python 3.11+
-- Lightweight
-- Deterministic
-- Plugin-ready
+Python 3.11+
 """
 
 from __future__ import annotations
 
+
 from collections import defaultdict
 from collections.abc import Callable
+from threading import RLock
 from typing import Any
+
 
 from .hook import (
     Hook,
     HookHandle,
 )
 
+
 __all__ = [
     "HookRegistry",
 ]
+
 
 
 class HookRegistry:
     """
     Runtime Hook Registry.
 
-    Example
-    -------
-
-    registry = HookRegistry()
-
-    handle = registry.register(
-        "runtime.after_execute",
-        callback,
-        priority=10,
-    )
-
-    registry.emit(
-        "runtime.after_execute",
-        context,
-    )
-
-    handle.disable()
+    Features
+    --------
+    - Duplicate-safe registration.
+    - Priority execution.
+    - Once hooks.
+    - Thread-safe access.
+    - Runtime diagnostics.
     """
+
+
 
     def __init__(self) -> None:
 
@@ -69,9 +61,13 @@ class HookRegistry:
         ] = defaultdict(list)
 
 
-    # ==========================================================
+        self._lock = RLock()
+
+
+
+    # ======================================================
     # Registration
-    # ==========================================================
+    # ======================================================
 
     def register(
         self,
@@ -82,34 +78,70 @@ class HookRegistry:
         once: bool = False,
     ) -> HookHandle:
         """
-        Register a hook.
+        Register hook.
 
-        Returns
-        -------
-        HookHandle
-            Lifecycle controller.
+        Duplicate handler under same hook
+        name will be ignored.
         """
 
+        if not isinstance(
+            name,
+            str,
+        ):
+            raise TypeError(
+                "Hook name must be string."
+            )
+
+
         if not callable(handler):
+
             raise TypeError(
                 "Hook handler must be callable."
             )
 
-        hook = Hook(
-            name=name,
-            handler=handler,
-            priority=priority,
-            once=once,
-        )
 
-        self._hooks[name].append(
-            hook
-        )
+        with self._lock:
 
-        return HookHandle(
-            registry=self,
-            hook=hook,
-        )
+            existing = self._hooks.get(
+                name,
+                [],
+            )
+
+
+            for hook in existing:
+
+                if hook.handler is handler:
+
+                    return HookHandle(
+                        registry=self,
+                        hook=hook,
+                    )
+
+
+
+            hook = Hook(
+                name=name,
+                handler=handler,
+                priority=priority,
+                once=once,
+            )
+
+
+            self._hooks[name].append(
+                hook
+            )
+
+
+            self._hooks[name].sort(
+                key=lambda item: item.priority
+            )
+
+
+            return HookHandle(
+                registry=self,
+                hook=hook,
+            )
+
 
 
     def unregister(
@@ -121,30 +153,40 @@ class HookRegistry:
         Remove hook handler.
         """
 
-        hooks = self._hooks.get(name)
+        with self._lock:
 
-        if not hooks:
-            return
-
-
-        self._hooks[name] = [
-            hook
-            for hook in hooks
-            if hook.handler != handler
-        ]
-
-
-        if not self._hooks[name]:
-
-            self._hooks.pop(
-                name,
-                None,
+            hooks = self._hooks.get(
+                name
             )
 
 
-    # ==========================================================
+            if not hooks:
+                return
+
+
+            self._hooks[name] = [
+
+                hook
+
+                for hook in hooks
+
+                if hook.handler is not handler
+
+            ]
+
+
+            if not self._hooks[name]:
+
+                self._hooks.pop(
+                    name,
+                    None,
+                )
+
+
+
+    # ======================================================
     # Execution
-    # ==========================================================
+    # ======================================================
 
     def emit(
         self,
@@ -153,21 +195,29 @@ class HookRegistry:
         **kwargs: Any,
     ) -> None:
         """
-        Execute hooks by priority.
+        Execute hooks.
 
-        Lower priority number runs first.
+        Hook failures never break runtime.
         """
 
-        hooks = sorted(
-            self._hooks.get(name, ()),
-            key=lambda h: h.priority,
-        )
+        with self._lock:
+
+            hooks = tuple(
+                self._hooks.get(
+                    name,
+                    (),
+                )
+            )
 
 
-        for hook in tuple(hooks):
+
+        for hook in hooks:
+
 
             if not hook.enabled:
+
                 continue
+
 
 
             try:
@@ -178,6 +228,15 @@ class HookRegistry:
                 )
 
 
+            except Exception:
+
+                # Runtime isolation.
+                continue
+
+
+
+            finally:
+
                 if hook.once:
 
                     self.unregister(
@@ -186,59 +245,76 @@ class HookRegistry:
                     )
 
 
-            except Exception:
-                #
-                # Hook failures never
-                # break Runtime.
-                #
-                pass
 
-
-    # ==========================================================
+    # ======================================================
     # Queries
-    # ==========================================================
+    # ======================================================
 
     def handlers(
         self,
         name: str,
-    ) -> tuple[Callable[..., None], ...]:
+    ) -> tuple[
+        Callable[..., None],
+        ...
+    ]:
         """
-        Return raw handlers.
+        Return registered handlers.
         """
 
-        return tuple(
-            hook.handler
-            for hook in self._hooks.get(
-                name,
-                (),
+        with self._lock:
+
+            return tuple(
+
+                hook.handler
+
+                for hook
+                in self._hooks.get(
+                    name,
+                    (),
+                )
+
             )
-        )
+
 
 
     def hooks(
         self,
         name: str,
-    ) -> tuple[Hook, ...]:
+    ) -> tuple[
+        Hook,
+        ...
+    ]:
         """
         Return Hook objects.
         """
 
-        return tuple(
-            self._hooks.get(
-                name,
-                (),
+        with self._lock:
+
+            return tuple(
+                self._hooks.get(
+                    name,
+                    (),
+                )
             )
-        )
+
 
 
     def registered(
         self,
         name: str,
     ) -> bool:
+        """
+        Check hook existence.
+        """
 
-        return bool(
-            self._hooks.get(name)
-        )
+        with self._lock:
+
+            return bool(
+                self._hooks.get(
+                    name
+                )
+            )
+
 
 
     def count(
@@ -255,58 +331,122 @@ class HookRegistry:
             hooks under name
         """
 
-        if name is None:
+        with self._lock:
 
-            return sum(
-                len(v)
-                for v in self._hooks.values()
+
+            if name is None:
+
+                return sum(
+                    len(items)
+                    for items in self._hooks.values()
+                )
+
+
+            return len(
+                self._hooks.get(
+                    name,
+                    (),
+                )
             )
 
-        return len(
-            self._hooks.get(
-                name,
-                (),
-            )
-        )
 
 
-    # ==========================================================
+    # ======================================================
     # Maintenance
-    # ==========================================================
+    # ======================================================
 
-    def clear(self) -> None:
+    def clear(
+        self,
+    ) -> None:
         """
         Remove all hooks.
         """
 
-        self._hooks.clear()
+        with self._lock:
+
+            self._hooks.clear()
 
 
-    # ==========================================================
-    # Status
-    # ==========================================================
 
-    def status(self) -> dict[str, int]:
+    # ======================================================
+    # Diagnostics
+    # ======================================================
+
+    def status(
+        self,
+    ) -> dict[str, int]:
+        """
+        Return hook statistics.
+
+        Compatibility API.
+
+        Example
+        -------
+        {
+            "runtime.start": 2,
+            "runtime.stop": 1,
+        }
+        """
+
+        with self._lock:
+
+            return {
+
+                name: len(hooks)
+
+                for name, hooks
+
+                in self._hooks.items()
+
+            }
+
+
+
+    def diagnostics(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Extended registry diagnostics.
+
+        Example
+        -------
+        {
+            "hook_types": 2,
+            "total_hooks": 3,
+            "hooks": {
+                "runtime.start": 1
+            }
+        }
+        """
 
         return {
 
-            name: len(hooks)
+            "hook_types":
+                len(self._hooks),
 
-            for name, hooks
-            in self._hooks.items()
+            "total_hooks":
+                self.count(),
+
+            "hooks":
+                self.status(),
+
         }
 
 
-    # ==========================================================
+
+    # ======================================================
     # Protocols
-    # ==========================================================
+    # ======================================================
 
     def __contains__(
         self,
         name: str,
     ) -> bool:
 
-        return self.registered(name)
+        return self.registered(
+            name
+        )
+
 
 
     def __len__(
@@ -316,13 +456,13 @@ class HookRegistry:
         return self.count()
 
 
+
     def __bool__(
         self,
     ) -> bool:
 
-        return bool(
-            self._hooks
-        )
+        return len(self) > 0
+
 
 
     def __repr__(
@@ -330,7 +470,13 @@ class HookRegistry:
     ) -> str:
 
         return (
+
             f"{self.__class__.__name__}("
+
             f"hooks={len(self._hooks)}, "
-            f"handlers={self.count()})"
+
+            f"handlers={self.count()}"
+
+            ")"
+
         )

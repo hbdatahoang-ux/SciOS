@@ -4,14 +4,14 @@ SciOS Runtime Execution Engine
 
 Central orchestration engine for SciOS Runtime.
 
-Responsibilities
------------------
-- Pipeline orchestration
+Responsibilities:
+- Task lifecycle
+- Context management
 - Scheduler coordination
 - Worker execution
-- ExecutionContext lifecycle
-- Hook lifecycle
+- Pipeline orchestration
 - EventBus integration
+- Hook lifecycle
 
 Python 3.11+
 """
@@ -37,6 +37,7 @@ from .state import RuntimeState
 from .worker import Worker
 
 
+
 __all__ = [
     "ExecutionEngine",
 ]
@@ -45,8 +46,9 @@ __all__ = [
 
 class ExecutionEngine:
     """
-    Main SciOS Runtime execution coordinator.
+    Main SciOS Runtime coordinator.
     """
+
 
 
     DEFAULT_HOOKS = {
@@ -75,7 +77,7 @@ class ExecutionEngine:
         scheduler: Scheduler | None = None,
         worker: Worker | None = None,
         event_bus: EventBus | None = None,
-    ) -> None:
+    ):
 
 
         self._pipeline = pipeline
@@ -100,6 +102,7 @@ class ExecutionEngine:
 
         self._hook_registry = HookRegistry()
 
+
         self._valid_hooks = set(
             self.DEFAULT_HOOKS
         )
@@ -112,37 +115,145 @@ class ExecutionEngine:
 
     @property
     def pipeline(self):
+
         return self._pipeline
+
 
 
     @property
     def scheduler(self):
+
         return self._scheduler
+
 
 
     @property
     def worker(self):
+
         return self._worker
+
 
 
     @property
     def state(self):
+
         return self._state
+
 
 
     @property
     def executions(self):
+
         return self._executions
 
-
-    @property
-    def hooks(self):
-        return self._hook_registry
 
 
     @property
     def pending(self):
+
         return self._scheduler.pending
+
+
+
+    @property
+    def hooks(self):
+
+        return self._hook_registry
+
+
+
+    # ======================================================
+    # Lifecycle
+    # ======================================================
+
+    def initialize(self):
+
+        if self._state != "created":
+
+            return self
+
+
+        self._scheduler.initialize()
+
+        self._worker.initialize()
+
+
+        self._state = "idle"
+
+
+        return self
+
+
+
+    def shutdown(self):
+
+        if self._state == "stopped":
+
+            return
+
+
+        self._scheduler.shutdown()
+
+        self._worker.shutdown()
+
+
+        self._state = "stopped"
+
+
+
+    def reset(self):
+
+        self._executions = 0
+
+
+        if hasattr(
+            self._scheduler,
+            "reset",
+        ):
+
+            self._scheduler.reset()
+
+
+        if hasattr(
+            self._worker,
+            "reset",
+        ):
+
+            self._worker.reset()
+
+
+        self._state = "idle"
+
+
+        return self
+
+
+
+    # ======================================================
+    # Context
+    # ======================================================
+
+    def create_context(
+        self,
+        task: Any,
+        *,
+        metadata=None,
+    ):
+
+
+        if task is None:
+
+            raise InvalidTaskError(
+                "Task cannot be None"
+            )
+
+
+        return ExecutionContext(
+            task=task,
+            metadata=dict(
+                metadata or {}
+            ),
+        )
 
 
 
@@ -152,7 +263,7 @@ class ExecutionEngine:
 
     def register_hook(
         self,
-        name: str,
+        name,
         handler,
     ):
 
@@ -171,31 +282,13 @@ class ExecutionEngine:
 
 
 
-    def unregister_hook(
-        self,
-        name: str,
-        handler,
-    ):
-
-        return self._hook_registry.unregister(
-            name,
-            handler,
-        )
-
-
-
-    def clear_hooks(self):
-
-        return self._hook_registry.clear()
-
-
-
     def _emit_hook(
         self,
-        name: str,
+        name,
         *args,
         **kwargs,
     ):
+
 
         try:
 
@@ -208,76 +301,6 @@ class ExecutionEngine:
         except Exception:
 
             pass
-
-
-
-    # ======================================================
-    # Lifecycle
-    # ======================================================
-
-    def initialize(
-        self,
-    ):
-
-
-        if self._state != "created":
-
-            return
-
-
-        self._scheduler.initialize()
-
-        self._worker.initialize()
-
-
-        self._state = "idle"
-
-
-
-    def shutdown(
-        self,
-    ):
-
-
-        if self._state == "stopped":
-
-            return
-
-
-        self._scheduler.shutdown()
-
-        self._worker.shutdown()
-
-
-        self._state = "stopped"
-
-
-
-    # ======================================================
-    # Context
-    # ======================================================
-
-    def create_context(
-        self,
-        task: Any,
-        *,
-        metadata=None,
-    ) -> ExecutionContext:
-
-
-        if task is None:
-
-            raise InvalidTaskError(
-                "Task cannot be None"
-            )
-
-
-        return ExecutionContext(
-            task=task,
-            metadata=dict(
-                metadata or {}
-            ),
-        )
 
 
 
@@ -344,6 +367,7 @@ class ExecutionEngine:
         context = None
 
 
+
         try:
 
 
@@ -359,8 +383,16 @@ class ExecutionEngine:
             if context is None:
 
                 raise ExecutionError(
-                    "Scheduler returned no task"
+                    "No scheduled task"
                 )
+
+
+
+            # lifecycle log
+
+            context.log(
+                f"Task received: {task}"
+            )
 
 
 
@@ -375,51 +407,93 @@ class ExecutionEngine:
 
 
 
-            #
+            # ------------------------------
             # Pipeline
-            #
+            # ------------------------------
 
             if self._pipeline is not None:
+
+
+                context.log(
+                    "Pipeline started"
+                )
+
 
                 self._pipeline.execute(
                     context
                 )
 
 
+                context.log(
+                    "Pipeline completed"
+                )
 
-            #
-            # Worker only if pipeline
-            # did not produce result
-            #
+
+
+            # ------------------------------
+            # Worker
+            # ------------------------------
 
             if not context.has_result:
 
-                result = self._worker.execute(
+
+                self._emit_hook(
+                    "before_execute",
+                    context,
+                )
+
+
+                raw = self._worker.execute(
                     context
                 )
 
+
+                self._emit_hook(
+                    "after_execute",
+                    context,
+                    raw,
+                )
+
+
             else:
 
-                result = context.result
-
-
-
-            if not isinstance(
-                result,
-                ExecutionResult,
-            ):
-
-                result = ExecutionResult.ok(
-                    result
+                raw = (
+                    context.get_execution_result()
+                    or
+                    context.result
                 )
 
 
 
-            # ==================================================
-            # Success
-            # ==================================================
+            if isinstance(
+                raw,
+                ExecutionResult,
+            ):
 
-            if result.succeeded:
+                result = raw
+
+
+            else:
+
+                result = ExecutionResult.ok(
+                    raw
+                )
+
+
+
+            # normalize
+
+            context.set_result(
+                result
+            )
+
+
+
+            # ------------------------------
+            # Success
+            # ------------------------------
+
+            if result.success:
 
 
                 context.finish(
@@ -450,10 +524,6 @@ class ExecutionEngine:
                 )
 
 
-
-            # ==================================================
-            # Failure
-            # ==================================================
 
             else:
 
@@ -497,17 +567,19 @@ class ExecutionEngine:
             if context is not None:
 
 
-                context.fail(
+                failure = ExecutionResult.fail(
                     exc
                 )
 
 
                 context.set_result(
-                    ExecutionResult.fail(
-                        exc
-                    )
+                    failure
                 )
 
+
+                context.fail(
+                    exc
+                )
 
 
             self._emit_hook(
@@ -539,7 +611,7 @@ class ExecutionEngine:
 
 
     # ======================================================
-    # Execute API
+    # Execute
     # ======================================================
 
     def execute(
@@ -550,13 +622,13 @@ class ExecutionEngine:
     ):
 
 
-        context = self.run(
+        ctx = self.run(
             task,
             metadata=metadata,
         )
 
 
-        return context.get_result()
+        return ctx.get_execution_result()
 
 
 
@@ -566,7 +638,7 @@ class ExecutionEngine:
 
     def _publish(
         self,
-        topic: str,
+        topic,
         **payload,
     ):
 
@@ -584,6 +656,14 @@ class ExecutionEngine:
             )
 
 
+        except TypeError:
+
+            self._event_bus.publish(
+                topic,
+                payload,
+            )
+
+
         except Exception:
 
             pass
@@ -594,10 +674,7 @@ class ExecutionEngine:
     # Diagnostics
     # ======================================================
 
-    def status(
-        self,
-    ):
-
+    def status(self):
 
         return {
 
@@ -606,6 +683,12 @@ class ExecutionEngine:
 
             "executions":
                 self._executions,
+
+            "scheduler":
+                self._scheduler,
+
+            "worker":
+                self._worker,
 
             "pending":
                 self.pending,
@@ -618,20 +701,16 @@ class ExecutionEngine:
 
 
     # ======================================================
-    # Protocols
+    # Protocol
     # ======================================================
 
-    def __len__(
-        self,
-    ):
+    def __len__(self):
 
         return self._executions
 
 
 
-    def __bool__(
-        self,
-    ):
+    def __bool__(self):
 
         return self._state not in {
             "created",
@@ -640,9 +719,7 @@ class ExecutionEngine:
 
 
 
-    def __repr__(
-        self,
-    ):
+    def __repr__(self):
 
         return (
             "ExecutionEngine("

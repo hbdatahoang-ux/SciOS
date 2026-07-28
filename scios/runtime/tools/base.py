@@ -4,6 +4,22 @@ SciOS Runtime Tool Interface
 
 Base contract for all runtime tools.
 
+Every runtime tool must inherit Tool
+and implement execute().
+
+Architecture:
+
+Tool
+ |
+ +-- validate()
+ |
+ +-- execute()
+ |
+ +-- run()
+ |
+ +-- ToolResult
+
+
 Python 3.11+
 """
 
@@ -15,19 +31,27 @@ from abc import (
     abstractmethod,
 )
 
+
 from dataclasses import (
     dataclass,
     field,
 )
+
 
 from datetime import (
     datetime,
     timezone,
 )
 
+
 from typing import (
     Any,
     ClassVar,
+)
+
+
+from uuid import (
+    uuid4,
 )
 
 
@@ -47,6 +71,9 @@ __all__ = [
 
 
 def utc_now() -> str:
+    """
+    UTC timestamp.
+    """
 
     return datetime.now(
         timezone.utc
@@ -55,7 +82,7 @@ def utc_now() -> str:
 
 
 # ==========================================================
-# Tool Interface
+# Tool Base Class
 # ==========================================================
 
 
@@ -64,26 +91,29 @@ class Tool(
     ABC
 ):
     """
-    Abstract SciOS Tool contract.
-
-    Every tool must implement:
-
-        execute()
+    Abstract SciOS Runtime Tool.
 
     Example:
 
-        class CalculatorTool(Tool):
+        class EchoTool(Tool):
 
-            NAME = "calculator"
+            NAME = "echo"
 
-            def execute(self, **kwargs):
-                return 1 + 1
+
+            def execute(
+                self,
+                text,
+            ):
+                return text
+
     """
 
 
-    # ------------------------------------------------------
+
+    # ======================================================
     # Class Metadata
-    # ------------------------------------------------------
+    # ======================================================
+
 
     NAME: ClassVar[str] = (
         "unnamed-tool"
@@ -101,16 +131,16 @@ class Tool(
 
 
 
-    # ------------------------------------------------------
-    # Runtime State
-    # ------------------------------------------------------
-
-    enabled: bool = True
+    # ======================================================
+    # Runtime Identity
+    # ======================================================
 
 
-    metadata: dict[str, Any] = field(
-        default_factory=dict
+    id: str = field(
+        default_factory=lambda:
+            str(uuid4())
     )
+
 
 
     created_at: str = field(
@@ -118,12 +148,32 @@ class Tool(
     )
 
 
+
+    # ======================================================
+    # Runtime State
+    # ======================================================
+
+
+    enabled: bool = True
+
+
+
     executions: int = 0
 
 
 
+    failures: int = 0
+
+
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+
+
     # ======================================================
-    # Identity
+    # Identity API
     # ======================================================
 
 
@@ -163,7 +213,7 @@ class Tool(
         self,
     ) -> None:
         """
-        Optional initialization hook.
+        Called before first execution.
         """
 
         return None
@@ -174,7 +224,7 @@ class Tool(
         self,
     ) -> None:
         """
-        Optional cleanup hook.
+        Cleanup hook.
         """
 
         return None
@@ -207,13 +257,30 @@ class Tool(
         **kwargs: Any,
     ) -> bool:
         """
-        Validate execution input.
+        Input validation hook.
 
-        Override when tool requires
-        strict schema.
+        Override for custom schema.
         """
 
         return True
+
+
+
+    # ======================================================
+    # Permission Hook
+    # ======================================================
+
+
+    def required_permissions(
+        self,
+    ) -> set[str]:
+        """
+        Permissions required by tool.
+
+        Used by ToolPolicy.
+        """
+
+        return set()
 
 
 
@@ -226,11 +293,16 @@ class Tool(
     def execute(
         self,
         **kwargs: Any,
-    ) -> ToolResult:
+    ) -> Any:
         """
-        Execute tool.
+        Core tool implementation.
 
-        Must return ToolResult.
+        Must be overridden.
+
+        Can return:
+
+        - raw value
+        - ToolResult
         """
 
         raise NotImplementedError
@@ -238,7 +310,7 @@ class Tool(
 
 
     # ======================================================
-    # Safe Run Wrapper
+    # Safe Execution Wrapper
     # ======================================================
 
 
@@ -249,6 +321,7 @@ class Tool(
         """
         Standard execution wrapper.
         """
+
 
 
         if not self.enabled:
@@ -275,12 +348,14 @@ class Tool(
 
         try:
 
+
             result = self.execute(
                 **kwargs
             )
 
 
             self.executions += 1
+
 
 
             if isinstance(
@@ -297,7 +372,11 @@ class Tool(
             )
 
 
+
         except Exception as exc:
+
+
+            self.failures += 1
 
 
             return ToolResult.fail(
@@ -315,9 +394,9 @@ class Tool(
         self,
     ) -> dict[str, Any]:
         """
-        Tool input schema.
+        Input schema description.
 
-        Override for structured tools.
+        Override when needed.
         """
 
         return {}
@@ -335,17 +414,59 @@ class Tool(
 
         return {
 
+            "id":
+                self.id,
+
+
             "name":
                 self.name,
+
 
             "version":
                 self.version,
 
+
             "enabled":
                 self.enabled,
 
+
             "executions":
                 self.executions,
+
+
+            "failures":
+                self.failures,
+
+        }
+
+
+
+    def stats(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+
+            "executions":
+                self.executions,
+
+
+            "failures":
+                self.failures,
+
+
+            "success_rate":
+                (
+                    (
+                        self.executions
+                        -
+                        self.failures
+                    )
+                    /
+                    self.executions
+                    if self.executions
+                    else 0.0
+                ),
 
         }
 
@@ -362,32 +483,49 @@ class Tool(
 
         return {
 
+            "id":
+                self.id,
+
+
             "name":
                 self.name,
+
 
             "description":
                 self.description,
 
+
             "version":
                 self.version,
 
+
             "enabled":
                 self.enabled,
+
 
             "metadata":
                 dict(
                     self.metadata
                 ),
 
+
             "executions":
                 self.executions,
+
+
+            "failures":
+                self.failures,
+
+
+            "created_at":
+                self.created_at,
 
         }
 
 
 
     # ======================================================
-    # Protocol
+    # Callable Interface
     # ======================================================
 
 
@@ -402,14 +540,21 @@ class Tool(
 
 
 
+    # ======================================================
+    # Protocol
+    # ======================================================
+
+
     def __repr__(
         self,
     ) -> str:
 
         return (
+
             "Tool("
             f"name={self.name!r}, "
             f"version={self.version!r}, "
             f"enabled={self.enabled}"
             ")"
+
         )

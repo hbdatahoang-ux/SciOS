@@ -2,21 +2,19 @@
 SciOS Runtime State
 ===================
 
-Canonical runtime state definitions for the SciOS Runtime.
+Global runtime lifecycle state.
 
-Responsibilities
-----------------
-- Define runtime lifecycle states.
-- Provide immutable runtime status snapshots.
-- Shared by ExecutionEngine, Executor, Worker and Scheduler.
+Python 3.11+
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+
+from dataclasses import dataclass
+
 from enum import Enum
-from typing import Any
+
+
 
 __all__ = [
     "RuntimeState",
@@ -24,137 +22,202 @@ __all__ = [
 ]
 
 
-# ==========================================================
-# Runtime State
-# ==========================================================
-
-
-class RuntimeState(str, Enum):
-    """
-    Runtime lifecycle states.
-    """
-
-    CREATED = "created"
-
-    INITIALIZING = "initializing"
-
-    IDLE = "idle"
-
-    RUNNING = "running"
-
-    PAUSED = "paused"
-
-    STOPPING = "stopping"
-
-    STOPPED = "stopped"
-
-    COMPLETED = "completed"
-
-    FAILED = "failed"
-
 
 # ==========================================================
 # Runtime Status
 # ==========================================================
 
 
-@dataclass(slots=True)
-class RuntimeStatus:
+class RuntimeStatus(
+    str,
+    Enum,
+):
+
+    CREATED = "created"
+
+    INITIALIZING = "initializing"
+
+    RUNNING = "running"
+
+    STOPPING = "stopping"
+
+    STOPPED = "stopped"
+
+    FAILED = "failed"
+
+
+
+# ==========================================================
+# Runtime State
+# ==========================================================
+
+
+@dataclass
+class RuntimeState:
     """
-    Immutable runtime status snapshot.
+    Global execution runtime state.
+
+    Used by:
+
+    - ExecutionEngine
+    - ExecutionContext
+    - Kernel
     """
 
-    state: RuntimeState = RuntimeState.CREATED
 
-    tasks_executed: int = 0
-
-    active_workers: int = 0
-
-    queued_tasks: int = 0
-
-    last_error: str | None = None
-
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(
-            timezone.utc
-        ).isoformat()
+    status: RuntimeStatus = (
+        RuntimeStatus.CREATED
     )
 
+
+    error: str | None = None
+
+
+
     # ======================================================
-    # Helpers
+    # Lifecycle
     # ======================================================
+
+
+    def initialize(
+        self,
+    ) -> None:
+
+        self.status = (
+            RuntimeStatus.INITIALIZING
+        )
+
+
+
+    def start(
+        self,
+    ) -> None:
+
+        self.status = (
+            RuntimeStatus.RUNNING
+        )
+
+
+
+    def stop(
+        self,
+    ) -> None:
+
+        self.status = (
+            RuntimeStatus.STOPPED
+        )
+
+
+
+    def fail(
+        self,
+        error: Exception | str,
+    ) -> None:
+
+        self.status = (
+            RuntimeStatus.FAILED
+        )
+
+        self.error = str(
+            error
+        )
+
+
+
+    # ======================================================
+    # Query
+    # ======================================================
+
 
     @property
-    def healthy(self) -> bool:
-        """
-        Whether the runtime is healthy.
-        """
+    def running(
+        self,
+    ) -> bool:
 
-        return self.state not in (
-            RuntimeState.FAILED,
-            RuntimeState.STOPPED,
+        return (
+            self.status
+            ==
+            RuntimeStatus.RUNNING
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Serialize status.
-        """
+
+
+    @property
+    def stopped(
+        self,
+    ) -> bool:
+
+        return (
+            self.status
+            ==
+            RuntimeStatus.STOPPED
+        )
+
+
+
+    # ======================================================
+    # Update
+    # ======================================================
+
+
+    def update(
+        self,
+        *,
+        status: str | RuntimeStatus | None = None,
+        error: str | None = None,
+    ) -> None:
+
+
+        if status is not None:
+
+            if isinstance(
+                status,
+                RuntimeStatus,
+            ):
+
+                self.status = status
+
+            else:
+
+                self.status = RuntimeStatus(
+                    status
+                )
+
+
+        if error is not None:
+
+            self.error = error
+
+
+
+    # ======================================================
+    # Serialization
+    # ======================================================
+
+
+    def to_dict(
+        self,
+    ) -> dict:
 
         return {
-            "state": self.state.value,
-            "tasks_executed": self.tasks_executed,
-            "active_workers": self.active_workers,
-            "queued_tasks": self.queued_tasks,
-            "last_error": self.last_error,
-            "metadata": dict(self.metadata),
-            "timestamp": self.timestamp,
-            "healthy": self.healthy,
+
+            "status":
+                self.status.value,
+
+
+            "error":
+                self.error,
+
         }
 
-    @classmethod
-    def from_dict(
-        cls,
-        data: dict[str, Any],
-    ) -> "RuntimeStatus":
-        """
-        Restore from serialized dictionary.
-        """
 
-        return cls(
-            state=RuntimeState(
-                data.get("state", RuntimeState.CREATED.value)
-            ),
-            tasks_executed=data.get(
-                "tasks_executed",
-                0,
-            ),
-            active_workers=data.get(
-                "active_workers",
-                0,
-            ),
-            queued_tasks=data.get(
-                "queued_tasks",
-                0,
-            ),
-            last_error=data.get(
-                "last_error",
-            ),
-            metadata=dict(
-                data.get("metadata", {})
-            ),
-            timestamp=data.get(
-                "timestamp",
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
 
-    def __repr__(self) -> str:
+    def __repr__(
+        self,
+    ) -> str:
+
         return (
-            f"{self.__class__.__name__}("
-            f"state={self.state.value!r}, "
-            f"tasks={self.tasks_executed}, "
-            f"workers={self.active_workers}, "
-            f"queued={self.queued_tasks})"
+            "RuntimeState("
+            f"status={self.status.value!r}"
+            ")"
         )

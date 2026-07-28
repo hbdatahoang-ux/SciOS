@@ -4,8 +4,7 @@ SciOS Runtime Execution Context
 
 Canonical execution context shared across SciOS Runtime.
 
-The ExecutionContext is the runtime state container
-passing through:
+Execution flow:
 
     ExecutionEngine
             |
@@ -14,6 +13,21 @@ passing through:
             |
             v
           Stage
+
+
+Contract
+--------
+
+ctx.result
+    |
+    v
+ExecutionResult
+
+
+ctx.result.value
+    |
+    v
+Actual execution payload
 
 
 Python 3.11+
@@ -66,7 +80,7 @@ __all__ = [
 
 def utc_now() -> str:
     """
-    Current UTC timestamp.
+    Return current UTC timestamp.
     """
 
     return datetime.now(
@@ -83,7 +97,18 @@ def utc_now() -> str:
 @dataclass(slots=True)
 class ExecutionContext:
     """
-    Runtime execution context.
+    Runtime execution state container.
+
+    Shared between:
+
+        ExecutionEngine
+              |
+              v
+          Pipeline
+              |
+              v
+            Stage
+
 
     Lifecycle:
 
@@ -91,20 +116,10 @@ class ExecutionContext:
             |
             v
         running
-            |
-       +------------+
-       |            |
-       v            v
-   completed      failed
+          /    \
+         v      v
+    completed  failed
     """
-
-
-
-    # ======================================================
-    # Task
-    # ======================================================
-
-    task: Any = None
 
 
 
@@ -115,6 +130,14 @@ class ExecutionContext:
     id: str = field(
         default_factory=lambda: str(uuid4())
     )
+
+
+
+    # ======================================================
+    # Task
+    # ======================================================
+
+    task: Any = None
 
 
 
@@ -133,25 +156,22 @@ class ExecutionContext:
     # ======================================================
 
     """
-    Public result.
+    Public canonical result.
 
-    Compatibility:
-        ctx.result == "ok"
+    Always:
 
+        ExecutionResult | None
     """
 
-    result: Any = None
+    result: ExecutionResult | None = None
 
 
 
     """
-    Rich internal result.
+    Internal alias.
 
-    Contains:
-        status
-        duration
-        error
-        metadata
+    Kept for compatibility with
+    ExecutionEngine and advanced runtime.
     """
 
     _execution_result: ExecutionResult | None = field(
@@ -166,16 +186,14 @@ class ExecutionContext:
 
 
     # ======================================================
-    # Runtime
+    # Runtime State
     # ======================================================
 
     state: RuntimeState = "created"
 
 
+
     worker: str | None = None
-
-
-
     # ======================================================
     # Diagnostics
     # ======================================================
@@ -235,98 +253,70 @@ class ExecutionContext:
 
 
     # ======================================================
-    # State Properties
+    # Properties
     # ======================================================
 
     @property
-    def status(
-        self,
-    ) -> RuntimeState:
-
+    def status(self):
         return self.state
-
 
 
     @status.setter
     def status(
         self,
-        value: RuntimeState,
-    ) -> None:
-
+        value,
+    ):
         self.state = value
 
 
 
     @property
-    def running(
-        self,
-    ) -> bool:
-
+    def running(self):
         return self.state == "running"
 
 
 
     @property
-    def completed(
-        self,
-    ) -> bool:
-
+    def completed(self):
         return self.state == "completed"
 
 
 
     @property
-    def succeeded(
-        self,
-    ) -> bool:
-
-        return self.completed
-
-
-
-    @property
-    def failed(
-        self,
-    ) -> bool:
-
+    def failed(self):
         return self.state == "failed"
 
 
 
     @property
-    def done(
-        self,
-    ) -> bool:
-
+    def done(self):
         return (
             self.completed
-            or
-            self.failed
+            or self.failed
         )
 
 
 
     @property
-    def has_result(
-        self,
-    ) -> bool:
+    def succeeded(self):
+        return self.completed
 
+
+
+    @property
+    def has_result(self):
         return self.result is not None
 
 
 
     @property
-    def duration(
-        self,
-    ) -> float | None:
+    def duration(self):
 
         if (
             self._start_perf is None
             or self._finish_perf is None
         ):
-
             return None
-
 
         return (
             self._finish_perf
@@ -337,41 +327,10 @@ class ExecutionContext:
 
 
     # ======================================================
-    # Events
-    # ======================================================
-
-    def add_event(
-        self,
-        event: str,
-    ) -> None:
-
-        self.events.append(
-            event
-        )
-
-
-
-    def has_event(
-        self,
-        event: str,
-    ) -> bool:
-
-        return event in self.events
-
-
-
-    # ======================================================
     # Lifecycle
     # ======================================================
 
-    def start(
-        self,
-    ) -> None:
-
-        if self.running:
-
-            return
-
+    def start(self):
 
         self.state = "running"
 
@@ -380,23 +339,39 @@ class ExecutionContext:
         self._start_perf = perf_counter()
 
 
+        self.add_event(
+            "execution.started"
+        )
+
+
         self._record_state(
             "running"
         )
 
 
+        return self
+
+
 
     def finish(
         self,
-        result: Any,
-    ) -> None:
-        """
-        Complete execution.
-        """
+        result,
+    ):
 
-        self.set_result(
-            result
-        )
+        from .result import ExecutionResult
+
+
+        if not isinstance(
+            result,
+            ExecutionResult,
+        ):
+
+            result = ExecutionResult.ok(
+                result
+            )
+
+
+        self.result = result
 
 
         self.state = "completed"
@@ -404,8 +379,12 @@ class ExecutionContext:
 
         self.finished_at = utc_now()
 
-
         self._finish_perf = perf_counter()
+
+
+        self.add_event(
+            "execution.completed"
+        )
 
 
         self._record_state(
@@ -413,17 +392,24 @@ class ExecutionContext:
         )
 
 
+        return self
+
+
 
     def fail(
         self,
         error: BaseException,
-    ) -> None:
+    ):
+
+        from .result import ExecutionResult
 
 
         self.error = error
 
 
-        self.result = None
+        self.result = ExecutionResult.fail(
+            error
+        )
 
 
         self.state = "failed"
@@ -431,8 +417,12 @@ class ExecutionContext:
 
         self.finished_at = utc_now()
 
-
         self._finish_perf = perf_counter()
+
+
+        self.add_event(
+            "execution.failed"
+        )
 
 
         self._record_state(
@@ -440,17 +430,17 @@ class ExecutionContext:
         )
 
 
+        return self
+
+
 
     def reset(
         self,
         *,
-        clear_logs: bool = False,
-    ) -> None:
-
+        clear_logs=False,
+    ):
 
         self.result = None
-
-        self._execution_result = None
 
         self.error = None
 
@@ -468,6 +458,7 @@ class ExecutionContext:
         self._finish_perf = None
 
 
+
         self.events.clear()
 
         self.history.clear()
@@ -477,30 +468,31 @@ class ExecutionContext:
         self.artifacts.clear()
 
 
+
         if clear_logs:
 
             self.logs.clear()
 
 
 
+        return self
     # ======================================================
     # Result API
     # ======================================================
 
     def set_result(
         self,
-        result: Any,
-    ) -> None:
+        result,
+    ):
         """
-        Attach result.
+        Attach execution result.
 
-        Compatibility:
+        Contract:
 
-            ctx.result == raw value
-
-        Internal:
-
-            ctx._execution_result
+            ctx.result
+                |
+                v
+            ExecutionResult
         """
 
         from .result import ExecutionResult
@@ -511,34 +503,24 @@ class ExecutionContext:
             ExecutionResult,
         ):
 
-            self._execution_result = result
+            self.result = result
 
-            self.result = (
-                result.value
-                if hasattr(
-                    result,
-                    "value",
-                )
-                else result
-            )
 
         else:
 
-            self.result = result
-
-            self._execution_result = (
-                ExecutionResult.ok(
-                    result
-                )
+            self.result = ExecutionResult.ok(
+                result
             )
+
+
+        return self
 
 
 
     def get_result(
         self,
         default=None,
-    ) -> Any:
-
+    ):
 
         if self.result is None:
 
@@ -552,8 +534,23 @@ class ExecutionContext:
     def get_execution_result(
         self,
     ):
+        """
+        Return canonical ExecutionResult.
+        """
 
-        return self._execution_result
+        return self.result
+
+
+
+    @property
+    def execution_result(
+        self,
+    ):
+        """
+        Compatibility alias.
+        """
+
+        return self.result
 
 
 
@@ -566,7 +563,7 @@ class ExecutionContext:
         message: str,
         *,
         level: str = "INFO",
-    ) -> None:
+    ):
 
         self.logs.append(
             message
@@ -579,7 +576,7 @@ class ExecutionContext:
         message: str,
         *,
         level: str = "INFO",
-    ) -> None:
+    ):
 
         self.logs.append(
             {
@@ -592,13 +589,37 @@ class ExecutionContext:
 
 
     # ======================================================
+    # Events
+    # ======================================================
+
+    def add_event(
+        self,
+        event: str,
+    ):
+
+        self.events.append(
+            event
+        )
+
+
+
+    def has_event(
+        self,
+        event: str,
+    ) -> bool:
+
+        return event in self.events
+
+
+
+    # ======================================================
     # History
     # ======================================================
 
     def _record_state(
         self,
         state: str,
-    ) -> None:
+    ):
 
         self.history.append(
             {
@@ -606,18 +627,15 @@ class ExecutionContext:
                 "time": utc_now(),
             }
         )
-
-
-
     # ======================================================
-    # Metadata
+    # Metadata API
     # ======================================================
 
     def set(
         self,
         key: str,
         value: Any,
-    ) -> None:
+    ):
 
         self.metadata[key] = value
 
@@ -644,7 +662,7 @@ class ExecutionContext:
         self,
         name: str,
         value: Any,
-    ) -> None:
+    ):
 
         self.artifacts[name] = value
 
@@ -670,13 +688,35 @@ class ExecutionContext:
     def add_tag(
         self,
         tag: str,
-    ) -> None:
+    ):
 
         if tag not in self.tags:
 
             self.tags.append(
                 tag
             )
+
+
+
+    def remove_tag(
+        self,
+        tag: str,
+    ):
+
+        if tag in self.tags:
+
+            self.tags.remove(
+                tag
+            )
+
+
+
+    def has_tag(
+        self,
+        tag: str,
+    ) -> bool:
+
+        return tag in self.tags
 
 
 
@@ -687,9 +727,12 @@ class ExecutionContext:
     def attach_worker(
         self,
         worker: str,
-    ) -> None:
+    ):
 
         self.worker = worker
+
+
+        return self
 
 
 
@@ -697,9 +740,7 @@ class ExecutionContext:
     # Copy
     # ======================================================
 
-    def copy(
-        self,
-    ) -> ExecutionContext:
+    def copy(self):
 
         return deepcopy(
             self
@@ -717,22 +758,29 @@ class ExecutionContext:
 
         return {
 
-            "id": self.id,
+            "id":
+                self.id,
 
-            "task": self.task,
 
-            "state": self.state,
+            "task":
+                self.task,
 
-            "worker": self.worker,
 
-            "result": self.result,
+            "state":
+                self.state,
 
-            "execution_result":
+
+            "worker":
+                self.worker,
+
+
+            "result":
                 (
-                    self._execution_result.to_dict()
-                    if self._execution_result
+                    self.result.to_dict()
+                    if self.result
                     else None
                 ),
+
 
             "error":
                 (
@@ -741,43 +789,58 @@ class ExecutionContext:
                     else None
                 ),
 
+
             "metadata":
                 deepcopy(
                     self.metadata
                 ),
+
 
             "logs":
                 deepcopy(
                     self.logs
                 ),
 
+
             "events":
                 list(
                     self.events
                 ),
+
 
             "history":
                 deepcopy(
                     self.history
                 ),
 
+
             "tags":
                 list(
                     self.tags
                 ),
+
 
             "artifacts":
                 deepcopy(
                     self.artifacts
                 ),
 
-            "created_at": self.created_at,
 
-            "started_at": self.started_at,
+            "created_at":
+                self.created_at,
 
-            "finished_at": self.finished_at,
 
-            "duration": self.duration,
+            "started_at":
+                self.started_at,
+
+
+            "finished_at":
+                self.finished_at,
+
+
+            "duration":
+                self.duration,
+
         }
 
 
@@ -794,5 +857,6 @@ class ExecutionContext:
             "ExecutionContext("
             f"id='{self.id}', "
             f"state='{self.state}', "
-            f"worker={self.worker!r})"
-        )
+            f"worker={self.worker!r}"
+            ")"
+        )                    

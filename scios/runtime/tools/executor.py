@@ -5,6 +5,15 @@ SciOS Runtime Tool Executor
 High-level orchestration layer
 for runtime tool execution.
 
+Responsibilities
+-----------------
+- Resolve tools
+- Execute tools
+- Coordinate sandbox
+- Enforce policy
+- Collect statistics
+- Lifecycle management
+
 Python 3.11+
 """
 
@@ -39,14 +48,20 @@ __all__ = [
 
 class ToolExecutor:
     """
-    Central tool execution coordinator.
+    Central runtime tool execution coordinator.
 
-    Responsibilities:
 
-    - resolve tools
-    - enforce policy
-    - execute in sandbox
-    - collect statistics
+    Flow:
+
+        ToolRouter
+             |
+        ToolExecutor
+             |
+        ToolSandbox
+             |
+        Tool
+             |
+        ToolResult
     """
 
 
@@ -85,11 +100,11 @@ class ToolExecutor:
         )
 
 
+        # statistics
+
         self._executions = 0
 
-
         self._success = 0
-
 
         self._failed = 0
 
@@ -136,8 +151,52 @@ class ToolExecutor:
 
 
 
+    @property
+    def success(
+        self,
+    ) -> int:
+
+        return self._success
+
+
+
+    @property
+    def failed(
+        self,
+    ) -> int:
+
+        return self._failed
+
+
+
     # ======================================================
-    # Execute
+    # Internal accounting
+    # ======================================================
+
+
+    def _record(
+        self,
+        result: ToolResult,
+    ) -> ToolResult:
+        """
+        Update execution statistics.
+        """
+
+        if result.success:
+
+            self._success += 1
+
+        else:
+
+            self._failed += 1
+
+
+        return result
+
+
+
+    # ======================================================
+    # Execute By Name
     # ======================================================
 
 
@@ -147,7 +206,15 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> ToolResult:
         """
-        Execute tool by name.
+        Execute registered tool by name.
+
+
+        Example:
+
+            executor.execute(
+                "echo",
+                text="hello"
+            )
         """
 
 
@@ -158,51 +225,34 @@ class ToolExecutor:
 
         if tool is None:
 
-            self._failed += 1
+            self._executions += 1
 
 
-            return ToolResult.fail(
-                KeyError(
-                    f"Unknown tool: {name}"
+            return self._record(
+                ToolResult.fail(
+                    KeyError(
+                        f"Unknown tool: {name}"
+                    )
                 )
             )
 
 
-
-        self._executions += 1
-
-
-
-        result = self._sandbox.execute(
+        return self.execute_tool(
             tool,
             **kwargs,
         )
 
 
 
-        if result.success:
-
-            self._success += 1
-
-        else:
-
-            self._failed += 1
-
-
-
-        return result
-
-
-
     # ======================================================
-    # Direct Execute
+    # Execute Tool Instance
     # ======================================================
 
 
     def execute_tool(
         self,
         tool,
-        **kwargs,
+        **kwargs: Any,
     ) -> ToolResult:
         """
         Execute Tool instance directly.
@@ -212,28 +262,43 @@ class ToolExecutor:
         self._executions += 1
 
 
-        result = self._sandbox.execute(
-            tool,
-            **kwargs,
-        )
+        try:
+
+            result = self._sandbox.execute(
+                tool,
+                **kwargs,
+            )
 
 
-        if result.success:
+            if not isinstance(
+                result,
+                ToolResult,
+            ):
 
-            self._success += 1
-
-        else:
-
-            self._failed += 1
+                result = ToolResult.ok(
+                    result
+                )
 
 
+            return self._record(
+                result
+            )
 
-        return result
+
+
+        except Exception as exc:
+
+
+            return self._record(
+                ToolResult.fail(
+                    exc
+                )
+            )
 
 
 
     # ======================================================
-    # Batch
+    # Batch Execution
     # ======================================================
 
 
@@ -243,20 +308,24 @@ class ToolExecutor:
         inputs: list[dict[str, Any]],
     ) -> list[ToolResult]:
         """
-        Execute same tool multiple times.
+        Execute one tool many times.
         """
 
 
-        return [
+        results: list[ToolResult] = []
 
-            self.execute(
-                name,
-                **params,
+
+        for params in inputs:
+
+            results.append(
+                self.execute(
+                    name,
+                    **params,
+                )
             )
 
-            for params in inputs
 
-        ]
+        return results
 
 
 
@@ -292,6 +361,10 @@ class ToolExecutor:
     def initialize(
         self,
     ) -> None:
+        """
+        Initialize all tools.
+        """
+
 
         for tool in self._registry:
 
@@ -302,8 +375,14 @@ class ToolExecutor:
     def shutdown(
         self,
     ) -> None:
+        """
+        Shutdown tools.
+        """
 
-        self._registry.clear()
+
+        for tool in self._registry:
+
+            tool.shutdown()
 
 
 
@@ -350,12 +429,22 @@ class ToolExecutor:
 
 
 
+    def __bool__(
+        self,
+    ) -> bool:
+
+        return self._executions > 0
+
+
+
     def __repr__(
         self,
     ) -> str:
 
         return (
             "ToolExecutor("
-            f"executions={self._executions}"
+            f"executions={self._executions}, "
+            f"success={self._success}, "
+            f"failed={self._failed}"
             ")"
         )

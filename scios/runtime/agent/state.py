@@ -2,7 +2,7 @@
 SciOS Runtime Agent State
 =========================
 
-Agent lifecycle state container.
+Agent lifecycle state.
 
 Python 3.11+
 """
@@ -10,68 +10,165 @@ Python 3.11+
 from __future__ import annotations
 
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from enum import Enum
+
 
 
 __all__ = [
     "AgentState",
+    "AgentStatus",
 ]
+
+
+
+class AgentStatus(
+    str,
+    Enum,
+):
+
+    IDLE = "idle"
+
+    RUNNING = "running"
+
+    COMPLETED = "completed"
+
+    FAILED = "failed"
+
 
 
 @dataclass
 class AgentState:
     """
-    Runtime state of an Agent.
+    Runtime state of Agent.
     """
 
-    status: str = "idle"
 
-    metadata: dict[str, Any] = field(
-        default_factory=dict
-    )
+    status: str = AgentStatus.IDLE.value
+
+
+    task: str | None = None
+
+
+    error: str | None = None
+
+
+    result: object | None = None
+
+
+
+    # ======================================================
+    # Lifecycle
+    # ======================================================
+
+
+    def start(
+        self,
+        task: str,
+    ) -> None:
+
+        self.status = AgentStatus.RUNNING.value
+
+        self.task = task
+
+        self.error = None
+
+
+
+    def complete(
+        self,
+        result=None,
+    ) -> None:
+
+        self.status = AgentStatus.COMPLETED.value
+
+        self.result = result
+
+
+
+    def fail(
+        self,
+        error,
+    ) -> None:
+
+        self.status = AgentStatus.FAILED.value
+
+        self.error = str(error)
+
+
+
+    def reset(
+        self,
+    ) -> None:
+
+        self.status = AgentStatus.IDLE.value
+
+        self.task = None
+
+        self.error = None
+
+        self.result = None
+
+
+
+    # ======================================================
+    # Update API
+    # ======================================================
 
 
     def update(
         self,
-        *,
-        status: str | None = None,
-        **metadata,
+        **kwargs,
     ) -> None:
-        """
-        Update agent state.
-        """
 
-        if status is not None:
-            self.status = status
+        for key, value in kwargs.items():
 
+            if hasattr(
+                self,
+                key,
+            ):
 
-        self.metadata.update(
-            metadata
-        )
-
-
-    def reset(self) -> None:
-        """
-        Reset state.
-        """
-
-        self.status = "idle"
-
-        self.metadata.clear()
+                setattr(
+                    self,
+                    key,
+                    value,
+                )
 
 
 
-    def to_dict(self) -> dict[str, Any]:
+    # ======================================================
+    # Serialization
+    # ======================================================
+
+
+    def to_dict(
+        self,
+    ) -> dict:
 
         return {
-            "status": self.status,
-            "metadata": self.metadata,
+
+            "status":
+                self.status,
+
+
+            "task":
+                self.task,
+
+
+            "error":
+                self.error,
+
+
+            "result":
+                self.result,
+
         }
 
 
 
-    def __repr__(self) -> str:
+    def __repr__(
+        self,
+    ) -> str:
 
         return (
             "AgentState("
