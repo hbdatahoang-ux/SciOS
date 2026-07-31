@@ -1,68 +1,257 @@
 """
-SciOS Stage Dispatcher
-======================
+SciOS Cognitive Stage Dispatcher
+================================
 
-Điều phối thực thi stage trong CognitivePipeline.
-Quyết định stage tiếp theo, gọi middleware, phát event,
-xử lý exception, retry, rollback.
+Dispatcher layer for CognitivePipeline.
+
+Responsibilities:
+- Execute single stage
+- Execute multiple stages
+- Middleware support
+- Event integration
+
+Python 3.11+
 """
 
-from typing import List
-from .context import CognitiveContext
+from __future__ import annotations
+
+from typing import Iterable, Any
+
+
 from .stage import CognitiveStage
-from .middleware import MiddlewareManager
-from .events import KernelEventType
+
+
+__all__ = [
+    "StageDispatcher",
+]
+
 
 
 class StageDispatcher:
     """
-    StageDispatcher điều phối toàn bộ execution của pipeline.
+    Central dispatcher for cognitive stages.
     """
 
-    def __init__(self) -> None:
-        self._max_retries: int = 1
+
+    def __init__(
+        self,
+    ) -> None:
+
+        self.executed = 0
+
+
+
+    # ======================================================
+    # Single Stage Dispatch
+    # ======================================================
 
     def dispatch(
         self,
-        context: CognitiveContext,
-        stages: List[CognitiveStage],
-        middleware: MiddlewareManager,
-        event_bus=None,
-    ) -> None:
+        *args,
+        **kwargs,
+    ):
         """
-        Điều phối thực thi qua tất cả stage.
+        Universal dispatch API.
+
+        Supported:
+
+        1.
+        dispatch(stage, context)
+
+        2.
+        dispatch(
+            context=context,
+            stages=[...],
+            middleware=None,
+            event_bus=None,
+        )
         """
+
+
+        # --------------------------------------------------
+        # Single stage mode
+        # --------------------------------------------------
+
+        if len(args) == 2:
+
+            stage, context = args
+
+            return self._dispatch_stage(
+                stage,
+                context,
+            )
+
+
+
+        # --------------------------------------------------
+        # Pipeline mode
+        # --------------------------------------------------
+
+        context = kwargs.get(
+            "context"
+        )
+
+        stages = kwargs.get(
+            "stages",
+            []
+        )
+
+        middleware = kwargs.get(
+            "middleware"
+        )
+
+        event_bus = kwargs.get(
+            "event_bus"
+        )
+
+
+        result = None
+
 
         for stage in stages:
-            try:
-                # phát sự kiện StageStarted
-                if event_bus:
-                    event_bus.publish(KernelEventType.STAGE_STARTED, {"stage": stage.name})
 
-                # middleware trước stage
-                middleware.run_before_stage(stage, context)
 
-                # chạy stage
-                stage.run(context)
+            result = self._dispatch_stage(
+                stage,
+                context,
+                middleware=middleware,
+                event_bus=event_bus,
+            )
 
-                # middleware sau stage
-                middleware.run_after_stage(stage, context)
 
-                # phát sự kiện StageCompleted
-                if event_bus:
-                    event_bus.publish(KernelEventType.STAGE_COMPLETED, {"stage": stage.name})
+        return result
 
-            except Exception as e:
-                # phát sự kiện StageFailed
-                if event_bus:
-                    event_bus.publish(KernelEventType.STAGE_FAILED, {"stage": stage.name, "error": str(e)})
 
-                # retry logic
-                if self._max_retries > 0:
-                    self._max_retries -= 1
-                    continue  # thử lại stage
-                else:
-                    # rollback logic (placeholder)
-                    if event_bus:
-                        event_bus.publish(KernelEventType.STAGE_ROLLBACK, {"stage": stage.name})
-                    raise
+
+    # ======================================================
+    # Internal Stage Execution
+    # ======================================================
+
+    def _dispatch_stage(
+        self,
+        stage: CognitiveStage,
+        context,
+        *,
+        middleware=None,
+        event_bus=None,
+    ):
+        """
+        Execute one cognitive stage.
+        """
+
+
+        try:
+
+
+            # middleware before
+
+            if middleware:
+
+                middleware.before_stage(
+                    stage,
+                    context,
+                )
+
+
+            if event_bus:
+
+                event_bus.publish(
+                    "stage.started",
+                    {
+                        "stage": stage.name
+                    }
+                )
+
+
+
+            stage.status = "running"
+
+
+            result = stage.run(
+                context
+            )
+
+
+            stage.status = "completed"
+
+
+            self.executed += 1
+
+
+
+            if event_bus:
+
+                event_bus.publish(
+                    "stage.completed",
+                    {
+                        "stage": stage.name
+                    }
+                )
+
+
+
+            # middleware after
+
+            if middleware:
+
+                middleware.after_stage(
+                    stage,
+                    context,
+                )
+
+
+            return result
+
+
+
+        except Exception as exc:
+
+
+            stage.status = "failed"
+
+            stage.message = str(
+                exc
+            )
+
+
+            raise
+
+
+
+    # ======================================================
+    # Diagnostics
+    # ======================================================
+
+    def status(
+        self,
+    ) -> dict:
+
+
+        return {
+
+            "executed":
+                self.executed,
+
+        }
+
+
+
+    def reset(
+        self,
+    ) -> None:
+
+
+        self.executed = 0
+
+
+
+    def __repr__(
+        self,
+    ) -> str:
+
+
+        return (
+            "StageDispatcher("
+            f"executed={self.executed}"
+            ")"
+        )

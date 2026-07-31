@@ -2,163 +2,387 @@
 SciOS Kernel Lifecycle Manager
 ==============================
 
-Kernel lifecycle management for SciOS.
+Kernel lifecycle orchestration.
 
 Responsibilities
 ----------------
 - Manage kernel lifecycle states.
-- Coordinate initialization/start/shutdown.
-- Invoke lifecycle hooks.
-- Remain fault tolerant.
+- Initialize runtime components.
+- Start/stop kernel services.
+- Coordinate lifecycle hooks.
+- Preserve deterministic transitions.
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
+
 from collections.abc import Iterable
+from threading import RLock
 from typing import Any
+
 
 from .state import KernelState
 
 
+__all__ = [
+    "LifecycleManager",
+]
+
+
+
 class LifecycleManager:
     """
-    Kernel lifecycle coordinator.
+    SciOS Kernel Lifecycle Coordinator.
+
+    State machine:
+
+        created
+           |
+        initialize()
+           |
+        booting
+           |
+        start()
+           |
+        running
+           |
+        shutdown()
+           |
+        stopped
     """
 
+
+
     def __init__(self) -> None:
+
         self._state: KernelState = "created"
+
         self._hooks: list[Any] = []
 
-    # ==========================================================
+        self._lock = RLock()
+
+
+
+    # ======================================================
     # Properties
-    # ==========================================================
+    # ======================================================
 
     @property
     def state(self) -> KernelState:
         """
         Current lifecycle state.
         """
+
         return self._state
 
-    # ==========================================================
+
+
+    # ======================================================
     # Hook Management
-    # ==========================================================
+    # ======================================================
 
-    def add_hook(self, hook: Any) -> None:
+    def add_hook(
+        self,
+        hook: Any,
+    ) -> None:
         """
-        Register a lifecycle-aware component.
+        Register lifecycle hook.
         """
-        if hook not in self._hooks:
-            self._hooks.append(hook)
 
-    def add_hooks(self, hooks: Iterable[Any]) -> None:
+        with self._lock:
+
+            if hook not in self._hooks:
+
+                self._hooks.append(
+                    hook
+                )
+
+
+
+    def add_hooks(
+        self,
+        hooks: Iterable[Any],
+    ) -> None:
         """
-        Register multiple lifecycle hooks.
+        Register multiple hooks.
         """
+
         for hook in hooks:
-            self.add_hook(hook)
 
-    def remove_hook(self, hook: Any) -> None:
+            self.add_hook(
+                hook
+            )
+
+
+
+    def remove_hook(
+        self,
+        hook: Any,
+    ) -> None:
         """
-        Remove a lifecycle hook.
+        Remove lifecycle hook.
         """
-        if hook in self._hooks:
-            self._hooks.remove(hook)
+
+        with self._lock:
+
+            if hook in self._hooks:
+
+                self._hooks.remove(
+                    hook
+                )
+
+
 
     def clear_hooks(self) -> None:
         """
         Remove all hooks.
         """
-        self._hooks.clear()
 
-    # ==========================================================
+        with self._lock:
+
+            self._hooks.clear()
+
+
+
+    # ======================================================
     # Lifecycle
-    # ==========================================================
+    # ======================================================
 
     def initialize(self) -> None:
         """
-        Initialize all registered components.
+        Initialize registered components.
+
+        Transition:
+
+            created -> booting
         """
-        self._state = "booting"
 
-        for hook in self._hooks:
-            initialize = getattr(hook, "initialize", None)
+        with self._lock:
+
+            self._state = "booting"
+
+
+            hooks = tuple(
+                self._hooks
+            )
+
+
+
+        for hook in hooks:
+
+            initialize = getattr(
+                hook,
+                "initialize",
+                None,
+            )
+
             if callable(initialize):
-                initialize()
 
-        self._state = "created"
+                try:
+
+                    initialize()
+
+                except Exception:
+                    #
+                    # Kernel lifecycle isolation.
+                    #
+                    continue
+
+
 
     def start(self) -> None:
         """
-        Start all registered components.
-        """
-        for hook in self._hooks:
-            start = getattr(hook, "start", None)
-            if callable(start):
-                start()
+        Start runtime.
 
-        self._state = "running"
+        Transition:
+
+            booting -> running
+        """
+
+        with self._lock:
+
+            hooks = tuple(
+                self._hooks
+            )
+
+
+        for hook in hooks:
+
+            start = getattr(
+                hook,
+                "start",
+                None,
+            )
+
+            if callable(start):
+
+                try:
+
+                    start()
+
+                except Exception:
+
+                    continue
+
+
+
+        with self._lock:
+
+            self._state = "running"
+
+
 
     def shutdown(self) -> None:
         """
-        Shutdown all registered components.
+        Shutdown runtime.
+
+        Transition:
+
+            running -> stopped
         """
-        self._state = "stopping"
 
-        for hook in reversed(self._hooks):
-            shutdown = getattr(hook, "shutdown", None)
+        with self._lock:
+
+            self._state = "stopping"
+
+            hooks = tuple(
+                reversed(
+                    self._hooks
+                )
+            )
+
+
+        for hook in hooks:
+
+            shutdown = getattr(
+                hook,
+                "shutdown",
+                None,
+            )
+
             if callable(shutdown):
-                shutdown()
 
-        self._state = "stopped"
+                try:
+
+                    shutdown()
+
+                except Exception:
+
+                    continue
+
+
+
+        with self._lock:
+
+            self._state = "stopped"
+
+
 
     def restart(self) -> None:
         """
-        Restart the lifecycle.
+        Restart lifecycle.
+
+        stopped -> booting -> running
         """
+
         self.shutdown()
+
         self.initialize()
+
         self.start()
 
-    # ==========================================================
-    # Status
-    # ==========================================================
 
-    def status(self) -> dict[str, Any]:
+
+    # ======================================================
+    # Status
+    # ======================================================
+
+    def status(
+        self,
+    ) -> dict[str, Any]:
         """
-        Return lifecycle status.
+        Lifecycle status snapshot.
         """
+
         return {
+
             "state": self._state,
-            "hooks": len(self._hooks),
+
+            "hooks": len(
+                self._hooks
+            ),
+
         }
 
-    # ==========================================================
-    # Helpers
-    # ==========================================================
 
-    def is_running(self) -> bool:
+
+    # ======================================================
+    # Helpers
+    # ======================================================
+
+    def is_running(
+        self,
+    ) -> bool:
+
         return self._state == "running"
 
-    def is_stopped(self) -> bool:
+
+
+    def is_stopped(
+        self,
+    ) -> bool:
+
         return self._state == "stopped"
 
-    def hook_count(self) -> int:
-        return len(self._hooks)
 
-    # ==========================================================
-    # Magic Methods
-    # ==========================================================
 
-    def __len__(self) -> int:
-        return len(self._hooks)
+    def hook_count(
+        self,
+    ) -> int:
 
-    def __contains__(self, hook: Any) -> bool:
+        return len(
+            self._hooks
+        )
+
+
+
+    # ======================================================
+    # Protocols
+    # ======================================================
+
+    def __len__(
+        self,
+    ) -> int:
+
+        return len(
+            self._hooks
+        )
+
+
+
+    def __contains__(
+        self,
+        hook: Any,
+    ) -> bool:
+
         return hook in self._hooks
 
-    def __repr__(self) -> str:
+
+
+    def __repr__(
+        self,
+    ) -> str:
+
         return (
+
             f"{self.__class__.__name__}("
+
             f"state={self._state!r}, "
-            f"hooks={len(self._hooks)})"
+
+            f"hooks={len(self._hooks)}"
+
+            ")"
+
         )

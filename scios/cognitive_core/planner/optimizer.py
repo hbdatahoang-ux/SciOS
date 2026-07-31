@@ -1,27 +1,166 @@
-# scios/cognitive_core/planner/optimizer.py
+"""
+SciOS Plan Optimizer
+====================
+
+Plan optimization engine.
+
+Responsibilities
+----------------
+- Optimize execution plans.
+- Preserve goal integrity.
+- Preserve tasks.
+- Attach optimization metadata.
+
+Python 3.11+
+"""
+
+from __future__ import annotations
 
 from typing import Any
+
 from .plan import Plan
+
+
+__all__ = [
+    "PlanOptimizer",
+]
+
+
 
 class PlanOptimizer:
     """
-    PlanOptimizer: tối ưu hóa kế hoạch dựa trên tiêu chí (chi phí, thời gian, tài nguyên).
+    Planner optimization component.
+
+    Example
+    -------
+
+    optimizer = PlanOptimizer(
+        name="BasicOptimizer"
+    )
+
+    new_plan = optimizer.optimize(plan)
     """
 
-    def __init__(self, strategy: str = "greedy"):
-        # strategy có thể là "greedy", "cost_minimization", "time_minimization", v.v.
-        self.strategy = strategy
 
-    def optimize(self, plan: Plan) -> Plan:
-        """
-        Áp dụng thuật toán tối ưu hóa lên kế hoạch.
-        Skeleton: chỉ đánh dấu kế hoạch là 'optimized' mà chưa thay đổi chi tiết.
-        """
-        if not plan:
-            raise ValueError("No plan provided for optimization")
 
-        # TODO: triển khai thuật toán tối ưu hóa thực tế
-        plan.metadata["optimized_by"] = self.strategy
-        plan.metadata["status"] = "optimized"
+    def __init__(
+        self,
+        name: str = "DefaultOptimizer",
+    ) -> None:
+
+        self.name = name
+
+        self._history: list[Plan] = []
+
+
+
+    # ======================================================
+    # Optimization
+    # ======================================================
+
+    def optimize(
+        self,
+        plan: Plan,
+    ) -> Plan:
+        """
+        Optimize a plan.
+
+        Guarantees
+        ----------
+        - Same goal.
+        - Same tasks.
+        - Metadata updated.
+        """
+
+        if not isinstance(
+            plan,
+            Plan,
+        ):
+            raise TypeError(
+                "optimize() requires Plan instance"
+            )
+
+
+        # Preserve existing metadata
+
+        if not hasattr(
+            plan,
+            "metadata",
+        ) or plan.metadata is None:
+
+            plan.metadata = {}
+
+
+
+        plan.metadata[
+            "optimized_by"
+        ] = self.name
+
+
+
+        self._history.append(
+            plan
+        )
+
 
         return plan
+
+
+
+    # ======================================================
+    # Diagnostics
+    # ======================================================
+
+    @property
+    def history(
+        self,
+    ) -> list[Plan]:
+
+        return list(
+            self._history
+        )
+
+
+
+    def reset(
+        self,
+    ) -> None:
+
+        self._history.clear()
+
+
+
+    def status(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+
+            "name": self.name,
+
+            "optimized_plans":
+                len(self._history),
+
+        }
+
+
+
+    # ======================================================
+    # Protocols
+    # ======================================================
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+
+            f"{self.__class__.__name__}("
+
+            f"name={self.name!r}, "
+
+            f"history={len(self._history)}"
+
+            ")"
+
+        )

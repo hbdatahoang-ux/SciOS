@@ -93,7 +93,7 @@ def test_pipeline_execution(
     pipeline.execute(ctx)
 
     assert ctx.get_artifact("dummy") is True
-    assert ctx.result == "ok"
+    assert ctx.result.value == "ok"
 
 
 # ==========================================================
@@ -107,7 +107,7 @@ def test_engine_run(
     ctx = engine.run("runtime task")
 
     assert ctx.status == "completed"
-    assert ctx.result == "ok"
+    assert ctx.result.value == "ok"
 
 
 def test_engine_execute(
@@ -116,7 +116,7 @@ def test_engine_execute(
 
     result = engine.execute("runtime task")
 
-    assert result == "ok"
+    assert result.value == "ok"
 
 
 # ==========================================================
@@ -156,4 +156,4 @@ def test_runtime_multiple_tasks(
         ctx = engine.run(f"task-{i}")
 
         assert ctx.status == "completed"
-        assert ctx.result == "ok"
+        assert ctx.result.value == "ok"

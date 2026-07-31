@@ -1,72 +1,262 @@
-# scios/cognitive_core/tool_use/monitor.py
-
 """
-SciOS Runtime Monitor
-=====================
+SciOS Tool Monitor
+==================
 
-Theo dõi quá trình thực thi tool trong thời gian thực:
-- Bắt đầu/kết thúc thực thi
-- Thời gian chạy
-- Trạng thái (success/error)
-- Ghi log runtime
+Execution monitoring for Tool Use.
+
+Features
+--------
+- Track task lifecycle.
+- Measure duration.
+- Store execution history.
+- FIFO ordering.
+- Error tracking.
+- Snapshot export.
+- Reset lifecycle.
+
+Python 3.11+
 """
 
-import time
-from typing import Dict, Any
+from __future__ import annotations
+
+
+from time import perf_counter
+
+from typing import Any
+
+
+__all__ = [
+    "Monitor",
+]
+
 
 
 class Monitor:
     """
-    Monitor giám sát việc thực thi tool.
+    Tool execution monitor.
+
+    Lifecycle:
+
+        start()
+            |
+            v
+        end()
+            |
+            v
+        entries[]
     """
 
-    def __init__(self) -> None:
-        self.logs: list[Dict[str, Any]] = []
 
-    def start(self, tool_name: str, request: Dict[str, Any]) -> float:
-        """
-        Đánh dấu thời điểm bắt đầu thực thi tool.
-        Trả về timestamp để tính thời gian chạy.
-        """
-        start_time = time.time()
-        self.logs.append({
-            "event": "start",
-            "tool": tool_name,
-            "request": request,
-            "timestamp": start_time,
-        })
-        return start_time
 
-    def end(self, tool_name: str, response: Dict[str, Any], start_time: float) -> None:
-        """
-        Đánh dấu thời điểm kết thúc thực thi tool.
-        Tính thời gian chạy và ghi log.
-        """
-        end_time = time.time()
-        duration = end_time - start_time
+    def __init__(
+        self,
+    ) -> None:
 
-        status = response.get("status", "unknown")
+        # Public compatibility API
+        self.entries: list[
+            dict[str, Any]
+        ] = []
 
-        self.logs.append({
-            "event": "end",
-            "tool": tool_name,
-            "response": response,
+
+        # Internal active tasks
+
+        self._active: dict[
+            str,
+            float,
+        ] = {}
+
+
+
+    # ======================================================
+    # Lifecycle
+    # ======================================================
+
+
+    def start(
+        self,
+        task: str,
+    ) -> None:
+        """
+        Start monitoring task.
+        """
+
+        self._active[task] = perf_counter()
+
+
+
+    def end(
+        self,
+        task: str,
+        *,
+        status: str = "success",
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Finish monitoring task.
+        """
+
+        start_time = self._active.pop(
+            task,
+            None,
+        )
+
+
+        if start_time is None:
+
+            duration = 0.0
+
+        else:
+
+            duration = (
+                perf_counter()
+                -
+                start_time
+            )
+
+
+
+        entry: dict[str, Any] = {
+
+            "task": task,
+
             "status": status,
+
             "duration": duration,
-            "timestamp": end_time,
-        })
 
-    def get_logs(self) -> list[Dict[str, Any]]:
-        """Lấy toàn bộ log runtime."""
-        return self.logs
+        }
 
-    def clear(self) -> None:
-        """Xóa toàn bộ log runtime."""
-        self.logs.clear()
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Xuất log dưới dạng dict."""
-        return {"entries": self.logs}
+        if message is not None:
 
-    def __repr__(self) -> str:
-        return f"<Monitor entries={len(self.logs)}>"
+            entry["message"] = message
+
+
+
+        self.entries.append(
+            entry
+        )
+
+
+        return entry
+
+
+
+    # ======================================================
+    # Query
+    # ======================================================
+
+
+    def latest(
+        self,
+    ) -> dict[str, Any] | None:
+        """
+        Return latest entry.
+        """
+
+        if not self.entries:
+
+            return None
+
+
+        return self.entries[-1]
+
+
+
+    def count(
+        self,
+    ) -> int:
+        """
+        Number of completed tasks.
+        """
+
+        return len(
+            self.entries
+        )
+
+
+
+    # ======================================================
+    # Serialization
+    # ======================================================
+
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Export monitor state.
+        """
+
+        return {
+
+            "entries":
+                list(self.entries)
+
+        }
+
+
+
+    snapshot = to_dict
+
+
+
+    # ======================================================
+    # Maintenance
+    # ======================================================
+
+
+    def clear(
+        self,
+    ) -> None:
+        """
+        Clear history.
+        """
+
+        self.entries.clear()
+
+        self._active.clear()
+
+
+
+    reset = clear
+
+
+
+    # ======================================================
+    # Protocols
+    # ======================================================
+
+
+    def __len__(
+        self,
+    ) -> int:
+
+        return len(
+            self.entries
+        )
+
+
+
+    def __bool__(
+        self,
+    ) -> bool:
+
+        return bool(
+            self.entries
+        )
+
+
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+
+            f"{self.__class__.__name__}("
+
+            f"entries={len(self.entries)}"
+
+            ")"
+
+        )

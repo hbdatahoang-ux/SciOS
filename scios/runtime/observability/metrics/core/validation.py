@@ -1,32 +1,30 @@
 """
 SciOS Observability
-==================
+===================
 
 Metric Validation Engine.
 
-This module implements the production validation layer for the
+Production validation layer for the
 SciOS-NG Observability subsystem.
 
 Responsibilities
 ----------------
-- Metric validation
-- Descriptor validation
+- Metric name validation
+- Metric type validation
+- Metric value validation
 - Label validation
 - Attribute validation
 - Metadata validation
-- Runtime validation
-- Registry validation
-- Serialization validation
-- Snapshot validation
-- Type validation
+- Descriptor validation
 - Namespace validation
+- Serialization validation
+- Runtime validation
 
 Design Goals
 ------------
 - Production ready
-- Thread safe
 - Deterministic
-- Fast
+- Thread safe
 - Allocation friendly
 - Immutable aware
 - OpenTelemetry compatible
@@ -34,7 +32,11 @@ Design Goals
 - Scientific computing friendly
 
 The validator never mutates user objects.
-All validation methods are side-effect free.
+
+All validation methods are:
+- side-effect free
+- deterministic
+- reusable
 
 Typical usage
 -------------
@@ -43,30 +45,55 @@ Typical usage
 
     MetricValidator.validate_labels(labels)
 
-    MetricValidator.validate_attributes(attrs)
+    MetricValidator.validate_attributes(attributes)
 
-    MetricValidator.validate_descriptor(descriptor)
+    MetricValidator.validate_metric_type(metric_type)
 
-All validation errors raise subclasses of MetricValidationError.
+All validation failures raise subclasses
+of MetricValidationError.
 """
 
+
 from __future__ import annotations
+
+
+# ==========================================================
+# Standard Library Imports
+# ==========================================================
 
 import keyword
 import math
 import re
-import uuid
+
+
+# ==========================================================
+# Collections
+# ==========================================================
 
 from collections.abc import Mapping
 from collections.abc import Sequence
-from collections.abc import Set
+
+
+# ==========================================================
+# Numeric
+# ==========================================================
 
 from decimal import Decimal
+
+
+# ==========================================================
+# Typing
+# ==========================================================
 
 from typing import Any
 from typing import Final
 from typing import Pattern
 from typing import TypeAlias
+
+
+# ==========================================================
+# Local Imports
+# ==========================================================
 
 from .exceptions import (
     InvalidAttributeError,
@@ -78,15 +105,20 @@ from .exceptions import (
     MetricValidationError,
 )
 
+
+# ==========================================================
+# Public API
+# ==========================================================
+
 __all__ = [
     "MetricValidator",
 ]
-
 # ==========================================================
 # Version
 # ==========================================================
 
 VALIDATION_VERSION: Final[str] = "1.0"
+
 
 # ==========================================================
 # Limits
@@ -118,6 +150,7 @@ MAX_LABELS: Final[int] = 128
 
 MAX_ATTRIBUTES: Final[int] = 512
 
+
 # ==========================================================
 # Numeric Limits
 # ==========================================================
@@ -130,8 +163,9 @@ MIN_INT64: Final[int] = -(2**63)
 
 MAX_INT64: Final[int] = 2**63 - 1
 
+
 # ==========================================================
-# Supported Primitive Types
+# Primitive Types
 # ==========================================================
 
 PRIMITIVE_TYPES: Final[tuple[type, ...]] = (
@@ -142,19 +176,6 @@ PRIMITIVE_TYPES: Final[tuple[type, ...]] = (
     bytes,
     Decimal,
 )
-
-# ==========================================================
-# Allowed Attribute Types
-# ==========================================================
-
-ATTRIBUTE_TYPES: Final[tuple[type, ...]] = (
-    bool,
-    int,
-    float,
-    str,
-    bytes,
-)
-
 # ==========================================================
 # Supported Metric Types
 # ==========================================================
@@ -173,6 +194,7 @@ SUPPORTED_METRIC_TYPES: Final[frozenset[str]] = frozenset(
     }
 )
 
+
 # ==========================================================
 # Supported Value Types
 # ==========================================================
@@ -185,148 +207,106 @@ SUPPORTED_VALUE_TYPES: Final[frozenset[type]] = frozenset(
     }
 )
 
-# ==========================================================
-# Empty Constants
-# ==========================================================
 
-EMPTY_DICT: Final[dict[str, Any]] = {}
-
-EMPTY_TUPLE: Final[tuple[Any, ...]] = ()
-
-EMPTY_SET: Final[frozenset[Any]] = frozenset()
-
-# ==========================================================
-# Reserved Prefixes
-# ==========================================================
-
-RESERVED_PREFIXES: Final[tuple[str, ...]] = (
-    "__",
-    "_internal",
-    "_private",
-    "otel.",
-    "prometheus.",
-    "system.",
-    "python.",
-)
-
-# ==========================================================
-# Reserved Label Keys
-# ==========================================================
-
-RESERVED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
-    {
-        "__name__",
-        "__value__",
-        "__type__",
-        "__metric__",
-        "__bucket__",
-        "__sum__",
-        "__count__",
-    }
-)
-
-# ==========================================================
-# Reserved Attribute Keys
-# ==========================================================
-
-RESERVED_ATTRIBUTE_KEYS: Final[frozenset[str]] = frozenset(
-    {
-        "__class__",
-        "__dict__",
-        "__slots__",
-        "__weakref__",
-    }
-)
 # ==========================================================
 # Regular Expressions
 # ==========================================================
 
-#
-# Metric name
+# ----------------------------------------------------------
+# Metric Name
 # Prometheus compatible:
-#   [a-zA-Z_:][a-zA-Z0-9_:]*
-#
+# [a-zA-Z_:][a-zA-Z0-9_:]*
+# ----------------------------------------------------------
 
 METRIC_NAME_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"
 )
 
-#
+
+# ----------------------------------------------------------
 # Namespace
-#
+# ----------------------------------------------------------
 
 NAMESPACE_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[A-Za-z][A-Za-z0-9_.-]*$"
 )
 
-#
-# Label key
-#
+
+# ----------------------------------------------------------
+# Label Key
+# ----------------------------------------------------------
 
 LABEL_KEY_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_.-]*$"
 )
 
-#
-# Attribute key
-#
+
+# ----------------------------------------------------------
+# Attribute Key
+# ----------------------------------------------------------
 
 ATTRIBUTE_KEY_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_.-]*$"
 )
 
-#
+
+# ----------------------------------------------------------
 # Unit
-#
-# Compatible with UCUM-like identifiers
-#
+# UCUM-like identifier compatible
+# ----------------------------------------------------------
 
 UNIT_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[A-Za-z0-9_./%-]+$"
 )
 
-#
+
+# ----------------------------------------------------------
 # Version
-#
+# ----------------------------------------------------------
 
 VERSION_PATTERN: Final[Pattern[str]] = re.compile(
     r"^\d+\.\d+(\.\d+)?$"
 )
 
-#
+
+# ----------------------------------------------------------
 # UUID
-#
+# ----------------------------------------------------------
 
 UUID_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[0-9a-fA-F-]{36}$"
 )
 
-#
-# Dot path
-#
+
+# ----------------------------------------------------------
+# Dot Path
+# ----------------------------------------------------------
 
 DOT_PATH_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_.-]*$"
 )
 
-#
+
+# ----------------------------------------------------------
 # Tag
-#
+# ----------------------------------------------------------
 
 TAG_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[A-Za-z0-9_.:/-]+$"
 )
 
-#
+
+# ----------------------------------------------------------
 # Annotation
-#
+# ----------------------------------------------------------
 
 ANNOTATION_PATTERN: Final[Pattern[str]] = re.compile(
     r"^[A-Za-z0-9_.:/ -]*$"
 )
 
+
 # ==========================================================
-# Reserved Metric Names
+# Reserved Names
 # ==========================================================
 
 RESERVED_METRIC_NAMES: Final[frozenset[str]] = frozenset(
@@ -345,74 +325,29 @@ RESERVED_METRIC_NAMES: Final[frozenset[str]] = frozenset(
     }
 )
 
+
 # ==========================================================
-# Reserved Python Keywords
+# Reserved Python Names
 # ==========================================================
 
 PYTHON_RESERVED_NAMES: Final[frozenset[str]] = frozenset(
     keyword.kwlist
 )
 
+
 # ==========================================================
-# Reserved OpenTelemetry Fields
+# Reserved Prefixes
 # ==========================================================
 
-OTEL_RESERVED_FIELDS: Final[frozenset[str]] = frozenset(
-    {
-        "service.name",
-        "service.version",
-        "service.instance.id",
-        "telemetry.sdk.name",
-        "telemetry.sdk.language",
-        "telemetry.sdk.version",
-        "host.name",
-        "host.id",
-        "os.type",
-        "os.version",
-        "process.pid",
-        "process.command",
-        "thread.id",
-        "thread.name",
-    }
+RESERVED_PREFIXES: Final[tuple[str, ...]] = (
+    "__",
+    "_internal",
+    "_private",
+    "otel.",
+    "prometheus.",
+    "system.",
+    "python.",
 )
-
-# ==========================================================
-# Reserved Prometheus Labels
-# ==========================================================
-
-PROMETHEUS_RESERVED_LABELS: Final[frozenset[str]] = frozenset(
-    {
-        "__name__",
-        "__address__",
-        "__scheme__",
-        "__metrics_path__",
-        "__param_target",
-        "__scrape_interval__",
-        "__scrape_timeout__",
-    }
-)
-
-# ==========================================================
-# Reserved SciOS Labels
-# ==========================================================
-
-SCIOS_RESERVED_FIELDS: Final[frozenset[str]] = frozenset(
-    {
-        "runtime",
-        "scheduler",
-        "kernel",
-        "executor",
-        "agent",
-        "memory",
-        "trace",
-        "span",
-        "context",
-        "snapshot",
-        "descriptor",
-        "metadata",
-    }
-)
-
 # ==========================================================
 # Default Values
 # ==========================================================
@@ -424,6 +359,7 @@ DEFAULT_UNIT: Final[str] = "1"
 DEFAULT_VERSION: Final[str] = "1.0"
 
 DEFAULT_DESCRIPTION: Final[str] = ""
+
 
 # ==========================================================
 # Type Aliases
@@ -470,6 +406,7 @@ JSONScalar: TypeAlias = (
     | None
 )
 
+
 # ==========================================================
 # Validation Policies
 # ==========================================================
@@ -484,6 +421,7 @@ ALLOW_NAN: Final[bool] = False
 
 ALLOW_INFINITY: Final[bool] = False
 
+
 STRICT_NAME_CHECK: Final[bool] = True
 
 STRICT_NAMESPACE_CHECK: Final[bool] = True
@@ -493,6 +431,7 @@ STRICT_UNIT_CHECK: Final[bool] = True
 STRICT_LABEL_CHECK: Final[bool] = True
 
 STRICT_ATTRIBUTE_CHECK: Final[bool] = True
+
 
 # ==========================================================
 # Internal Validation Flags
@@ -508,1086 +447,954 @@ _CHECK_EMPTY: Final[bool] = True
 
 _CHECK_FINITE_FLOATS: Final[bool] = True
 
-# ==========================================================
-# Cached Empty Collections
-# ==========================================================
 
-_EMPTY_MAPPING: Final[Mapping[str, Any]] = {}
-
-_EMPTY_SEQUENCE: Final[tuple[Any, ...]] = ()
-
-_EMPTY_FROZENSET: Final[frozenset[Any]] = frozenset()
 # ==========================================================
-# Foundation Helper Functions
+# Helper Functions
 # ==========================================================
 
-
-def _is_str(
-    value: Any,
-) -> bool:
-    """
-    Return True if value is a string.
-    """
-
-    return isinstance(
-        value,
-        str,
-    )
+def _is_string(value: Any) -> bool:
+    return isinstance(value, str)
 
 
-def _is_mapping(
-    value: Any,
-) -> bool:
-    """
-    Return True if value implements Mapping.
-    """
-
-    return isinstance(
-        value,
-        Mapping,
-    )
+def _is_mapping(value: Any) -> bool:
+    return isinstance(value, Mapping)
 
 
-def _is_sequence(
-    value: Any,
-) -> bool:
-    """
-    Return (
+def _is_sequence(value: Any) -> bool:
+    return (
         isinstance(value, Sequence)
-        and not isinstance(
-            value,
-            (
-                str,
-                bytes,
-                bytearray,
-            ),
-        )
+        and not isinstance(value, (str, bytes, bytearray))
     )
 
 
-def _is_identifier(
-    value: str,
-) -> bool:
-    """
-    Python identifier check.
-    """
-
-    return value.isidentifier()
-
-
-def _is_keyword(
-    value: str,
-) -> bool:
-    """
-    Python keyword.
-    """
-
-    return keyword.iskeyword(
+def _is_numeric(value: Any) -> bool:
+    return isinstance(
         value,
-    )
+        (
+            int,
+            float,
+            Decimal,
+        ),
+    ) and not isinstance(value, bool)
 
 
-def _is_reserved_name(
-    value: str,
-) -> bool:
-    """
-    Reserved metric name.
-    """
-
-    return (
-        value in RESERVED_METRIC_NAMES
-        or value in PYTHON_RESERVED_NAMES
-    )
-
-
-def _matches(
-    pattern: Pattern[str],
-    value: str,
-) -> bool:
-    """
-    Regex helper.
-    """
-
-    return (
-        pattern.fullmatch(
-            value,
-        )
-        is not None
-    )
-
-
-def _is_uuid(
-    value: str,
-) -> bool:
-    """
-    UUID validator.
-    """
-
-    try:
-
-        uuid.UUID(
-            value,
-        )
-
-        return True
-
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-    ):
-
-        return False
-
-
-def _is_finite_number(
-    value: Any,
-) -> bool:
-    """
-    Finite numeric value.
-    """
-
-    if isinstance(
-        value,
-        bool,
-    ):
-        return True
-
-    if isinstance(
-        value,
-        int,
-    ):
-        return True
-
-    if isinstance(
-        value,
-        Decimal,
-    ):
+def _is_finite(value: Any) -> bool:
+    if isinstance(value, Decimal):
         return value.is_finite()
 
-    if isinstance(
-        value,
-        float,
-    ):
-        return math.isfinite(
-            value,
-        )
+    if isinstance(value, float):
+        return math.isfinite(value)
 
-    return False
+    return True
 
-
-def _is_supported_value(
-    value: Any,
-) -> bool:
-    """
-    Primitive metric value.
-    """
-
-    return isinstance(
-        value,
-        PRIMITIVE_TYPES,
-    )
-
-
-def _is_supported_attribute(
-    value: Any,
-) -> bool:
-    """
-    Supported attribute type.
-    """
-
-    return isinstance(
-        value,
-        ATTRIBUTE_TYPES,
-    )
-
-
-def _normalize_string(
-    value: str,
-) -> str:
-    """
-    Trim surrounding whitespace.
-    """
-
-    return value.strip()
-
-
-def _safe_len(
-    value: Any,
-) -> int:
-    """
-    Length helper.
-
-    Never raises.
-    """
-
-    try:
-
-        return len(
-            value,
-        )
-
-    except Exception:
-
-        return 0
-# ==========================================================
-# Internal Validation Helpers
-# ==========================================================
-
-
-def _require_str(
-    value: Any,
-    field: str,
-) -> str:
-    """
-    Ensure value is a string.
-    """
-
-    if not isinstance(value, str):
-
-        raise MetricValidationError(
-            f"{field} must be a string."
-        )
-
-    return value
-
-
-def _require_mapping(
-    value: Any,
-    field: str,
-) -> Mapping[str, Any]:
-    """
-    Ensure value implements Mapping.
-    """
-
-    if not isinstance(
-        value,
-        Mapping,
-    ):
-
-        raise MetricValidationError(
-            f"{field} must be a mapping."
-        )
-
-    return value
-
-
-def _require_sequence(
-    value: Any,
-    field: str,
-) -> Sequence[Any]:
-    """
-    Ensure value is a non-string sequence.
-    """
-
-    if (
-        not isinstance(
-            value,
-            Sequence,
-        )
-        or isinstance(
-            value,
-            (
-                str,
-                bytes,
-                bytearray,
-            ),
-        )
-    ):
-
-        raise MetricValidationError(
-            f"{field} must be a sequence."
-        )
-
-    return value
-
-
-# ==========================================================
-# Length Helpers
-# ==========================================================
-
-
-def _check_length(
-    value: str,
-    *,
-    maximum: int,
-    field: str,
-) -> None:
-    """
-    Validate maximum string length.
-    """
-
-    if (
-        _CHECK_LENGTHS
-        and len(value) > maximum
-    ):
-
-        raise MetricValidationError(
-            f"{field} exceeds "
-            f"{maximum} characters."
-        )
-
-
-def _check_not_empty(
-    value: str,
-    field: str,
-) -> None:
-    """
-    Reject empty strings.
-    """
-
-    if value == "":
-
-        raise MetricValidationError(
-            f"{field} cannot be empty."
-        )
-
-
-# ==========================================================
-# Regex Helpers
-# ==========================================================
-
-
-def _check_pattern(
-    value: str,
-    *,
-    pattern: Pattern[str],
-    field: str,
-) -> None:
-    """
-    Regex validation.
-    """
-
-    if not _matches(
-        pattern,
-        value,
-    ):
-
-        raise MetricValidationError(
-            f"Invalid {field}: "
-            f"{value!r}"
-        )
-
-
-# ==========================================================
-# Reserved Helpers
-# ==========================================================
-
-
-def _check_reserved(
-    value: str,
-    *,
-    reserved: Set[str],
-    field: str,
-) -> None:
-    """
-    Reject reserved identifiers.
-    """
-
-    if (
-        _CHECK_RESERVED
-        and value in reserved
-    ):
-
-        raise MetricValidationError(
-            f"{field} "
-            f"{value!r} "
-            f"is reserved."
-        )
-
-
-def _check_prefix(
-    value: str,
-) -> None:
-    """
-    Reserved prefixes.
-    """
-
-    if not _CHECK_RESERVED:
-        return
-
-    for prefix in RESERVED_PREFIXES:
-
-        if value.startswith(
-            prefix,
-        ):
-
-            raise MetricValidationError(
-                f"{value!r} uses "
-                "a reserved prefix."
-            )
-
-
-# ==========================================================
-# Numeric Helpers
-# ==========================================================
-
-
-def _check_finite(
-    value: float,
-    field: str,
-) -> None:
-    """
-    Reject NaN/Inf.
-    """
-
-    if (
-        not ALLOW_NAN
-        and math.isnan(
-            value,
-        )
-    ):
-
-        raise MetricValidationError(
-            f"{field} "
-            "cannot be NaN."
-        )
-
-    if (
-        not ALLOW_INFINITY
-        and math.isinf(
-            value,
-        )
-    ):
-
-        raise MetricValidationError(
-            f"{field} "
-            "cannot be infinite."
-        )
-
-
-# ==========================================================
-# UUID Helper
-# ==========================================================
-
-
-def _check_uuid(
-    value: str,
-    field: str,
-) -> None:
-    """
-    Validate UUID.
-    """
-
-    if not _is_uuid(
-        value,
-    ):
-
-        raise MetricValidationError(
-            f"Invalid UUID "
-            f"for {field}."
-        )
-
-
-# ==========================================================
-# Identifier Helper
-# ==========================================================
-
-
-def _check_identifier(
-    value: str,
-    field: str,
-) -> None:
-    """
-    Identifier validation.
-    """
-
-    if not _is_identifier(
-        value,
-    ):
-
-        raise MetricValidationError(
-            f"{field} "
-            "must be a valid identifier."
-        )
-
-    if _is_keyword(
-        value,
-    ):
-
-        raise MetricValidationError(
-            f"{field} "
-            "cannot be a Python keyword."
-        )
 # ==========================================================
 # MetricValidator
 # ==========================================================
-
 
 class MetricValidator:
     """
     Production metric validation engine.
 
-    This class is intentionally non-instantiable.
-
-    All validation entry points are implemented as
-    static methods to keep validation:
-
-    - deterministic
-    - allocation free
-    - thread safe
-    - side-effect free
+    Provides deterministic, side-effect free validation
+    utilities for the SciOS observability subsystem.
     """
 
     __slots__ = ()
 
-    def __new__(
-        cls,
-        *args: Any,
-        **kwargs: Any,
-    ) -> "MetricValidator":
+    # ======================================================
+    # Metric Name Validation
+    # ======================================================
 
-        raise TypeError(
-            "MetricValidator cannot be instantiated."
-        )
+    @classmethod
+    def validate_name(
+        cls,
+        name: MetricName,
+    ) -> str:
+        pass
+
+
+    # ======================================================
+    # Namespace Validation
+    # ======================================================
+
+    @classmethod
+    def validate_namespace(
+        cls,
+        namespace: MetricNamespace,
+    ) -> str:
+        pass
+
+
+    # ======================================================
+    # Unit Validation
+    # ======================================================
+
+    @classmethod
+    def validate_unit(
+        cls,
+        unit: MetricUnit,
+    ) -> str:
+        pass
+
+
+    # ======================================================
+    # Description Validation
+    # ======================================================
+
+    @classmethod
+    def validate_description(
+        cls,
+        description: MetricDescription,
+    ) -> str:
+        pass
+
+
+    # ======================================================
+    # Label Validation
+    # ======================================================
+
+    @classmethod
+    def validate_label_key(
+        cls,
+        key: str,
+    ) -> str:
+        pass
+
+
+    @classmethod
+    def validate_label_value(
+        cls,
+        value: Any,
+    ) -> Any:
+        pass
+
+
+    @classmethod
+    def validate_labels(
+        cls,
+        labels: MetricLabels,
+    ) -> MetricLabels:
+        pass
+
+
+    # ======================================================
+    # Attribute Validation
+    # ======================================================
+
+    @classmethod
+    def validate_attribute_key(
+        cls,
+        key: str,
+    ) -> str:
+        pass
+
+
+    @classmethod
+    def validate_attribute_value(
+        cls,
+        value: Any,
+    ) -> Any:
+        pass
+
+
+    @classmethod
+    def validate_attributes(
+        cls,
+        attributes: MetricAttributes,
+    ) -> MetricAttributes:
+        pass
+
+
+    # ======================================================
+    # Metadata Validation
+    # ======================================================
+
+    @classmethod
+    def validate_metadata(
+        cls,
+        metadata: MetricMetadata,
+    ) -> MetricMetadata:
+        pass
+
+
+    # ======================================================
+    # Tag Validation
+    # ======================================================
+
+    @classmethod
+    def validate_tags(
+        cls,
+        tags: MetricTags,
+    ) -> tuple[str, ...]:
+        pass
+
+
+    # ======================================================
+    # Metric Type Validation
+    # ======================================================
+
+    @classmethod
+    def validate_metric_type(
+        cls,
+        metric_type: str,
+    ) -> str:
+        pass
+
+
+    # ======================================================
+    # Metric Value Validation
+    # ======================================================
+
+    @classmethod
+    def validate_metric_value(
+        cls,
+        value: MetricValue,
+    ) -> MetricValue:
+        pass
+
+
+    # ======================================================
+    # Semantic Metric Validation
+    # ======================================================
+
+    @classmethod
+    def validate_counter_value(
+        cls,
+        value: MetricValue,
+        *,
+        field: str = "counter",
+        strict: bool = True,
+    ) -> MetricValue:
+        pass
+
+
+    @classmethod
+    def validate_up_down_counter_value(
+        cls,
+        value: MetricValue,
+        *,
+        field: str = "up_down_counter",
+        strict: bool = True,
+    ) -> MetricValue:
+        pass
+
+
+    @classmethod
+    def validate_gauge_value(
+        cls,
+        value: MetricValue,
+        *,
+        field: str = "gauge",
+        strict: bool = True,
+    ) -> MetricValue:
+        pass
+
+
+    # ======================================================
+    # Descriptor Validation
+    # ======================================================
+
+    @classmethod
+    def validate_descriptor(
+        cls,
+        descriptor: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        pass
+
 
     # ======================================================
     # Internal Helpers
     # ======================================================
 
-    @staticmethod
-    def _normalize_string(
-        value: str,
-    ) -> str:
-        """
-        Normalize user supplied strings.
-        """
-
-        return value.strip()
-
-    @staticmethod
-    def _ensure_name(
-        name: str,
-    ) -> str:
-
-        name = _require_str(
-            name,
-            "metric name",
-        )
-
-        return MetricValidator._normalize_string(
-            name,
-        )
-
-    @staticmethod
-    def _ensure_namespace(
-        namespace: str,
-    ) -> str:
-
-        namespace = _require_str(
-            namespace,
-            "namespace",
-        )
-
-        return MetricValidator._normalize_string(
-            namespace,
-        )
-
-    @staticmethod
-    def _ensure_unit(
-        unit: str,
-    ) -> str:
-
-        unit = _require_str(
-            unit,
-            "unit",
-        )
-
-        return MetricValidator._normalize_string(
-            unit,
-        )
-
-    @staticmethod
-    def _ensure_mapping(
-        value: Mapping[str, Any],
-        field: str,
-    ) -> Mapping[str, Any]:
-
-        return _require_mapping(
-            value,
-            field,
-        )
-
-    @staticmethod
-    def _ensure_sequence(
-        value: Sequence[Any],
-        field: str,
-    ) -> Sequence[Any]:
-
-        return _require_sequence(
-            value,
-            field,
-        )
-
-    @staticmethod
-    def _ensure_finite(
-        value: Any,
-        field: str,
-    ) -> None:
-
-        if isinstance(
-            value,
-            float,
-        ):
-            _check_finite(
-                value,
-                field,
-            )
-
-    # ======================================================
-    # Primitive Validation
-    # (Implemented in Part 2)
-    # ======================================================
-
-    @staticmethod
-    def validate_name(
-        name: str,
-    ) -> None:
-        raise NotImplementedError
-
-    @staticmethod
-    def validate_unit(
-        unit: str,
-    ) -> None:
-        raise NotImplementedError
-
-    @staticmethod
-    def validate_description(
-        description: str,
-    ) -> None:
-        raise NotImplementedError
-
-    @staticmethod
-    def validate_namespace(
-        namespace: str,
-    ) -> None:
-        raise NotImplementedError
-
-    @staticmethod
-    def validate_uuid(
-        value: str,
-    ) -> None:
-        raise NotImplementedError
-
-    @staticmethod
-    def validate_version(
-        version: str,
-    ) -> None:
-        raise NotImplementedError
-    # ======================================================
-    # 2A. String Validation
-    # ======================================================
-
     @classmethod
-    def validate_non_empty_string(
+    def _validate_string(
         cls,
         value: Any,
         *,
-        field: str = "value",
-        maximum: int | None = None,
-        minimum: int = 1,
-        strip: bool = True,
+        field: str,
+        max_length: int | None = None,
+        allow_empty: bool = False,
     ) -> str:
-        """
-        Validate a required non-empty string.
+        pass
 
-        Parameters
-        ----------
-        value
-            Value to validate.
-
-        field
-            Field name used in error messages.
-
-        maximum
-            Optional maximum length.
-
-        minimum
-            Minimum allowed length after normalization.
-
-        strip
-            Strip surrounding whitespace before validation.
-
-        Returns
-        -------
-        str
-            Normalized string.
-
-        Raises
-        ------
-        MetricValidationError
-        """
-
-        value = _require_str(
-            value,
-            field,
-        )
-
-        if strip:
-            value = value.strip()
-
-        if len(value) < minimum:
-
-            raise MetricValidationError(
-                f"{field} cannot be empty."
-            )
-
-        if (
-            maximum is not None
-            and len(value) > maximum
-        ):
-
-            raise MetricValidationError(
-                f"{field} exceeds "
-                f"{maximum} characters."
-            )
-
-        return value
 
     @classmethod
-    def validate_optional_string(
+    def _validate_metric_numeric(
         cls,
         value: Any,
         *,
-        field: str = "value",
-        default: str | None = None,
-        maximum: int | None = None,
-        strip: bool = True,
-    ) -> str | None:
-        """
-        Validate an optional string.
+        field: str,
+    ) -> int | float | Decimal:
+        pass
 
-        None is accepted and returned unchanged
-        (or replaced with default).
 
-        Returns
-        -------
-        str | None
-        """
-
-        if value is None:
-
-            return default
-
-        value = cls.validate_non_empty_string(
-            value,
-            field=field,
-            maximum=maximum,
-            minimum=1,
-            strip=strip,
-        )
-
-        return value
     @classmethod
-    def validate_identifier(
+    def _validate_collection_size(
         cls,
         value: Any,
         *,
-        field: str = "identifier",
-        maximum: int = MAX_NAME_LENGTH,
-        allow_keyword: bool = False,
-        allow_reserved: bool = False,
-    ) -> str:
-        """
-        Validate a generic identifier.
+        field: str,
+        maximum: int,
+    ) -> None:
+        pass
 
-        Rules
-        -----
-        - required
-        - normalized
-        - Python identifier
-        - not keyword (optional)
-        - not reserved (optional)
-
-        Returns
-        -------
-        str
-            Normalized identifier.
-        """
-
-        value = cls.validate_non_empty_string(
-            value,
-            field=field,
-            maximum=maximum,
-        )
-
-        _check_identifier(
-            value,
-            field,
-        )
-
-        if (
-            not allow_keyword
-            and _is_keyword(value)
-        ):
-            raise MetricValidationError(
-                f"{field!r} cannot be "
-                "a Python keyword."
-            )
-
-        if (
-            not allow_reserved
-            and _is_reserved_name(value)
-        ):
-            raise MetricValidationError(
-                f"{field!r} is reserved."
-            )
-
-        return value
+    # ======================================================
+    # Metric Name Validation
+    # ======================================================
 
     @classmethod
     def validate_name(
         cls,
-        name: Any,
+        name: MetricName,
     ) -> str:
         """
-        Validate a metric name.
+        Validate metric name.
 
-        Compatible with Prometheus/OpenTelemetry.
-
-        Returns
-        -------
-        str
-            Normalized metric name.
+        Rules:
+        - Must be string
+        - Cannot be empty
+        - Must match Prometheus metric format
+        - Cannot use reserved names
+        - Maximum length enforced
         """
 
-        name = cls.validate_non_empty_string(
+        name = cls._validate_string(
             name,
-            field="metric name",
-            maximum=MAX_NAME_LENGTH,
+            field="metric_name",
+            max_length=MAX_NAME_LENGTH,
+            allow_empty=False,
         )
 
-        _check_pattern(
-            name,
-            pattern=METRIC_NAME_PATTERN,
-            field="metric name",
-        )
+        if name in RESERVED_METRIC_NAMES:
+            raise InvalidMetricNameError(
+                f"Reserved metric name: {name}"
+            )
 
-        _check_reserved(
-            name,
-            reserved=RESERVED_METRIC_NAMES,
-            field="metric name",
-        )
-
-        _check_prefix(
-            name,
-        )
+        if STRICT_NAME_CHECK:
+            if not METRIC_NAME_PATTERN.match(name):
+                raise InvalidMetricNameError(
+                    f"Invalid metric name: {name}"
+                )
 
         return name
+
+
+    # ======================================================
+    # Namespace Validation
+    # ======================================================
+
     @classmethod
     def validate_namespace(
         cls,
-        namespace: Any,
-        *,
-        allow_default: bool = True,
+        namespace: MetricNamespace,
     ) -> str:
         """
         Validate metric namespace.
 
-        Rules
-        -----
-        - required
-        - normalized
-        - regex validated
-        - reserved prefix check
-
-        Returns
-        -------
-        str
+        Rules:
+        - Must be string
+        - Cannot be empty
+        - Must match namespace pattern
         """
 
-        namespace = cls.validate_non_empty_string(
+        namespace = cls._validate_string(
             namespace,
             field="namespace",
-            maximum=MAX_NAMESPACE_LENGTH,
+            max_length=MAX_NAMESPACE_LENGTH,
+            allow_empty=False,
         )
 
-        if (
-            allow_default
-            and namespace == DEFAULT_NAMESPACE
-        ):
-            return namespace
-
-        _check_pattern(
-            namespace,
-            pattern=NAMESPACE_PATTERN,
-            field="namespace",
-        )
-
-        _check_prefix(
-            namespace,
-        )
+        if STRICT_NAMESPACE_CHECK:
+            if not NAMESPACE_PATTERN.match(namespace):
+                raise InvalidMetricNameError(
+                    f"Invalid namespace: {namespace}"
+                )
 
         return namespace
+
+
+    # ======================================================
+    # Unit Validation
+    # ======================================================
 
     @classmethod
     def validate_unit(
         cls,
-        unit: Any,
-        *,
-        allow_dimensionless: bool = True,
+        unit: MetricUnit,
     ) -> str:
         """
         Validate metric unit.
 
-        Compatible with
-        OpenTelemetry semantic conventions.
-
-        Examples
-        --------
-        s
-        ms
-        By
-        MiBy
-        %
-        requests
+        Rules:
+        - Must be string
+        - Empty unit allowed only when policy permits
+        - Must match UCUM-like format
         """
 
-        unit = cls.validate_non_empty_string(
+        unit = cls._validate_string(
             unit,
             field="unit",
-            maximum=MAX_UNIT_LENGTH,
+            max_length=MAX_UNIT_LENGTH,
+            allow_empty=ALLOW_EMPTY_DESCRIPTION,
         )
 
-        if (
-            allow_dimensionless
-            and unit == DEFAULT_UNIT
-        ):
-            return unit
+        if unit and STRICT_UNIT_CHECK:
 
-        _check_pattern(
-            unit,
-            pattern=UNIT_PATTERN,
-            field="unit",
-        )
+            if not UNIT_PATTERN.match(unit):
+                raise InvalidMetricUnitError(
+                    f"Invalid metric unit: {unit}"
+                )
 
         return unit
+
+
+    # ======================================================
+    # Description Validation
+    # ======================================================
 
     @classmethod
     def validate_description(
         cls,
-        description: Any,
+        description: MetricDescription,
     ) -> str:
         """
         Validate metric description.
 
-        Empty descriptions are allowed
-        by default.
+        Rules:
+        - Must be string
+        - Maximum length enforced
+        - Empty value controlled by policy
         """
 
-        if description is None:
-
-            return DEFAULT_DESCRIPTION
-
-        description = _require_str(
+        description = cls._validate_string(
             description,
-            "description",
-        )
-
-        description = description.strip()
-
-        if (
-            description == ""
-            and ALLOW_EMPTY_DESCRIPTION
-        ):
-            return description
-
-        _check_length(
-            description,
-            maximum=MAX_DESCRIPTION_LENGTH,
             field="description",
+            max_length=MAX_DESCRIPTION_LENGTH,
+            allow_empty=ALLOW_EMPTY_DESCRIPTION,
         )
 
         return description
 
-    @classmethod
-    def normalize_name(
-        cls,
-        name: str,
-    ) -> str:
-        """
-        Normalize metric name.
-
-        Validation is performed before
-        normalization.
-        """
-
-        name = cls.validate_name(
-            name,
-        )
-
-        return name.lower()
-
-    @classmethod
-    def normalize_namespace(
-        cls,
-        namespace: str,
-    ) -> str:
-        """
-        Normalize namespace.
-        """
-
-        namespace = cls.validate_namespace(
-            namespace,
-        )
-
-        return namespace.lower()
-
-    @classmethod
-    def normalize_unit(
-        cls,
-        unit: str,
-    ) -> str:
-        """
-        Normalize unit.
-
-        UCUM units are case-sensitive,
-        therefore only surrounding
-        whitespace is removed.
-        """
-
-        return cls.validate_unit(
-            unit,
-        )
     # ======================================================
-    # 2B. Numeric Validation
+    # Label Validation
     # ======================================================
 
     @classmethod
-    def validate_numeric(
+    def validate_label_key(
+        cls,
+        key: str,
+    ) -> str:
+        """
+        Validate label key.
+
+        Rules:
+        - Must be string
+        - Cannot be empty
+        - Must match label key pattern
+        - Cannot use reserved labels
+        - Maximum length enforced
+        """
+
+        key = cls._validate_string(
+            key,
+            field="label_key",
+            max_length=MAX_LABEL_KEY_LENGTH,
+            allow_empty=False,
+        )
+
+        if key in RESERVED_LABEL_KEYS:
+            raise InvalidLabelError(
+                f"Reserved label key: {key}"
+            )
+
+        if key in PROMETHEUS_RESERVED_LABELS:
+            raise InvalidLabelError(
+                f"Prometheus reserved label key: {key}"
+            )
+
+        if STRICT_LABEL_CHECK:
+
+            if not LABEL_KEY_PATTERN.match(key):
+                raise InvalidLabelError(
+                    f"Invalid label key: {key}"
+                )
+
+        return key
+
+
+    @classmethod
+    def validate_label_value(
         cls,
         value: Any,
-        *,
-        field: str = "value",
-        allow_bool: bool = False,
-        allow_nan: bool = ALLOW_NAN,
-        allow_infinity: bool = ALLOW_INFINITY,
-    ) -> int | float | Decimal:
+    ) -> str:
         """
-        Validate a numeric value.
+        Validate label value.
 
-        Accepted
-        --------
+        Rules:
+        - Must be string
+        - Maximum length enforced
+        - Empty value allowed
+        """
+
+        if not isinstance(value, str):
+
+            raise InvalidLabelError(
+                "Label value must be string."
+            )
+
+        if len(value) > MAX_LABEL_VALUE_LENGTH:
+
+            raise InvalidLabelError(
+                "Label value exceeds maximum length."
+            )
+
+        return value
+
+
+    @classmethod
+    def validate_labels(
+        cls,
+        labels: MetricLabels | None,
+    ) -> dict[str, str]:
+        """
+        Validate metric labels.
+
+        Rules:
+        - Must be mapping
+        - Maximum label count enforced
+        - Keys validated
+        - Values validated
+        """
+
+        if labels is None:
+
+            if ALLOW_EMPTY_LABELS:
+                return {}
+
+            raise InvalidLabelError(
+                "Labels cannot be empty."
+            )
+
+
+        if not isinstance(labels, Mapping):
+
+            raise InvalidLabelError(
+                "Labels must be a mapping."
+            )
+
+
+        if len(labels) > MAX_LABELS:
+
+            raise InvalidLabelError(
+                "Too many labels."
+            )
+
+
+        validated: dict[str, str] = {}
+
+
+        for key, value in labels.items():
+
+            valid_key = cls.validate_label_key(
+                key
+            )
+
+            valid_value = cls.validate_label_value(
+                value
+            )
+
+            validated[valid_key] = valid_value
+
+
+        return validated
+    # ======================================================
+    # Attribute Validation
+    # ======================================================
+
+    @classmethod
+    def validate_attribute_key(
+        cls,
+        key: str,
+    ) -> str:
+        """
+        Validate attribute key.
+
+        Rules:
+        - Must be string
+        - Cannot be empty
+        - Must match attribute pattern
+        - Cannot use reserved keys
+        - Maximum length enforced
+        """
+
+        key = cls._validate_string(
+            key,
+            field="attribute_key",
+            max_length=MAX_ATTRIBUTE_KEY_LENGTH,
+            allow_empty=False,
+        )
+
+        if key in RESERVED_ATTRIBUTE_KEYS:
+
+            raise InvalidAttributeError(
+                f"Reserved attribute key: {key}"
+            )
+
+        if key.startswith("__"):
+
+            raise InvalidAttributeError(
+                f"Private attribute key forbidden: {key}"
+            )
+
+        if STRICT_ATTRIBUTE_CHECK:
+
+            if not ATTRIBUTE_KEY_PATTERN.match(key):
+
+                raise InvalidAttributeError(
+                    f"Invalid attribute key: {key}"
+                )
+
+        return key
+
+
+    @classmethod
+    def validate_attribute_value(
+        cls,
+        value: Any,
+    ) -> Any:
+        """
+        Validate attribute value.
+
+        Supported:
+        - bool
         - int
         - float
-        - Decimal
-
-        Rejected
-        --------
-        - complex
         - str
         - bytes
-        - containers
+
+        Reject:
+        - complex objects
+        - non finite floats
         """
 
         if isinstance(value, bool):
 
-            if allow_bool:
-                return value
+            return value
 
-            raise MetricValidationError(
-                f"{field} cannot be bool."
+
+        if isinstance(value, int):
+
+            return value
+
+
+        if isinstance(value, float):
+
+            if _CHECK_FINITE_FLOATS:
+
+                if not math.isfinite(value):
+
+                    raise InvalidAttributeError(
+                        "Attribute float must be finite."
+                    )
+
+            return value
+
+
+        if isinstance(value, str):
+
+            if len(value) > MAX_ATTRIBUTE_VALUE_LENGTH:
+
+                raise InvalidAttributeError(
+                    "Attribute string exceeds maximum length."
+                )
+
+            return value
+
+
+        if isinstance(value, bytes):
+
+            if len(value) > MAX_ATTRIBUTE_VALUE_LENGTH:
+
+                raise InvalidAttributeError(
+                    "Attribute bytes exceeds maximum length."
+                )
+
+            return value
+
+
+        raise InvalidAttributeError(
+            f"Unsupported attribute value type: {type(value).__name__}"
+        )
+
+
+    @classmethod
+    def validate_attributes(
+        cls,
+        attributes: MetricAttributes | None,
+    ) -> dict[str, Any]:
+        """
+        Validate metric attributes.
+
+        Rules:
+        - Must be mapping
+        - Maximum attribute count enforced
+        - Keys validated
+        - Values validated
+        """
+
+        if attributes is None:
+
+            if ALLOW_EMPTY_ATTRIBUTES:
+
+                return {}
+
+            raise InvalidAttributeError(
+                "Attributes cannot be empty."
             )
+
+
+        if not isinstance(attributes, Mapping):
+
+            raise InvalidAttributeError(
+                "Attributes must be a mapping."
+            )
+
+
+        if len(attributes) > MAX_ATTRIBUTES:
+
+            raise InvalidAttributeError(
+                "Too many attributes."
+            )
+
+
+        validated: dict[str, Any] = {}
+
+
+        for key, value in attributes.items():
+
+            valid_key = cls.validate_attribute_key(
+                key
+            )
+
+            valid_value = cls.validate_attribute_value(
+                value
+            )
+
+            validated[valid_key] = valid_value
+
+
+        return validated
+    # ======================================================
+    # Metadata & Tags Validation
+    # ======================================================
+
+    @classmethod
+    def validate_metadata(
+        cls,
+        metadata: MetricMetadata | None,
+    ) -> dict[str, Any]:
+        """
+        Validate metric metadata.
+
+        Rules:
+        - Must be mapping
+        - Maximum field count enforced
+        - Keys are validated strings
+        - Values must be JSON compatible primitives
+        """
+
+        if metadata is None:
+
+            return {}
+
+
+        if not isinstance(metadata, Mapping):
+
+            raise InvalidMetadataError(
+                "Metadata must be a mapping."
+            )
+
+
+        if len(metadata) > MAX_METADATA_FIELDS:
+
+            raise InvalidMetadataError(
+                "Too many metadata fields."
+            )
+
+
+        validated: dict[str, Any] = {}
+
+
+        for key, value in metadata.items():
+
+            key = cls._validate_string(
+                key,
+                field="metadata_key",
+                max_length=MAX_ATTRIBUTE_KEY_LENGTH,
+                allow_empty=False,
+            )
+
+
+            if key.startswith("__"):
+
+                raise InvalidMetadataError(
+                    f"Reserved metadata key: {key}"
+                )
+
+
+            if not cls._is_json_scalar(value):
+
+                raise InvalidMetadataError(
+                    f"Invalid metadata value for key: {key}"
+                )
+
+
+            validated[key] = value
+
+
+        return validated
+
+
+
+    @classmethod
+    def validate_tags(
+        cls,
+        tags: MetricTags | None,
+    ) -> tuple[str, ...]:
+        """
+        Validate metric tags.
+
+        Rules:
+        - Must be sequence
+        - Maximum tag count enforced
+        - Each tag must be string
+        - Tag format validated
+        """
+
+        if tags is None:
+
+            return ()
+
+
+        if isinstance(tags, (str, bytes)):
+
+            raise InvalidMetadataError(
+                "Tags must be a sequence of strings."
+            )
+
+
+        if not isinstance(tags, Sequence):
+
+            raise InvalidMetadataError(
+                "Tags must be a sequence."
+            )
+
+
+        if len(tags) > MAX_TAG_COUNT:
+
+            raise InvalidMetadataError(
+                "Too many tags."
+            )
+
+
+        validated: list[str] = []
+
+
+        for tag in tags:
+
+            tag = cls._validate_string(
+                tag,
+                field="tag",
+                max_length=MAX_TAG_LENGTH,
+                allow_empty=False,
+            )
+
+
+            if STRICT_ATTRIBUTE_CHECK:
+
+                if not TAG_PATTERN.match(tag):
+
+                    raise InvalidMetadataError(
+                        f"Invalid tag format: {tag}"
+                    )
+
+
+            validated.append(tag)
+
+
+        return tuple(validated)
+    # ======================================================
+    # Metric Type & Value Validation
+    # ======================================================
+
+    @classmethod
+    def validate_metric_type(
+        cls,
+        metric_type: str,
+    ) -> str:
+        """
+        Validate metric type.
+
+        Supported:
+        - counter
+        - gauge
+        - histogram
+        - summary
+        - timer
+        - observable_counter
+        - observable_gauge
+        - observable_up_down_counter
+        - up_down_counter
+        """
+
+        metric_type = cls._validate_string(
+            metric_type,
+            field="metric_type",
+            max_length=64,
+            allow_empty=False,
+        )
+
+
+        if metric_type not in SUPPORTED_METRIC_TYPES:
+
+            raise InvalidMetricTypeError(
+                f"Unsupported metric type: {metric_type}"
+            )
+
+
+        return metric_type
+
+
+
+    @classmethod
+    def validate_metric_value(
+        cls,
+        value: MetricValue,
+        *,
+        field: str = "value",
+        allow_bool: bool = False,
+    ) -> int | float | bool | Decimal:
+        """
+        Validate generic metric value.
+
+        Rules:
+        - Must be numeric
+        - Must be finite
+        - Bool rejected by default
+        - Decimal supported
+        """
+
+        if isinstance(value, bool):
+
+            if not allow_bool:
+
+                raise InvalidMetricTypeError(
+                    f"{field} cannot be bool."
+                )
+
+
+            return value
+
 
         if not isinstance(
             value,
@@ -1598,262 +1405,49 @@ class MetricValidator:
             ),
         ):
 
-            raise MetricValidationError(
+            raise InvalidMetricTypeError(
                 f"{field} must be numeric."
             )
 
-        if isinstance(
-            value,
-            Decimal,
-        ):
 
-            if not value.is_finite():
+        if isinstance(value, float):
+
+            if not math.isfinite(value):
 
                 raise MetricValidationError(
                     f"{field} must be finite."
                 )
 
-            return value
-
-        if isinstance(
-            value,
-            float,
-        ):
-
-            if (
-                math.isnan(value)
-                and not allow_nan
-            ):
-
-                raise MetricValidationError(
-                    f"{field} cannot be NaN."
-                )
-
-            if (
-                math.isinf(value)
-                and not allow_infinity
-            ):
-
-                raise MetricValidationError(
-                    f"{field} cannot be infinite."
-                )
 
         return value
+    # ======================================================
+    # Counter / Gauge Validation
+    # ======================================================
 
     @classmethod
-    def validate_integer(
+    def validate_counter_value(
         cls,
-        value: Any,
+        value: MetricValue,
         *,
-        field: str = "value",
-        minimum: int | None = None,
-        maximum: int | None = None,
-    ) -> int:
-        """
-        Validate integer.
-        """
-
-        value = cls.validate_numeric(
-            value,
-            field=field,
-        )
-
-        if not isinstance(
-            value,
-            int,
-        ) or isinstance(
-            value,
-            bool,
-        ):
-
-            raise MetricValidationError(
-                f"{field} must be an integer."
-            )
-
-        if (
-            minimum is not None
-            and value < minimum
-        ):
-
-            raise MetricValidationError(
-                f"{field} must be >= {minimum}."
-            )
-
-        if (
-            maximum is not None
-            and value > maximum
-        ):
-
-            raise MetricValidationError(
-                f"{field} must be <= {maximum}."
-            )
-
-        return value
-
-    @classmethod
-    def validate_float(
-        cls,
-        value: Any,
-        *,
-        field: str = "value",
-        minimum: float | None = None,
-        maximum: float | None = None,
-        allow_integer: bool = True,
-    ) -> float:
-        """
-        Validate floating-point value.
-        """
-
-        value = cls.validate_numeric(
-            value,
-            field=field,
-        )
-
-        if isinstance(
-            value,
-            Decimal,
-        ):
-            value = float(value)
-
-        elif isinstance(
-            value,
-            int,
-        ):
-
-            if not allow_integer:
-
-                raise MetricValidationError(
-                    f"{field} must be float."
-                )
-
-            value = float(value)
-
-        elif not isinstance(
-            value,
-            float,
-        ):
-
-            raise MetricValidationError(
-                f"{field} must be float."
-            )
-
-        if (
-            minimum is not None
-            and value < minimum
-        ):
-
-            raise MetricValidationError(
-                f"{field} must be >= {minimum}."
-            )
-
-        if (
-            maximum is not None
-            and value > maximum
-        ):
-
-            raise MetricValidationError(
-                f"{field} must be <= {maximum}."
-            )
-
-        return value
-    @classmethod
-    def validate_finite(
-        cls,
-        value: Any,
-        *,
-        field: str = "value",
+        field: str = "counter",
     ) -> int | float | Decimal:
         """
-        Validate that a numeric value is finite.
+        Validate Counter metric value.
 
-        Returns
-        -------
-        int | float | Decimal
+        Counter rules:
+        - Numeric
+        - Finite
+        - Not bool
+        - Non-negative
+        - Monotonic increasing semantics
         """
 
-        value = cls.validate_numeric(
+        value = cls.validate_metric_value(
             value,
             field=field,
+            allow_bool=False,
         )
 
-        if isinstance(
-            value,
-            Decimal,
-        ):
-
-            if not value.is_finite():
-
-                raise MetricValidationError(
-                    f"{field} must be finite."
-                )
-
-            return value
-
-        if isinstance(
-            value,
-            float,
-        ):
-
-            if not math.isfinite(
-                value,
-            ):
-
-                raise MetricValidationError(
-                    f"{field} must be finite."
-                )
-
-        return value
-
-    @classmethod
-    def validate_positive(
-        cls,
-        value: Any,
-        *,
-        field: str = "value",
-        allow_zero: bool = False,
-    ) -> int | float | Decimal:
-        """
-        Validate a positive numeric value.
-        """
-
-        value = cls.validate_finite(
-            value,
-            field=field,
-        )
-
-        if allow_zero:
-
-            if value < 0:
-
-                raise MetricValidationError(
-                    f"{field} must be >= 0."
-                )
-
-        else:
-
-            if value <= 0:
-
-                raise MetricValidationError(
-                    f"{field} must be > 0."
-                )
-
-        return value
-
-    @classmethod
-    def validate_non_negative(
-        cls,
-        value: Any,
-        *,
-        field: str = "value",
-    ) -> int | float | Decimal:
-        """
-        Validate a non-negative value.
-        """
-
-        value = cls.validate_finite(
-            value,
-            field=field,
-        )
 
         if value < 0:
 
@@ -1861,235 +1455,377 @@ class MetricValidator:
                 f"{field} must be non-negative."
             )
 
-        return value
-
-    @classmethod
-    def validate_range(
-        cls,
-        value: Any,
-        *,
-        minimum: int | float | Decimal | None = None,
-        maximum: int | float | Decimal | None = None,
-        inclusive_min: bool = True,
-        inclusive_max: bool = True,
-        field: str = "value",
-    ) -> int | float | Decimal:
-        """
-        Validate a numeric range.
-
-        Parameters
-        ----------
-        minimum
-            Lower bound.
-
-        maximum
-            Upper bound.
-
-        inclusive_min
-            Include lower bound.
-
-        inclusive_max
-            Include upper bound.
-        """
-
-        value = cls.validate_finite(
-            value,
-            field=field,
-        )
-
-        if minimum is not None:
-
-            if inclusive_min:
-
-                if value < minimum:
-
-                    raise MetricValidationError(
-                        f"{field} must be >= {minimum}."
-                    )
-
-            else:
-
-                if value <= minimum:
-
-                    raise MetricValidationError(
-                        f"{field} must be > {minimum}."
-                    )
-
-        if maximum is not None:
-
-            if inclusive_max:
-
-                if value > maximum:
-
-                    raise MetricValidationError(
-                        f"{field} must be <= {maximum}."
-                    )
-
-            else:
-
-                if value >= maximum:
-
-                    raise MetricValidationError(
-                        f"{field} must be < {maximum}."
-                    )
 
         return value
-    # ======================================================
-    # Metric Semantic Validation
-    # ======================================================
 
-    @classmethod
-    def validate_counter_value(
-        cls,
-        value: Any,
-        *,
-        field: str = "counter",
-        strict: bool = True,
-    ) -> int | float | Decimal:
-        """
-        Validate Counter value.
 
-        OpenTelemetry Counter semantics:
-            • numeric
-            • finite
-            • monotonic
-            • non-negative
-
-        Parameters
-        ----------
-        strict:
-            Reserved for future compatibility policies.
-
-        Returns
-        -------
-        int | float | Decimal
-        """
-
-        value = cls.validate_non_negative(
-            value,
-            field=field,
-        )
-
-        if strict:
-
-            if isinstance(value, bool):
-
-                raise InvalidMetricTypeError(
-                    f"{field} cannot be bool."
-                )
-
-        return value
 
     @classmethod
     def validate_up_down_counter_value(
         cls,
-        value: Any,
+        value: MetricValue,
         *,
         field: str = "up_down_counter",
-        strict: bool = True,
     ) -> int | float | Decimal:
         """
-        Validate UpDownCounter value.
+        Validate UpDownCounter metric value.
 
-        OpenTelemetry UpDownCounter:
-
-            • numeric
-            • finite
-            • positive or negative
-            • zero allowed
+        Rules:
+        - Numeric
+        - Finite
+        - Not bool
+        - Positive, negative or zero allowed
         """
 
-        value = cls.validate_finite(
+        return cls.validate_metric_value(
             value,
             field=field,
+            allow_bool=False,
         )
 
-        if strict:
 
-            if isinstance(value, bool):
-
-                raise InvalidMetricTypeError(
-                    f"{field} cannot be bool."
-                )
-
-        return value
 
     @classmethod
     def validate_gauge_value(
         cls,
-        value: Any,
+        value: MetricValue,
         *,
         field: str = "gauge",
-        strict: bool = True,
     ) -> int | float | Decimal:
         """
-        Validate Gauge value.
+        Validate Gauge metric value.
 
-        Gauge represents an instantaneous
-        measurement.
-
-        Allowed:
-
-            • positive
-            • negative
-            • zero
-
-        Rejected:
-
-            • NaN
-            • Infinity
+        Gauge rules:
+        - Numeric
+        - Finite
+        - Not bool
+        - Positive, negative and zero allowed
         """
 
-        value = cls.validate_finite(
+        return cls.validate_metric_value(
             value,
             field=field,
+            allow_bool=False,
+        )
+    # ======================================================
+    # Descriptor Validation
+    # ======================================================
+
+    @classmethod
+    def validate_descriptor(
+        cls,
+        descriptor: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """
+        Validate metric descriptor.
+
+        Descriptor expected fields:
+
+        Required:
+        - name
+        - type
+
+        Optional:
+        - namespace
+        - unit
+        - description
+        - labels
+        - attributes
+        - metadata
+        """
+
+        if not isinstance(descriptor, Mapping):
+
+            raise InvalidMetadataError(
+                "Descriptor must be a mapping."
+            )
+
+
+        required_fields = (
+            "name",
+            "type",
         )
 
-        if strict:
 
-            if isinstance(value, bool):
+        for field in required_fields:
 
-                raise InvalidMetricTypeError(
-                    f"{field} cannot be bool."
+            if field not in descriptor:
+
+                raise InvalidMetadataError(
+                    f"Descriptor missing required field: {field}"
                 )
+
+
+        cls.validate_name(
+            descriptor["name"],
+        )
+
+
+        cls.validate_metric_type(
+            descriptor["type"],
+        )
+
+
+        if "namespace" in descriptor:
+
+            cls.validate_namespace(
+                descriptor["namespace"],
+            )
+
+
+        if "unit" in descriptor:
+
+            cls.validate_unit(
+                descriptor["unit"],
+            )
+
+
+        if "description" in descriptor:
+
+            cls.validate_description(
+                descriptor["description"],
+            )
+
+
+        if "labels" in descriptor:
+
+            cls.validate_labels(
+                descriptor["labels"],
+            )
+
+
+        if "attributes" in descriptor:
+
+            cls.validate_attributes(
+                descriptor["attributes"],
+            )
+
+
+        if "metadata" in descriptor:
+
+            cls.validate_metadata(
+                descriptor["metadata"],
+            )
+
+
+        return descriptor
+    # ======================================================
+    # Internal Helpers
+    # ======================================================
+
+    @classmethod
+    def _validate_string(
+        cls,
+        value: Any,
+        *,
+        field: str,
+        max_length: int | None = None,
+        allow_empty: bool = False,
+    ) -> str:
+        """
+        Validate string value.
+        """
+
+        if not isinstance(value, str):
+
+            raise MetricValidationError(
+                f"{field} must be string."
+            )
+
+
+        if not allow_empty and not value:
+
+            raise MetricValidationError(
+                f"{field} cannot be empty."
+            )
+
+
+        if max_length is not None:
+
+            cls._validate_length(
+                value,
+                field=field,
+                maximum=max_length,
+            )
+
 
         return value
 
-    # ======================================================
-    # Internal Metric Helpers
-    # ======================================================
+
 
     @classmethod
     def _validate_metric_numeric(
         cls,
         value: Any,
         *,
-        field: str,
+        field: str = "value",
     ) -> int | float | Decimal:
         """
-        Internal helper shared by all
-        metric validators.
+        Validate metric numeric value.
 
-        Ensures the value is:
-
-        • numeric
-        • finite
-        • not bool
+        Rules:
+        - int
+        - float
+        - Decimal
+        - finite
+        - not bool
         """
 
-        value = cls.validate_finite(
-            value,
-            field=field,
-        )
-
-        if isinstance(
-            value,
-            bool,
-        ):
+        if isinstance(value, bool):
 
             raise InvalidMetricTypeError(
                 f"{field} cannot be bool."
             )
 
+
+        if not isinstance(
+            value,
+            (
+                int,
+                float,
+                Decimal,
+            ),
+        ):
+
+            raise InvalidMetricTypeError(
+                f"{field} must be numeric."
+            )
+
+
+        return cls._validate_finite(
+            value,
+            field=field,
+        )
+
+
+
+    @classmethod
+    def _validate_collection_size(
+        cls,
+        value: Any,
+        *,
+        field: str,
+        maximum: int,
+    ) -> None:
+        """
+        Validate collection size.
+        """
+
+        try:
+
+            size = len(value)
+
+        except TypeError:
+
+            raise MetricValidationError(
+                f"{field} must be sized collection."
+            )
+
+
+        if size > maximum:
+
+            raise MetricValidationError(
+                f"{field} exceeds maximum size {maximum}."
+            )
+
+
+
+    @classmethod
+    def _validate_reserved(
+        cls,
+        value: str,
+        *,
+        field: str,
+        reserved: frozenset[str] | set[str],
+    ) -> str:
+        """
+        Validate reserved names.
+        """
+
+        if value in reserved:
+
+            raise MetricValidationError(
+                f"{field} uses reserved value: {value}"
+            )
+
+
         return value
-                                                                        
+
+
+
+    @classmethod
+    def _validate_length(
+        cls,
+        value: str,
+        *,
+        field: str,
+        maximum: int,
+        minimum: int = 0,
+    ) -> str:
+        """
+        Validate string length.
+        """
+
+        length = len(value)
+
+
+        if length < minimum:
+
+            raise MetricValidationError(
+                f"{field} length must be >= {minimum}."
+            )
+
+
+        if length > maximum:
+
+            raise MetricValidationError(
+                f"{field} length must be <= {maximum}."
+            )
+
+
+        return value
+
+
+
+    @classmethod
+    def _validate_finite(
+        cls,
+        value: int | float | Decimal,
+        *,
+        field: str = "value",
+    ) -> int | float | Decimal:
+        """
+        Validate numeric finite value.
+        """
+
+        if isinstance(value, Decimal):
+
+            if not value.is_finite():
+
+                raise MetricValidationError(
+                    f"{field} must be finite."
+                )
+
+            return value
+
+
+        if isinstance(value, float):
+
+            if not math.isfinite(value):
+
+                raise MetricValidationError(
+                    f"{field} must be finite."
+                )
+
+
+        return value
+# ======================================================
+# Module Finalization
+# ======================================================
+
+# Ensure public API remains stable.
+
+__all__ = [
+    "MetricValidator",
+    "VALIDATION_VERSION",
+]                                                                

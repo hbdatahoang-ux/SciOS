@@ -2,15 +2,12 @@
 SciOS QTC Compression
 =====================
 
-Foundation abstraction for the Quantum Temporal Compression (QTC)
+Foundation abstraction for the SciOS Quantum Temporal Compression (QTC)
 subsystem.
 
 A compression transforms symbolic or temporal information into a
 compact representation while preserving the information required for
 future reasoning.
-
-This module defines the stable public API for every compression
-algorithm implemented in SciOS.
 
 Design Principles
 -----------------
@@ -18,7 +15,10 @@ Design Principles
 - Stateless compression algorithms
 - Runtime independent
 - Generic type-safe API
+- Backward compatible
 - Extensible by inheritance
+
+Python 3.11+
 """
 
 from __future__ import annotations
@@ -46,21 +46,15 @@ C = TypeVar("C")
 
 
 class CompressionError(Exception):
-    """
-    Base class for all compression errors.
-    """
+    """Base class for compression errors."""
 
 
 class CompressionValidationError(CompressionError):
-    """
-    Invalid input sequence.
-    """
+    """Raised when an input sequence is invalid."""
 
 
 class CompressionIntegrityError(CompressionError):
-    """
-    Decompressed data failed integrity validation.
-    """
+    """Raised when decompression verification fails."""
 
 
 # ==========================================================
@@ -71,7 +65,7 @@ class CompressionIntegrityError(CompressionError):
 @dataclass(slots=True, frozen=True)
 class CompressionMetadata:
     """
-    Immutable metadata describing a compression algorithm.
+    Immutable compression metadata.
     """
 
     name: str
@@ -97,7 +91,7 @@ class CompressionMetadata:
 @dataclass(slots=True, frozen=True)
 class CompressionResult(Generic[C]):
     """
-    Result produced by a compression algorithm.
+    Result returned by a compression algorithm.
     """
 
     data: C
@@ -113,8 +107,6 @@ class CompressionResult(Generic[C]):
         """
         Compression ratio.
 
-        Returns
-        -------
         compressed_size / original_size
         """
 
@@ -122,6 +114,14 @@ class CompressionResult(Generic[C]):
             return 1.0
 
         return self.compressed_size / self.original_size
+
+    @property
+    def compression_ratio(self) -> float:
+        """
+        Alias for ratio.
+        """
+
+        return self.ratio
 
     @property
     def saving(self) -> float:
@@ -134,7 +134,7 @@ class CompressionResult(Generic[C]):
     @property
     def saved(self) -> int:
         """
-        Number of removed elements.
+        Number of removed items.
         """
 
         return self.original_size - self.compressed_size
@@ -144,6 +144,15 @@ class CompressionResult(Generic[C]):
 
     def __bool__(self) -> bool:
         return self.compressed_size > 0
+
+    def __repr__(self) -> str:
+
+        return (
+            f"CompressionResult("
+            f"original={self.original_size}, "
+            f"compressed={self.compressed_size}, "
+            f"ratio={self.ratio:.3f})"
+        )
 
 
 # ==========================================================
@@ -155,11 +164,13 @@ class QTCCompression(ABC, Generic[T, C]):
     """
     Abstract compression algorithm.
 
-    Implementations should be stateless.
-
-    Runtime state, caches, devices, schedulers and execution
-    policies belong to higher layers of SciOS.
+    Compression implementations should remain stateless.
     """
+
+    #
+    # Backward compatibility.
+    #
+    result_type = CompressionResult
 
     def __init__(
         self,
@@ -174,18 +185,10 @@ class QTCCompression(ABC, Generic[T, C]):
 
     @property
     def metadata(self) -> CompressionMetadata:
-        """
-        Immutable algorithm metadata.
-        """
-
         return self._metadata
 
     @property
     def name(self) -> str:
-        """
-        Algorithm name.
-        """
-
         return self._metadata.name
 
     # ------------------------------------------------------
@@ -199,12 +202,17 @@ class QTCCompression(ABC, Generic[T, C]):
         """
         Validate an input sequence.
 
-        Subclasses may override.
+        Subclasses may extend this implementation.
         """
 
         if sequence is None:
             raise CompressionValidationError(
                 "Input sequence cannot be None."
+            )
+
+        if not isinstance(sequence, Sequence):
+            raise CompressionValidationError(
+                "Input must implement Sequence."
             )
 
     # ------------------------------------------------------
@@ -217,7 +225,7 @@ class QTCCompression(ABC, Generic[T, C]):
         sequence: Sequence[T],
     ) -> CompressionResult[C]:
         """
-        Compress an input sequence.
+        Compress a sequence.
         """
 
     @abstractmethod
@@ -230,7 +238,21 @@ class QTCCompression(ABC, Generic[T, C]):
         """
 
     # ------------------------------------------------------
-    # Optional Verification
+    # Backward Compatibility
+    # ------------------------------------------------------
+
+    def compress_into(
+        self,
+        sequence: Sequence[T],
+    ) -> CompressionResult[C]:
+        """
+        Legacy alias for compress().
+        """
+
+        return self.compress(sequence)
+
+    # ------------------------------------------------------
+    # Verification
     # ------------------------------------------------------
 
     def verify(
@@ -241,13 +263,14 @@ class QTCCompression(ABC, Generic[T, C]):
         """
         Verify decompression integrity.
 
-        Default implementation performs equality comparison.
+        Default implementation compares the
+        restored sequence element-by-element.
         """
 
         return list(original) == list(restored)
 
     # ------------------------------------------------------
-    # Callable Interface
+    # Callable
     # ------------------------------------------------------
 
     def __call__(
@@ -260,7 +283,7 @@ class QTCCompression(ABC, Generic[T, C]):
         return self.compress(sequence)
 
     # ------------------------------------------------------
-    # Representation
+    # Python Protocols
     # ------------------------------------------------------
 
     def __repr__(self) -> str:
@@ -271,3 +294,19 @@ class QTCCompression(ABC, Generic[T, C]):
             f"lossless={self.metadata.lossless}, "
             f"streaming={self.metadata.supports_streaming})"
         )
+
+    def __str__(self) -> str:
+        return self.name
+
+    def __eq__(
+        self,
+        other: object,
+    ) -> bool:
+
+        if not isinstance(other, QTCCompression):
+            return NotImplemented
+
+        return self.metadata == other.metadata
+
+    def __hash__(self) -> int:
+        return hash(self.metadata)

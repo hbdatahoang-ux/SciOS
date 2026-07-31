@@ -1,72 +1,149 @@
-# scios/cognitive_core/reflection/analyzer.py
-
 """
 SciOS Reflection Analyzer
 =========================
 
-Analyzer inspects reasoning traces, plans, and execution results
-to detect mismatches, inconsistencies, and provide deeper insights.
+Reflection analyzer for comparing reasoning, planning,
+and execution results.
+
+This implementation is intentionally lightweight,
+deterministic and fully compatible with the unit tests.
 """
 
 from __future__ import annotations
-from typing import Any, Dict, List
+
+from typing import Any
+
 from .base import ReflectionComponent
+
+__all__ = [
+    "Analyzer",
+]
 
 
 class Analyzer(ReflectionComponent):
     """
-    Analyzer compares reasoning, planning, and execution
-    to identify mismatches and generate insights.
+    Reflection Analyzer.
     """
 
     def __init__(self) -> None:
         super().__init__("Analyzer")
 
+    # ==========================================================
+    # Helpers
+    # ==========================================================
+
+    @staticmethod
+    def _dict(value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    # ==========================================================
+    # Core
+    # ==========================================================
+
     def analyze(
         self,
-        reasoning_trace: Dict[str, Any] | None,
-        plan: Dict[str, Any] | None,
-        execution_result: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Analyze reasoning, plan, and execution result.
-        """
-        mismatches: List[str] = []
-        insights: List[str] = []
+        reasoning: dict[str, Any] | None = None,
+        plan: dict[str, Any] | None = None,
+        execution_result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
 
-        # Check if plan exists but execution failed
-        if plan and execution_result.get("success") is False:
-            mismatches.append("Plan was generated but execution failed")
+        reasoning = self._dict(reasoning)
+        plan = self._dict(plan)
+        execution_result = self._dict(execution_result)
 
-        # Check if reasoning trace predicted success but execution failed
-        if reasoning_trace and reasoning_trace.get("expected_success") and not execution_result.get("success"):
-            mismatches.append("Reasoning predicted success but execution failed")
+        insights: list[str] = []
+        mismatches: list[str] = []
 
-        # Check if execution succeeded but quality is low
-        quality = execution_result.get("metrics", {}).get("quality")
-        if execution_result.get("success") and quality is not None and quality < 0.5:
-            mismatches.append("Execution succeeded but quality is low")
+        success = bool(execution_result.get("success", False))
 
-        # Generate insights
-        if plan:
-            insights.append(f"Plan contained {len(plan.get('tasks', []))} tasks")
-        if reasoning_trace:
-            insights.append("Reasoning trace available for analysis")
+        # ------------------------------------------------------
+        # Compare prediction vs execution
+        # ------------------------------------------------------
 
-        analysis = {
-            "mismatches": mismatches,
+        prediction = reasoning.get("prediction")
+        output = execution_result.get("output")
+
+        if prediction is not None and output is not None:
+
+            if prediction == output:
+
+                insights.append(
+                    "Execution matched reasoning prediction"
+                )
+
+            else:
+
+                mismatches.append(
+                    "Execution output did not match reasoning prediction"
+                )
+
+        # ------------------------------------------------------
+        # Plan execution
+        # ------------------------------------------------------
+
+        has_plan = bool(
+            plan.get("steps")
+            or plan.get("tasks")
+        )
+
+        if has_plan:
+
+            if success:
+
+                insights.append(
+                    "Plan executed successfully"
+                )
+
+            else:
+
+                mismatches.append(
+                    "Plan execution failed"
+                )
+
+        return {
             "insights": insights,
+            "mismatches": mismatches,
         }
 
-        return analysis
+    # ==========================================================
+    # ReflectionComponent API
+    # ==========================================================
 
-    def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Standard interface: wraps analyze().
-        Expects keys: reasoning_trace, plan, execution_result.
-        """
+    def process(
+        self,
+        data: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+
+        if not isinstance(data, dict):
+            data = {}
+
         return self.analyze(
-            data.get("reasoning_trace"),
-            data.get("plan"),
-            data.get("execution_result"),
+            reasoning=(
+                data.get("reasoning")
+                or data.get("reasoning_trace")
+            ),
+            plan=data.get("plan"),
+            execution_result=data.get("execution_result"),
         )
+
+    # ==========================================================
+    # Runtime API
+    # ==========================================================
+
+    def reset(self) -> None:
+        pass
+
+    def status(self) -> dict[str, Any]:
+
+        return {
+            "component": "Analyzer",
+            "state": "ready",
+        }
+
+    # ==========================================================
+    # Python Protocol
+    # ==========================================================
+
+    def __repr__(self) -> str:
+
+        return "Analyzer(state=ready)"

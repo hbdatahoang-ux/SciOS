@@ -91,8 +91,12 @@ def test_engine_hooks_success() -> None:
 # ==========================================================
 
 def test_engine_hooks_failure() -> None:
+    """
+    Verify that the after_failure hook is invoked exactly once
+    when execution fails.
+    """
 
-    events: list[tuple[str, object]] = []
+    events: list[tuple[str, str]] = []
 
     engine = ExecutionEngine()
 
@@ -113,14 +117,35 @@ def test_engine_hooks_failure() -> None:
         failing,
     )
 
-    assert ctx.status == "failed"
+    # ------------------------------------------------------
+    # Runtime state
+    # ------------------------------------------------------
 
-    assert any(
-        e[0] == "after_failure"
-        and "boom" in e[1]
-        for e in events
+    assert ctx.status == "failed"
+    assert ctx.failed
+
+    # ------------------------------------------------------
+    # Exception
+    # ------------------------------------------------------
+
+    assert isinstance(
+        ctx.error,
+        ValueError,
     )
 
+    assert str(
+        ctx.error,
+    ) == "boom"
+
+    # ------------------------------------------------------
+    # Hook execution
+    # ------------------------------------------------------
+
+    assert len(events) == 1
+
+    assert events[0][0] == "after_failure"
+
+    assert "boom" in events[0][1]
 
 # ==========================================================
 # Multiple Hooks

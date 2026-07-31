@@ -2043,6 +2043,7 @@ class TraceManager:
                 self._encoding,
 
         }
+        
         # ==========================================================================
         # Part 2.4
         # Runtime Components
@@ -2108,8 +2109,9 @@ class TraceManager:
 
         self._trace_count: int = 0
 
-        self._span_count: int = 0
+        self._completed_trace_count: int = 0
 
+        self._span_count: int = 0
         # ------------------------------------------------------------------
         # Component Limits
         # ------------------------------------------------------------------
@@ -2130,6 +2132,58 @@ class TraceManager:
             DEFAULT_MAX_PIPELINES
         )
 
+        # ------------------------------------------------------------------
+        # Default Component Registration
+        # ------------------------------------------------------------------
+
+        self._processors["default"] = (
+            self._processor
+        )
+
+        self._processor_count = len(
+            self._processors
+        )
+
+        # ------------------------------------------------------------------
+        # Default Tracer Bootstrap
+        # ------------------------------------------------------------------
+
+        try:
+
+            from .trace import Tracer
+
+            tracer = Tracer(
+                name="default",
+            )
+
+            try:
+
+                if hasattr(
+                    tracer,
+                    "initialize",
+                ):
+                    tracer.initialize()
+
+                if hasattr(
+                    tracer,
+                    "start",
+                ):
+                    tracer.start()
+
+            except Exception:
+                pass
+
+            self._tracers["default"] = tracer
+
+            self._tracer_count = len(
+                self._tracers
+            )
+
+        except Exception as exc:
+
+            raise ManagerInitializationError(
+                "Failed to initialize default tracer."
+            ) from exc
         # ------------------------------------------------------------------
         # Component Registry
         # ------------------------------------------------------------------
@@ -2158,22 +2212,7 @@ class TraceManager:
                 self._pipelines,
 
         }
-
-        # ------------------------------------------------------------------
-        # Default Component Registration
-        # ------------------------------------------------------------------
-
-        self._processors["default"] = (
-            self._processor
-        )
-
-        self._processor_count = len(
-            self._processors
-        )
-
-        self._components["processors"] = (
-            self._processors
-        )
+        
         # ==========================================================================
         # Part 2.5
         # Runtime State
@@ -5439,53 +5478,85 @@ class TraceManager:
                 "TraceManager is closed."
             )
 
-        tracer = None
+        with self._lock:
 
-        if self._tracers:
-            tracer = next(
-                iter(self._tracers.values())
+            tracer = self._tracers.get(
+                "default"
             )
 
-        if tracer is None:
-            raise ManagerValidationError(
-                "No tracer registered."
+            if (
+                tracer is None
+                and self._tracers
+            ):
+                tracer = next(
+                    iter(
+                        self._tracers.values()
+                    )
+                )
+
+            if tracer is None:
+                raise ManagerValidationError(
+                    "No tracer registered."
+                )
+
+            if hasattr(
+                tracer,
+                "create_trace",
+            ):
+
+                trace = tracer.create_trace(
+                    name=name,
+                    **kwargs,
+                )
+
+            elif hasattr(
+                tracer,
+                "start_trace",
+            ):
+
+                # backward compatibility
+                trace = tracer.start_trace(
+                    name=name,
+                    context=self._context,
+                    **kwargs,
+                )
+
+            else:
+
+                raise ManagerValidationError(
+                    "Tracer does not support trace creation."
+                )
+
+            trace_id = getattr(
+                trace,
+                "trace_id",
+                str(uuid.uuid4()),
             )
 
-        if not hasattr(
-            tracer,
-            "start_trace",
-        ):
-            raise ManagerValidationError(
-                "Tracer does not support start_trace()."
+            self._active_traces[
+                trace_id
+            ] = trace
+
+            self._current_trace = trace
+            self._current_span = None
+
+            self._trace_count = len(
+                self._active_traces
             )
 
-        trace = tracer.start_trace(
-            name=name,
-            context=self._context,
-            **kwargs,
-        )
+            self._statistics.trace_count = (
+                self._trace_count
+            )
 
-        trace_id = getattr(
-            trace,
-            "trace_id",
-            str(uuid.uuid4()),
-        )
+            self._last_activity = time.time()
+            self._updated_at = (
+                self._last_activity
+            )
+            self._statistics.updated_at = (
+                self._last_activity
+            )
 
-        self._active_traces[
-            trace_id
-        ] = trace
-
-        self._current_trace = trace
-        self._current_span = None
-
-        self._statistics.trace_count = len(
-            self._active_traces
-        )
-
-        self._last_activity = time.time()
-        self._updated_at = self._last_activity
-
-        return trace
+            return trace
 
 
     def finish_trace(
@@ -5524,12 +5595,21 @@ class TraceManager:
             self._current_trace = None
             self._current_span = None
 
-        self._statistics.trace_count = len(
+        self._trace_count = len(
             self._active_traces
         )
 
+        self._completed_trace_count += 1
+
+        self._statistics.trace_count = (
+            self._trace_count
+        )
+
         self._last_activity = time.time()
-        self._updated_at = self._last_activity
+
+        self._updated_at = (
+            self._last_activity
+        )
 
         return self
 
@@ -5542,9 +5622,11 @@ class TraceManager:
         Return trace by id.
         """
 
-        return self._active_traces.get(
-            trace_id
-        )
+        with self._lock:
+
+            return self._active_traces.get(
+                trace_id
+            )
 
 
     def remove_trace(
@@ -5555,26 +5637,38 @@ class TraceManager:
         Remove a trace without finishing it.
         """
 
-        trace = self._active_traces.pop(
-            trace_id,
-            None,
-        )
+        with self._lock:
 
-        if trace is self._current_trace:
-            self._current_trace = None
-            self._current_span = None
+            trace = self._active_traces.pop(
+                trace_id,
+                None,
+            )
 
-        self._statistics.trace_count = len(
-            self._active_traces
-        )
+            if trace is self._current_trace:
 
-        self._updated_at = time.time()
+                self._current_trace = None
+                self._current_span = None
 
-        return self
+            self._trace_count = len(
+                self._active_traces
+            )
+
+            self._statistics.trace_count = (
+                self._trace_count
+            )
+
+            self._updated_at = time.time()
+            self._statistics.updated_at = (
+                self._updated_at
+            )
+
+            return self
 
 
     @property
-    def current_trace(self) -> Optional[Any]:
+    def current_trace(
+        self,
+    ) -> Optional[Any]:
         """
         Current active trace.
         """
@@ -5583,14 +5677,18 @@ class TraceManager:
 
 
     @property
-    def active_traces(self) -> Dict[str, Any]:
+    def active_traces(
+        self,
+    ) -> Dict[str, Any]:
         """
         Active trace mapping.
         """
 
-        return dict(
-            self._active_traces
-        )
+        with self._lock:
+
+            return dict(
+                self._active_traces
+            )
 
 # ==========================================================================
 # Part 5.1 — set_current()
@@ -5695,6 +5793,11 @@ class TraceManager:
                 self._active_spans
             )
 
+            self._completed_trace_count = max(
+                self._completed_trace_count,
+                other._completed_trace_count,
+            )
+
             self._statistics.trace_count = (
                 self._trace_count
             )
@@ -5709,8 +5812,22 @@ class TraceManager:
                 self._updated_at
             )
 
-            return self
+        return self
 
+
+# ==========================================================================
+# Part 5.4.1 — Properties
+# ==========================================================================
+
+    @property
+    def completed_trace_count(
+        self,
+    ) -> int:
+        """
+        Number of completed traces.
+        """
+
+        return self._completed_trace_count
 # ==========================================================================
 # Part 5.5 — merge()
 # ==========================================================================

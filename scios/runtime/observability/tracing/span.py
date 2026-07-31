@@ -1,58 +1,35 @@
 """
-SciOS-NG Runtime Observability
+SciOS Runtime Observability
 
-Trace Span Runtime Core
+Trace Span Runtime
 
 File:
     scios/runtime/observability/tracing/span.py
 
 Description:
-    Core implementation foundation for distributed tracing spans.
-
-Part 1. Foundation
-Part 1.1:
-    - Module Docstring
-    - Future Annotations
-    - Imports
-    - Constants
+    Core implementation of the SciOS runtime tracing span.
 """
 
-
-# ==============================================================================
-# Future
-# ==============================================================================
-
 from __future__ import annotations
-
 
 
 # ==============================================================================
 # Imports
 # ==============================================================================
 
-# Standard Library
-
 import copy
-
 import json
-
-import threading
-
 import time
-
 import uuid
-
 
 from abc import (
     ABC,
     abstractmethod,
 )
 
-
 from collections import (
     deque,
 )
-
 
 from dataclasses import (
     asdict,
@@ -60,335 +37,218 @@ from dataclasses import (
     field,
 )
 
-
 from enum import (
     Enum,
     IntFlag,
     auto,
 )
 
-
 from pathlib import (
     Path,
 )
-
 
 from threading import (
     RLock,
 )
 
-
 from types import (
     TracebackType,
 )
-
 
 from typing import (
     Any,
     Callable,
     Deque,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
     Mapping,
-    MutableMapping,
     Optional,
     Sequence,
-    Set,
-    Tuple,
-    Type,
     TypeAlias,
-    Union,
 )
-
-
 
 # ==============================================================================
-# Constants
+# Part 1.1 – Constants
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# Module Metadata
+# ------------------------------------------------------------------------------
 
-SPAN_NAME: str = (
-    "TraceSpan"
+MODULE_NAME: str = "TraceSpan"
+
+MODULE_DESCRIPTION: str = (
+    "SciOS Runtime Trace Span"
 )
 
-
-SPAN_DESCRIPTION: str = (
-    "SciOS-NG Trace Span Runtime Object"
-)
-
-
-SPAN_VERSION: str = (
-    "0.1.0"
-)
-
-DEFAULT_SPAN_NAME = "span"
-
-DEFAULT_SPAN_KIND = "internal"
-
-DEFAULT_SPAN_STATUS = "unset"
-
-DEFAULT_SPAN_TIMEOUT = 30.0
+MODULE_VERSION: str = "0.1.0"
 
 
 # ------------------------------------------------------------------------------
-# Default configuration
+# Default Configuration
 # ------------------------------------------------------------------------------
 
+DEFAULT_SPAN_NAME: str = "span"
 
-DEFAULT_KIND: str = (
-    "internal"
-)
+DEFAULT_SPAN_KIND: str = "internal"
 
+DEFAULT_SPAN_STATUS: str = "unset"
 
-DEFAULT_STATUS: str = (
-    "unset"
-)
+DEFAULT_ENABLED: bool = True
 
+DEFAULT_AUTO_START: bool = False
 
-DEFAULT_ENCODING: str = (
-    "utf-8"
-)
+DEFAULT_AUTO_FINISH: bool = False
 
-
-DEFAULT_HISTORY_LIMIT: int = (
-    1024
-)
-
-
-DEFAULT_CACHE_SIZE: int = (
-    256
-)
-
-
-DEFAULT_ENABLED: bool = (
-    True
-)
-
-
-DEFAULT_AUTO_START: bool = (
-    False
-)
-
-
-DEFAULT_AUTO_FINISH: bool = (
-    False
-)
-
+DEFAULT_TIMEOUT: float = 30.0
 
 
 # ------------------------------------------------------------------------------
-# Limits
+# Runtime Limits
 # ------------------------------------------------------------------------------
 
+DEFAULT_ATTRIBUTES_LIMIT: int = 128
 
-DEFAULT_ATTRIBUTES_LIMIT: int = (
-    128
-)
+DEFAULT_EVENTS_LIMIT: int = 512
 
+DEFAULT_LINKS_LIMIT: int = 64
 
-DEFAULT_EVENTS_LIMIT: int = (
-    512
-)
+DEFAULT_TAGS_LIMIT: int = 64
 
+DEFAULT_HISTORY_LIMIT: int = 1024
 
-DEFAULT_LINKS_LIMIT: int = (
-    64
-)
-
-
-DEFAULT_TAG_LIMIT: int = (
-    64
-)
-
-
-DEFAULT_CHILD_LIMIT: int = (
-    1024
-)
-
-
-
-# ------------------------------------------------------------------------------
-# Runtime metadata
-# ------------------------------------------------------------------------------
-
-
-SPAN_SCHEMA_VERSION: str = (
-    "1.0"
-)
-
-
-LOGGER_NAME: str = (
-    "scios.runtime.observability.tracing.span"
-)
-
+DEFAULT_CACHE_SIZE: int = 256
 
 
 # ------------------------------------------------------------------------------
 # Serialization
 # ------------------------------------------------------------------------------
 
+DEFAULT_ENCODING: str = "utf-8"
 
-DEFAULT_INDENT: int = (
-    2
-)
+DEFAULT_INDENT: int = 2
 
+# Alias for compatibility with older code
+DEFAULT_JSON_INDENT: int = DEFAULT_INDENT
 
-DEFAULT_JSON_SORT_KEYS: bool = (
-    True
-)
+DEFAULT_JSON_SORT_KEYS: bool = True
 
+DEFAULT_JSON_ENSURE_ASCII: bool = False
+
+DEFAULT_JSON_ALLOW_NAN: bool = False
 
 
 # ------------------------------------------------------------------------------
-# Runtime UUID
+# UUID / Identifier
 # ------------------------------------------------------------------------------
 
+UUID_HEX_LENGTH: int = 32
 
-SPAN_ID_LENGTH: int = (
-    32
+TRACE_ID_LENGTH: int = UUID_HEX_LENGTH
+
+SPAN_ID_LENGTH: int = UUID_HEX_LENGTH
+
+
+# ------------------------------------------------------------------------------
+# Logger
+# ------------------------------------------------------------------------------
+
+LOGGER_NAME: str = (
+    "scios.runtime.observability.tracing.span"
 )
 
-
-TRACE_ID_LENGTH: int = (
-    32
-)
 # ==============================================================================
-# Type Aliases
+# Part 1.2 – Type Aliases
 # ==============================================================================
 
-
 # ------------------------------------------------------------------------------
-# Identifier Types
+# Identity
 # ------------------------------------------------------------------------------
-
 
 TraceId: TypeAlias = str
 
-
 SpanId: TypeAlias = str
-
 
 ParentSpanId: TypeAlias = str
 
 
-
 # ------------------------------------------------------------------------------
-# Attribute Types
+# Attributes
 # ------------------------------------------------------------------------------
-
 
 AttributeKey: TypeAlias = str
 
-
 AttributeValue: TypeAlias = Any
 
-
-Attributes: TypeAlias = Dict[
+Attributes: TypeAlias = dict[
     AttributeKey,
     AttributeValue,
 ]
 
 
-
 # ------------------------------------------------------------------------------
-# Event Types
+# Events
 # ------------------------------------------------------------------------------
 
-
-TraceEvent: TypeAlias = Dict[
+TraceEvent: TypeAlias = dict[
     str,
     Any,
 ]
 
-
-TraceAnnotation: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-
-# ------------------------------------------------------------------------------
-# Link Types
-# ------------------------------------------------------------------------------
-
-
-TraceLink: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-
-# ------------------------------------------------------------------------------
-# Metadata Types
-# ------------------------------------------------------------------------------
-
-
-TraceMetadata: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-TraceContextData: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-
-# ------------------------------------------------------------------------------
-# Runtime Storage Types
-# ------------------------------------------------------------------------------
-
-
-TraceCache: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-TraceHistory: TypeAlias = Deque[
-    Any,
-]
-
-
-
-# ------------------------------------------------------------------------------
-# Collection Types
-# ------------------------------------------------------------------------------
-
-
-SpanCollection: TypeAlias = Dict[
-    SpanId,
-    Any,
-]
-
-
-EventCollection: TypeAlias = List[
+EventCollection: TypeAlias = list[
     TraceEvent,
 ]
 
 
-LinkCollection: TypeAlias = List[
+# ------------------------------------------------------------------------------
+# Links
+# ------------------------------------------------------------------------------
+
+TraceLink: TypeAlias = dict[
+    str,
+    Any,
+]
+
+LinkCollection: TypeAlias = list[
     TraceLink,
 ]
 
 
+# ------------------------------------------------------------------------------
+# Metadata
+# ------------------------------------------------------------------------------
+
+TraceMetadata: TypeAlias = dict[
+    str,
+    Any,
+]
+
 
 # ------------------------------------------------------------------------------
-# Callback / Hook Types
+# Collections
 # ------------------------------------------------------------------------------
 
+SpanCollection: TypeAlias = dict[
+    SpanId,
+    "TraceSpan",
+]
+
+HistoryCollection: TypeAlias = Deque[
+    dict[str, Any]
+]
+
+CacheMap: TypeAlias = dict[
+    str,
+    Any,
+]
+
+
+# ------------------------------------------------------------------------------
+# Hooks / Callbacks
+# ------------------------------------------------------------------------------
 
 TraceHook: TypeAlias = Callable[
     ...,
     None,
 ]
-
 
 TraceCallback: TypeAlias = Callable[
     ...,
@@ -396,82 +256,59 @@ TraceCallback: TypeAlias = Callable[
 ]
 
 
-TraceFilter: TypeAlias = Callable[
-    ...,
-    bool,
+# ------------------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------------------
+
+SpanConfiguration: TypeAlias = dict[
+    str,
+    Any,
 ]
 
-
-
-# ------------------------------------------------------------------------------
-# Configuration Types
-# ------------------------------------------------------------------------------
-
-
-SpanOptions: TypeAlias = Dict[
+SpanOptions: TypeAlias = dict[
     str,
     Any,
 ]
 
 
-SpanConfiguration: TypeAlias = Dict[
+# ------------------------------------------------------------------------------
+# Serialization
+# ------------------------------------------------------------------------------
+
+SerializedSpan: TypeAlias = dict[
+    str,
+    Any,
+]
+
+SerializedSnapshot: TypeAlias = dict[
     str,
     Any,
 ]
 
 
-SpanAttributes: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-
 # ------------------------------------------------------------------------------
-# Serialization Types
+# Generic Types
 # ------------------------------------------------------------------------------
 
-
-SerializedSpan: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-SerializedSnapshot: TypeAlias = Dict[
-    str,
-    Any,
-]
-
-
-
-# ------------------------------------------------------------------------------
-# Generic Runtime Types
-# ------------------------------------------------------------------------------
-
-
-JSONValue: TypeAlias = Union[
-    str,
-    int,
-    float,
-    bool,
-    None,
-    Dict[str, Any],
-    List[Any],
-]
-
+JSONValue: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | dict[str, Any]
+    | list[Any]
+)
 
 RuntimeObject: TypeAlias = Any
 # ==============================================================================
-# Exceptions
+# Part 1.3 – Exceptions
 # ==============================================================================
 
 
 class TraceSpanError(Exception):
     """
-    Base exception for SciOS-NG TraceSpan runtime.
-
-    All span-related exceptions inherit from this class.
+    Base exception for TraceSpan.
     """
 
     def __init__(
@@ -479,28 +316,27 @@ class TraceSpanError(Exception):
         message: str = "",
         *,
         code: str = "SPAN_ERROR",
-        details: Optional[Dict[str, Any]] = None,
+        details: Optional[
+            Mapping[str, Any]
+        ] = None,
     ) -> None:
 
-        self.message: str = message
+        self.message = message
 
-        self.code: str = code
+        self.code = code
 
-        self.details: Dict[str, Any] = (
+        self.details = dict(
             details or {}
         )
 
         super().__init__(
-            self.message
+            message
         )
 
 
     def to_dict(
         self,
-    ) -> Dict[str, Any]:
-        """
-        Serialize exception information.
-        """
+    ) -> dict[str, Any]:
 
         return {
             "type": self.__class__.__name__,
@@ -517,36 +353,34 @@ class TraceSpanError(Exception):
         return (
             f"{self.__class__.__name__}("
             f"message={self.message!r}, "
-            f"code={self.code!r})"
+            f"code={self.code!r}"
+            f")"
         )
 
-
-# ------------------------------------------------------------------------------
 
 
 class SpanValidationError(
     TraceSpanError,
 ):
     """
-    Raised when span validation fails.
+    Invalid span data.
     """
 
     def __init__(
         self,
         message: str,
         *,
-        field: Optional[str] = None,
+        field: str | None = None,
         value: Any = None,
     ) -> None:
 
-        details = {}
+        details: dict[str, Any] = {}
 
         if field is not None:
             details["field"] = field
 
         if value is not None:
             details["value"] = value
-
 
         super().__init__(
             message,
@@ -556,22 +390,19 @@ class SpanValidationError(
 
 
 
-# ------------------------------------------------------------------------------
-
-
 class SpanStateError(
     TraceSpanError,
 ):
     """
-    Raised when span lifecycle state transition is invalid.
+    Invalid lifecycle transition.
     """
 
     def __init__(
         self,
         message: str,
         *,
-        current_state: Optional[str] = None,
-        expected_state: Optional[str] = None,
+        current_state: str | None = None,
+        expected_state: str | None = None,
     ) -> None:
 
         super().__init__(
@@ -585,14 +416,11 @@ class SpanStateError(
 
 
 
-# ------------------------------------------------------------------------------
-
-
 class SpanClosedError(
     SpanStateError,
 ):
     """
-    Raised when operation is performed on closed span.
+    Span already closed.
     """
 
     def __init__(
@@ -607,20 +435,13 @@ class SpanClosedError(
             current_state="closed",
         )
 
-        self.code = (
-            "SPAN_CLOSED_ERROR"
-        )
-
-
-
-# ------------------------------------------------------------------------------
 
 
 class SpanFinishedError(
     SpanStateError,
 ):
     """
-    Raised when operation is performed on finished span.
+    Span already finished.
     """
 
     def __init__(
@@ -635,28 +456,21 @@ class SpanFinishedError(
             current_state="finished",
         )
 
-        self.code = (
-            "SPAN_FINISHED_ERROR"
-        )
-
-
-
-# ------------------------------------------------------------------------------
 
 
 class InvalidTraceError(
     TraceSpanError,
 ):
     """
-    Raised when trace information is invalid.
+    Invalid trace identity.
     """
 
     def __init__(
         self,
         message: str,
         *,
-        trace_id: Optional[str] = None,
-        span_id: Optional[str] = None,
+        trace_id: TraceId | None = None,
+        span_id: SpanId | None = None,
     ) -> None:
 
         super().__init__(
@@ -667,31 +481,16 @@ class InvalidTraceError(
                 "span_id": span_id,
             },
         )
-
 # ==============================================================================
-# Compatibility aliases
-# ==============================================================================
-
-# ==============================================================================
-# Enums
+# Part 1.4 – Enums
 # ==============================================================================
 
 
-# ------------------------------------------------------------------------------
-# Span Kind
-# ------------------------------------------------------------------------------
-
-
-class SpanKind(Enum):
+class SpanKind(
+    Enum,
+):
     """
-    Defines the semantic role of a span.
-
-    Compatible with distributed tracing models:
-        - internal
-        - server
-        - client
-        - producer
-        - consumer
+    Semantic role of a span.
     """
 
     INTERNAL = (
@@ -723,50 +522,40 @@ class SpanKind(Enum):
 
 
 
-# ------------------------------------------------------------------------------
-# Span Lifecycle State
-# ------------------------------------------------------------------------------
-
-
-class SpanState(Enum):
+class SpanState(
+    Enum,
+):
     """
-    Runtime lifecycle state of TraceSpan.
+    Runtime lifecycle state.
     """
 
     CREATED = (
         "created"
     )
 
-
     INITIALIZED = (
         "initialized"
     )
-
 
     STARTED = (
         "started"
     )
 
-
     RUNNING = (
         "running"
     )
-
 
     FINISHED = (
         "finished"
     )
 
-
     CLOSED = (
         "closed"
     )
 
-
     FROZEN = (
         "frozen"
     )
-
 
     ERROR = (
         "error"
@@ -781,25 +570,20 @@ class SpanState(Enum):
 
 
 
-# ------------------------------------------------------------------------------
-# Span Status
-# ------------------------------------------------------------------------------
-
-
-class SpanStatus(Enum):
+class SpanStatus(
+    Enum,
+):
     """
-    Execution status of a span.
+    Execution status.
     """
 
     UNSET = (
         "unset"
     )
 
-
     OK = (
         "ok"
     )
-
 
     ERROR = (
         "error"
@@ -814,1410 +598,579 @@ class SpanStatus(Enum):
 
 
 
-# ------------------------------------------------------------------------------
-# Span Capability Flags
-# ------------------------------------------------------------------------------
-
-
-class SpanCapability(IntFlag):
+class SpanCapability(
+    IntFlag,
+):
     """
-    Capability flags supported by TraceSpan.
-
-    Allows runtime feature discovery.
+    Supported runtime capabilities.
     """
 
     NONE = 0
 
-
-    # ------------------------------------------------------------------
-    # Data operations
-    # ------------------------------------------------------------------
+    ATTRIBUTES = auto()
 
     EVENTS = auto()
 
-    ATTRIBUTES = auto()
-
     LINKS = auto()
+
+    CHILDREN = auto()
 
     STATUS = auto()
 
-
-    # ------------------------------------------------------------------
-    # Error handling
-    # ------------------------------------------------------------------
-
     EXCEPTIONS = auto()
-
-
-    # ------------------------------------------------------------------
-    # Serialization
-    # ------------------------------------------------------------------
 
     SERIALIZATION = auto()
 
-    SNAPSHOTS = auto()
-
-
-    # ------------------------------------------------------------------
-    # Validation
-    # ------------------------------------------------------------------
+    SNAPSHOT = auto()
 
     VALIDATION = auto()
-
-
-    # ------------------------------------------------------------------
-    # Runtime hooks
-    # ------------------------------------------------------------------
 
     CALLBACKS = auto()
 
     HOOKS = auto()
 
-
-
-    # ------------------------------------------------------------------
-    # Advanced features
-    # ------------------------------------------------------------------
-
     CACHE = auto()
 
     HISTORY = auto()
 
-    CHILDREN = auto()
-
-
-
-    # ------------------------------------------------------------------
-    # Full capability set
-    # ------------------------------------------------------------------
 
     ALL = (
-        EVENTS
-        |
         ATTRIBUTES
-        |
-        LINKS
-        |
-        STATUS
-        |
-        EXCEPTIONS
-        |
-        SERIALIZATION
-        |
-        SNAPSHOTS
-        |
-        VALIDATION
-        |
-        CALLBACKS
-        |
-        HOOKS
-        |
-        CACHE
-        |
-        HISTORY
-        |
-        CHILDREN
+        | EVENTS
+        | LINKS
+        | CHILDREN
+        | STATUS
+        | EXCEPTIONS
+        | SERIALIZATION
+        | SNAPSHOT
+        | VALIDATION
+        | CALLBACKS
+        | HOOKS
+        | CACHE
+        | HISTORY
     )
-# ==============================================================================
-# Dataclasses
-# ==============================================================================
 
+# ==============================================================================
+# Part 1.5 – Dataclasses
+# ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Span Statistics
+# SpanStatistics
 # ------------------------------------------------------------------------------
-
 
 @dataclass(slots=True)
 class SpanStatistics:
     """
     Runtime statistics for TraceSpan.
-
-    Stores counters and runtime measurements.
     """
-
 
     # ------------------------------------------------------------------
     # Counters
     # ------------------------------------------------------------------
 
     event_count: int = 0
-
-
     attribute_count: int = 0
-
-
-    annotation_count: int = 0
-
-
     link_count: int = 0
-
-
     child_count: int = 0
-
-
-
-    # ------------------------------------------------------------------
-    # Runtime operations
-    # ------------------------------------------------------------------
-
-    update_count: int = 0
-
-
-    validation_count: int = 0
-
-
-    export_count: int = 0
-
-
-    callback_count: int = 0
-
-
-    hook_count: int = 0
-
-
-
-    # ------------------------------------------------------------------
-    # Errors
-    # ------------------------------------------------------------------
 
     error_count: int = 0
 
-
+    update_count: int = 0
+    validation_count: int = 0
+    callback_count: int = 0
+    hook_count: int = 0
+    export_count: int = 0
 
     # ------------------------------------------------------------------
     # Timing
     # ------------------------------------------------------------------
 
     start_time: float = 0.0
-
-
     end_time: float = 0.0
-
-
     duration: float = 0.0
 
-
-
     # ------------------------------------------------------------------
-    # Lifecycle timestamps
+    # Lifecycle
     # ------------------------------------------------------------------
 
     created_at: float = field(
         default_factory=time.time,
     )
-
 
     updated_at: float = field(
         default_factory=time.time,
     )
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-
-    def reset(
-        self,
-    ) -> None:
+    def reset(self) -> None:
         """
-        Reset statistics.
+        Reset runtime statistics.
         """
 
         self.event_count = 0
-
         self.attribute_count = 0
-
-        self.annotation_count = 0
-
         self.link_count = 0
-
         self.child_count = 0
-
-        self.update_count = 0
-
-        self.validation_count = 0
-
-        self.export_count = 0
-
-        self.callback_count = 0
-
-        self.hook_count = 0
 
         self.error_count = 0
 
+        self.update_count = 0
+        self.validation_count = 0
+        self.callback_count = 0
+        self.hook_count = 0
+        self.export_count = 0
+
         self.start_time = 0.0
-
         self.end_time = 0.0
-
         self.duration = 0.0
 
         self.updated_at = time.time()
 
-
-
-    def to_dict(
-        self,
-    ) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize statistics.
         """
 
-        return asdict(
-            self
-        )
+        return asdict(self)
 
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "SpanStatistics":
+        """
+        Restore statistics from dictionary.
+        """
+
+        return cls(**dict(data))
 
 
 # ------------------------------------------------------------------------------
-# Span Snapshot
+# SpanSnapshot
 # ------------------------------------------------------------------------------
 
-
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class SpanSnapshot:
     """
-    Immutable-style serializable snapshot of TraceSpan state.
+    Immutable runtime snapshot of TraceSpan.
     """
-
 
     # ------------------------------------------------------------------
     # Identity
     # ------------------------------------------------------------------
 
-    trace_id: str
-
-
-    span_id: str
-
-
-    parent_span_id: Optional[str]
-
-
+    trace_id: TraceId
+    span_id: SpanId
+    parent_span_id: ParentSpanId | None
 
     # ------------------------------------------------------------------
-    # Span information
+    # Metadata
     # ------------------------------------------------------------------
 
     name: str
-
-
     kind: str
-
-
     status: str
-
-
-
-    # ------------------------------------------------------------------
-    # Runtime state
-    # ------------------------------------------------------------------
-
     state: str
 
-
+    # ------------------------------------------------------------------
+    # Timing
+    # ------------------------------------------------------------------
 
     start_time: float
-
-
-    end_time: Optional[float]
-
-
+    end_time: float | None
     duration: float
 
-
-
     # ------------------------------------------------------------------
-    # Data
+    # Runtime Data
     # ------------------------------------------------------------------
 
-    attributes: Dict[str, Any]
-
-
-    events: List[Dict[str, Any]]
-
-
-    links: List[Dict[str, Any]]
-
-
-
-    metadata: Dict[str, Any]
-
-
+    attributes: dict[str, Any]
+    events: list[TraceEvent]
+    links: list[TraceLink]
+    metadata: dict[str, Any]
 
     # ------------------------------------------------------------------
     # Statistics
     # ------------------------------------------------------------------
 
-    statistics: Dict[str, Any]
+    statistics: dict[str, Any]
 
-
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     created_at: float = field(
         default_factory=time.time,
     )
 
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
 
-
-    def to_dict(
-        self,
-    ) -> Dict[str, Any]:
+    def __post_init__(self) -> None:
         """
-        Convert snapshot to dictionary.
+        Normalize mutable containers.
         """
 
-        return asdict(
-            self
+        object.__setattr__(
+            self,
+            "attributes",
+            dict(self.attributes),
         )
 
-
-
-    def to_json(
-        self,
-        *,
-        indent: int = DEFAULT_INDENT,
-    ) -> str:
-        """
-        Convert snapshot to JSON.
-        """
-
-        return json.dumps(
-            self.to_dict(),
-            indent=indent,
-            sort_keys=DEFAULT_JSON_SORT_KEYS,
-            default=str,
+        object.__setattr__(
+            self,
+            "events",
+            list(self.events),
         )
 
-
-
-# ------------------------------------------------------------------------------
-# Span Report
-# ------------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class SpanReport:
-    """
-    Runtime summary report of TraceSpan.
-    """
-
-
-    name: str
-
-
-    trace_id: str
-
-
-    span_id: str
-
-
-    kind: str
-
-
-    status: str
-
-
-    state: str
-
-
-
-    duration: float
-
-
-
-    event_count: int
-
-
-    attribute_count: int
-
-
-    link_count: int
-
-
-    child_count: int
-
-
-
-    error_count: int
-
-
-
-    created_at: float
-
-
-
-    generated_at: float = field(
-        default_factory=time.time,
-    )
-
-
-
-    def to_dict(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Convert report to dictionary.
-        """
-
-        return asdict(
-            self
+        object.__setattr__(
+            self,
+            "links",
+            list(self.links),
         )
 
-
-
-    def to_json(
-        self,
-        *,
-        indent: int = DEFAULT_INDENT,
-    ) -> str:
-
-        return json.dumps(
-            self.to_dict(),
-            indent=indent,
-            sort_keys=DEFAULT_JSON_SORT_KEYS,
-            default=str,
+        object.__setattr__(
+            self,
+            "metadata",
+            dict(self.metadata),
         )
-# ==============================================================================
-# Base Span (ABC)
-# ==============================================================================
 
+        object.__setattr__(
+            self,
+            "statistics",
+            dict(self.statistics),
+        )
 
-class BaseSpan(
-    ABC,
-):
-    """
-    Abstract base class for SciOS-NG Trace Span.
-
-    Defines the common contract for all span implementations.
-
-    Concrete implementation:
-        TraceSpan
-    """
-
-
-
-    # ==========================================================================
-    # Identity
-    # ==========================================================================
-
-
-    @property
-    @abstractmethod
-    def trace_id(
-        self,
-    ) -> TraceId:
-        """
-        Return trace identifier.
-        """
-
-        raise NotImplementedError
-
-
-
-    @property
-    @abstractmethod
-    def span_id(
-        self,
-    ) -> SpanId:
-        """
-        Return span identifier.
-        """
-
-        raise NotImplementedError
-
-
-
-    @property
-    @abstractmethod
-    def parent_span_id(
-        self,
-    ) -> Optional[SpanId]:
-        """
-        Return parent span identifier.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # Metadata
-    # ==========================================================================
-
-
-    @property
-    @abstractmethod
-    def name(
-        self,
-    ) -> str:
-        """
-        Return span name.
-        """
-
-        raise NotImplementedError
-
-
-
-    @property
-    @abstractmethod
-    def kind(
-        self,
-    ) -> SpanKind:
-        """
-        Return span kind.
-        """
-
-        raise NotImplementedError
-
-
-
-    @property
-    @abstractmethod
-    def status(
-        self,
-    ) -> SpanStatus:
-        """
-        Return span status.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # Lifecycle
-    # ==========================================================================
-
-
-    @abstractmethod
-    def start(
-        self,
-    ) -> None:
-        """
-        Start span execution.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def finish(
-        self,
-    ) -> None:
-        """
-        Finish span execution.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def close(
-        self,
-    ) -> None:
-        """
-        Close span resources.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # Attributes
-    # ==========================================================================
-
-
-    @abstractmethod
-    def set_attribute(
-        self,
-        key: AttributeKey,
-        value: AttributeValue,
-    ) -> None:
-        """
-        Set span attribute.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def get_attribute(
-        self,
-        key: AttributeKey,
-        default: Any = None,
-    ) -> Any:
-        """
-        Retrieve span attribute.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def attributes(
-        self,
-    ) -> Mapping[str, Any]:
-        """
-        Return span attributes.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # Events
-    # ==========================================================================
-
-
-    @abstractmethod
-    def add_event(
-        self,
-        name: str,
-        **attributes: Any,
-    ) -> None:
-        """
-        Add trace event.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def events(
-        self,
-    ) -> Sequence[TraceEvent]:
-        """
-        Return span events.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # Links
-    # ==========================================================================
-
-
-    @abstractmethod
-    def add_link(
-        self,
-        trace_id: TraceId,
-        span_id: SpanId,
-        **metadata: Any,
-    ) -> None:
-        """
-        Add linked span reference.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def links(
-        self,
-    ) -> Sequence[TraceLink]:
-        """
-        Return span links.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # State
-    # ==========================================================================
-
-
-    @property
-    @abstractmethod
-    def state(
-        self,
-    ) -> SpanState:
-        """
-        Return runtime state.
-        """
-
-        raise NotImplementedError
-
-
-
-    @property
-    @abstractmethod
-    def is_finished(
-        self,
-    ) -> bool:
-        """
-        Check whether span finished.
-        """
-
-        raise NotImplementedError
-
-
-
-    @property
-    @abstractmethod
-    def is_closed(
-        self,
-    ) -> bool:
-        """
-        Check whether span closed.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # Statistics
-    # ==========================================================================
-
-
-    @property
-    @abstractmethod
-    def statistics(
-        self,
-    ) -> SpanStatistics:
-        """
-        Return runtime statistics.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
+    # ------------------------------------------------------------------
     # Serialization
-    # ==========================================================================
+    # ------------------------------------------------------------------
 
-
-    @abstractmethod
-    def snapshot(
-        self,
-    ) -> SpanSnapshot:
+    def to_dict(self) -> dict[str, Any]:
         """
-        Create immutable snapshot.
+        Serialize snapshot.
         """
 
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def report(
-        self,
-    ) -> SpanReport:
-        """
-        Create runtime report.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def to_dict(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Serialize span.
-        """
-
-        raise NotImplementedError
-
-
-
-    @abstractmethod
-    def to_json(
-        self,
-        *,
-        indent: int = DEFAULT_INDENT,
-    ) -> str:
-        """
-        Serialize span as JSON.
-        """
-
-        raise NotImplementedError
-
-
-
-    # ==========================================================================
-    # Context Manager Protocol
-    # ==========================================================================
-
-
-    def __enter__(
-        self,
-    ) -> "BaseSpan":
-        """
-        Context manager enter.
-        """
-
-        self.start()
-
-        return self
-
-
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> None:
-        """
-        Context manager exit.
-        """
-
-        self.finish()
-
-        self.close()                    
-# ==============================================================================
-# Part 2. BaseSpan (ABC)
-# ==============================================================================
-
-from abc import ABC, abstractmethod
-
-
-class BaseSpan(ABC):
-    """
-    Abstract base class for SciOS-NG Trace Span.
-
-    Defines the contract that every span implementation
-    must provide.
-    """
-
-    # ==========================================================================
-    # Identity Properties
-    # ==========================================================================
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """
-        Span name.
-        """
-        raise NotImplementedError
-
-
-    @property
-    @abstractmethod
-    def trace_id(self) -> TraceId:
-        """
-        Trace identifier.
-        """
-        raise NotImplementedError
-
-
-    @property
-    @abstractmethod
-    def span_id(self) -> SpanId:
-        """
-        Span identifier.
-        """
-        raise NotImplementedError
-
-
-    @property
-    @abstractmethod
-    def state(self) -> SpanState:
-        """
-        Current span state.
-        """
-        raise NotImplementedError
-
-
-    @property
-    @abstractmethod
-    def status(self) -> SpanStatus:
-        """
-        Current span status.
-        """
-        raise NotImplementedError
-
-
-    # ==========================================================================
-    # Lifecycle
-    # ==========================================================================
-
-    @abstractmethod
-    def start(self) -> "BaseSpan":
-        """
-        Start span execution.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def finish(
-        self,
-        status: SpanStatus = SpanStatus.OK,
-    ) -> "BaseSpan":
-        """
-        Finish span.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def close(self) -> None:
-        """
-        Close span resources.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def reset(self) -> "BaseSpan":
-        """
-        Reset span state.
-        """
-        raise NotImplementedError
-
-
-    # ==========================================================================
-    # Attributes
-    # ==========================================================================
-
-    @abstractmethod
-    def set_attribute(
-        self,
-        key: AttributeKey,
-        value: AttributeValue,
-    ) -> "BaseSpan":
-        """
-        Set span attribute.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def get_attribute(
-        self,
-        key: AttributeKey,
-        default: Any = None,
-    ) -> AttributeValue:
-        """
-        Get span attribute.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def remove_attribute(
-        self,
-        key: AttributeKey,
-    ) -> bool:
-        """
-        Remove span attribute.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def clear_attributes(self) -> None:
-        """
-        Remove all attributes.
-        """
-        raise NotImplementedError
-
-
-    # ==========================================================================
-    # Events
-    # ==========================================================================
-
-    @abstractmethod
-    def add_event(
-        self,
-        name: str,
-        attributes: Optional[
-            Attributes
-        ] = None,
-    ) -> "BaseSpan":
-        """
-        Add trace event.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def clear_events(self) -> None:
-        """
-        Clear events.
-        """
-        raise NotImplementedError
-
-
-    # ==========================================================================
-    # Links
-    # ==========================================================================
-
-    @abstractmethod
-    def add_link(
-        self,
-        trace_id: TraceId,
-        span_id: SpanId,
-    ) -> "BaseSpan":
-        """
-        Add linked span.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def clear_links(self) -> None:
-        """
-        Clear links.
-        """
-        raise NotImplementedError
-
-
-    # ==========================================================================
-    # Serialization
-    # ==========================================================================
-
-    @abstractmethod
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        Serialize span.
-        """
-        raise NotImplementedError
-
+        return asdict(self)
 
     @classmethod
-    @abstractmethod
     def from_dict(
         cls,
         data: Mapping[str, Any],
-    ) -> "BaseSpan":
+    ) -> "SpanSnapshot":
         """
-        Deserialize span.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def snapshot(self) -> SpanSnapshot:
-        """
-        Create immutable snapshot.
-        """
-        raise NotImplementedError
-
-
-    # ==========================================================================
-    # Utilities
-    # ==========================================================================
-
-    @abstractmethod
-    def clone(self) -> "BaseSpan":
-        """
-        Clone span.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def copy(self) -> "BaseSpan":
-        """
-        Shallow copy.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    def validate(self) -> bool:
-        """
-        Validate internal state.
-        """
-        raise NotImplementedError
-
-
-    # ==========================================================================
-    # Context Manager
-    # ==========================================================================
-
-    def __enter__(self) -> "BaseSpan":
-        """
-        Context manager enter.
+        Restore snapshot.
         """
 
-        self.start()
+        return cls(**dict(data))
 
-        return self
-
-
-    def __exit__(
+    def to_json(
         self,
-        exc_type: Optional[type],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> None:
+        *,
+        indent: int = DEFAULT_INDENT,
+    ) -> str:
         """
-        Context manager exit.
+        Serialize snapshot to JSON.
         """
 
-        if exc_type is not None:
+        return json.dumps(
+            self.to_dict(),
+            indent=indent,
+            sort_keys=DEFAULT_JSON_SORT_KEYS,
+            ensure_ascii=DEFAULT_JSON_ENSURE_ASCII,
+            default=str,
+        )
 
-            self.finish(
-                status=SpanStatus.ERROR
-            )
 
-        else:
+# ------------------------------------------------------------------------------
+# SpanReport
+# ------------------------------------------------------------------------------
 
-            self.finish(
-                status=SpanStatus.OK
-            )
+@dataclass(slots=True)
+class SpanReport:
+
+    pass
+
+    
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize report.
+        """
+
+        return asdict(self)
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "SpanReport":
+        """
+        Restore report.
+        """
+
+        return cls(**dict(data))
+
+    def to_json(
+        self,
+        *,
+        indent: int = DEFAULT_INDENT,
+    ) -> str:
+        """
+        Serialize report to JSON.
+        """
+
+        return json.dumps(
+            self.to_dict(),
+            indent=indent,
+            sort_keys=DEFAULT_JSON_SORT_KEYS,
+            ensure_ascii=DEFAULT_JSON_ENSURE_ASCII,
+            default=str,
+        )
+
+
 # ==============================================================================
-# Part 3. TraceSpan Constructor
+# Part 2. Constructor
 # ==============================================================================
 
 
-class TraceSpan(BaseSpan):
+class TraceSpan:
     """
-    SciOS-NG Runtime Trace Span.
-
-    Concrete implementation of BaseSpan.
+    Core runtime tracing span.
     """
 
 
     def __init__(
         self,
-        name: str = SPAN_NAME,
+        name: str = DEFAULT_SPAN_NAME,
         *,
-        trace_id: Optional[TraceId] = None,
-        span_id: Optional[SpanId] = None,
-        parent_span_id: Optional[SpanId] = None,
+        trace_id: TraceId | None = None,
+        span_id: SpanId | None = None,
+        parent_span_id: ParentSpanId | None = None,
         kind: SpanKind = SpanKind.INTERNAL,
-        enabled: bool = DEFAULT_ENABLED,
-        auto_start: bool = DEFAULT_AUTO_START,
-        auto_finish: bool = DEFAULT_AUTO_FINISH,
-        attributes: Optional[Attributes] = None,
-        metadata: Optional[TraceMetadata] = None,
-        tags: Optional[Sequence[str]] = None,
+
+        attributes: Attributes | None = None,
+        metadata: TraceMetadata | None = None,
+        context: TraceMetadata | None = None,
+        tags: dict[str, Any] | None = None,
+
+        auto_start: bool = False,
+        enabled: bool = True,
+
     ) -> None:
         """
-        Initialize TraceSpan runtime.
+        Initialize TraceSpan.
         """
 
 
-        # ----------------------------------------------------------------------
-        # Identity
-        # ----------------------------------------------------------------------
+        if not name or not name.strip():
 
-        self._trace_id: TraceId = (
+            raise SpanValidationError(
+                "Span name cannot be empty."
+            )
+
+
+        now = time.time()
+
+
+        # ------------------------------------------------------------------
+        # Identity
+        # ------------------------------------------------------------------
+
+        self._trace_id = (
             trace_id
             if trace_id is not None
-            else str(uuid.uuid4())
+            else uuid.uuid4().hex
         )
 
 
-        self._span_id: SpanId = (
+        self._span_id = (
             span_id
             if span_id is not None
-            else str(uuid.uuid4())
+            else uuid.uuid4().hex
         )
 
 
-        self._parent_span_id: Optional[SpanId] = (
-            parent_span_id
+        self._parent_span_id = parent_span_id
+
+
+        self._name = name.strip()
+
+
+        self._kind = kind
+
+
+
+        # ------------------------------------------------------------------
+        # Runtime Flags
+        # ------------------------------------------------------------------
+
+        self._enabled = enabled
+
+        self._initialized = True
+
+        self._started = False
+
+        self._finished = False
+
+
+
+        # ------------------------------------------------------------------
+        # Lifecycle
+        # ------------------------------------------------------------------
+
+        self._state = SpanState.INITIALIZED
+
+
+        self._status = SpanStatus.UNSET
+
+
+        self._closed = False
+
+
+
+        # ------------------------------------------------------------------
+        # Timing
+        # ------------------------------------------------------------------
+
+        self._created_at = now
+
+        self._updated_at = now
+
+
+        self._start_time = 0.0
+
+        self._end_time = 0.0
+
+
+        self._duration = 0.0
+
+
+
+        # ------------------------------------------------------------------
+        # Context
+        # ------------------------------------------------------------------
+
+        self._context = dict(
+            context or {}
         )
 
 
-        self._name: str = name
-
-
-
-        # ----------------------------------------------------------------------
-        # Configuration
-        # ----------------------------------------------------------------------
-
-        self._kind: SpanKind = kind
-
-        self._enabled: bool = enabled
-
-        self._auto_start: bool = auto_start
-
-        self._auto_finish: bool = auto_finish
-
-
-
-        self._capabilities: SpanCapability = (
-            SpanCapability.ALL
-        )
-
-
-
-        # ----------------------------------------------------------------------
-        # Runtime State
-        # ----------------------------------------------------------------------
-
-        self._state: SpanState = (
-            SpanState.CREATED
-        )
-
-
-        self._status: SpanStatus = (
-            SpanStatus.UNSET
-        )
-
-
-        self._started_at: Optional[float] = None
-
-
-        self._finished_at: Optional[float] = None
-
-
-        self._duration: float = 0.0
-
-
-
-        # ----------------------------------------------------------------------
-        # Data Containers
-        # ----------------------------------------------------------------------
-
-        self._attributes: Attributes = dict(
+        self._attributes = dict(
             attributes or {}
         )
 
 
-        self._events: List[TraceEvent] = []
-
-
-        self._links: List[TraceLink] = []
-
-
-        self._tags: List[str] = list(
-            tags or []
-        )
-
-
-        self._metadata: TraceMetadata = dict(
+        self._metadata = dict(
             metadata or {}
         )
 
 
-
-        # ----------------------------------------------------------------------
-        # Child Spans
-        # ----------------------------------------------------------------------
-
-        self._children: Dict[
-            SpanId,
-            "TraceSpan",
-        ] = {}
+        self._tags = dict(
+            tags or {}
+        )
 
 
+        self._events = []
 
-        # ----------------------------------------------------------------------
-        # Runtime Hooks
-        # ----------------------------------------------------------------------
-
-        self._callbacks: List[
-            TraceCallback
-        ] = []
-
-
-        self._hooks: Dict[
-            str,
-            List[TraceHook],
-        ] = {}
+        self._links = []
 
 
 
-        # ----------------------------------------------------------------------
-        # Synchronization
-        # ----------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Hierarchy
+        # ------------------------------------------------------------------
+
+        self._children = {}
+
+
+
+        # ------------------------------------------------------------------
+        # Runtime
+        # ------------------------------------------------------------------
+
+        self._statistics = SpanStatistics()
+
+
 
         self._lock = RLock()
 
 
 
-        # ----------------------------------------------------------------------
-        # Statistics
-        # ----------------------------------------------------------------------
+        self._history = deque(
+            maxlen=DEFAULT_HISTORY_LIMIT,
+        )
 
-        self._statistics = (
-            SpanStatistics()
+
+        self._cache = {}
+
+
+        self._capabilities = (
+            SpanCapability.ALL
         )
 
 
 
-        # ----------------------------------------------------------------------
-        # Lifecycle timestamps
-        # ----------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Auto lifecycle
+        # ------------------------------------------------------------------
 
-        self._created_at: float = (
-            time.time()
-        )
+        if auto_start:
 
+            self.start()   
 
-        self._updated_at: float = (
-            self._created_at
-        )
-
-
-
-        # ----------------------------------------------------------------------
-        # Cache
-        # ----------------------------------------------------------------------
-
-        self._cache: Dict[
-            str,
-            Any,
-        ] = {}
-
-
-
-        # ----------------------------------------------------------------------
-        # History
-        # ----------------------------------------------------------------------
-
-        self._history: deque[Any] = deque(
-            maxlen=DEFAULT_HISTORY_LIMIT
-        )
-
-
-
-        # ----------------------------------------------------------------------
-        # Final initialization
-        # ----------------------------------------------------------------------
-
-        self._state = (
-            SpanState.INITIALIZED
-        )
-
-
-        self._updated_at = (
-            time.time()
-        )
-
-
-        if self._auto_start:
-
-            self.start()
 # ==============================================================================
-# Part 4. Properties
+# Part 3. Properties
 # ==============================================================================
 
 
-    # ==========================================================================
+    # --------------------------------------------------------------------------
     # Identity
-    # ==========================================================================
+    # --------------------------------------------------------------------------
 
     @property
-    def name(self) -> str:
-        """
-        Return span name.
-        """
+    def trace_id(
+        self,
+    ) -> TraceId:
+        return self._trace_id
 
+
+    @property
+    def span_id(
+        self,
+    ) -> SpanId:
+        return self._span_id
+
+
+    @property
+    def parent_span_id(
+        self,
+    ) -> ParentSpanId | None:
+        return self._parent_span_id
+
+
+    @property
+    def parent(
+        self,
+    ) -> "TraceSpan | None":
+        return getattr(
+            self,
+            "_parent",
+            None,
+        )
+
+
+    @property
+    def name(
+        self,
+    ) -> str:
         return self._name
-
 
 
     @name.setter
@@ -2225,9 +1178,16 @@ class TraceSpan(BaseSpan):
         self,
         value: str,
     ) -> None:
-        """
-        Update span name.
-        """
+
+        if not isinstance(
+            value,
+            str,
+        ):
+            raise SpanValidationError(
+                "Span name must be string."
+            )
+
+        value = value.strip()
 
         if not value:
             raise SpanValidationError(
@@ -2235,55 +1195,15 @@ class TraceSpan(BaseSpan):
             )
 
         self._name = value
-
         self._updated_at = time.time()
 
 
 
     @property
-    def trace_id(self) -> TraceId:
-        """
-        Return trace identifier.
-        """
-
-        return self._trace_id
-
-
-
-    @property
-    def span_id(self) -> SpanId:
-        """
-        Return span identifier.
-        """
-
-        return self._span_id
-
-
-
-    @property
-    def parent_span_id(
+    def kind(
         self,
-    ) -> Optional[SpanId]:
-        """
-        Return parent span identifier.
-        """
-
-        return self._parent_span_id
-
-
-
-    # ==========================================================================
-    # Configuration
-    # ==========================================================================
-
-    @property
-    def kind(self) -> SpanKind:
-        """
-        Return span kind.
-        """
-
+    ) -> SpanKind:
         return self._kind
-
 
 
     @kind.setter
@@ -2291,81 +1211,36 @@ class TraceSpan(BaseSpan):
         self,
         value: SpanKind,
     ) -> None:
-        """
-        Update span kind.
-        """
 
         if not isinstance(
             value,
             SpanKind,
         ):
             raise SpanValidationError(
-                "kind must be SpanKind."
+                "Invalid span kind."
             )
 
         self._kind = value
-
         self._updated_at = time.time()
 
 
 
+    # --------------------------------------------------------------------------
+    # Lifecycle State
+    # --------------------------------------------------------------------------
+
     @property
-    def enabled(self) -> bool:
-        """
-        Whether span is enabled.
-        """
-
-        return self._enabled
-
-
-
-    @enabled.setter
-    def enabled(
+    def state(
         self,
-        value: bool,
-    ) -> None:
-        """
-        Enable or disable span.
-        """
-
-        self._enabled = bool(value)
-
-        self._updated_at = time.time()
-
-
-
-    @property
-    def capabilities(self) -> SpanCapability:
-        """
-        Supported capabilities.
-        """
-
-        return self._capabilities
-
-
-
-    # ==========================================================================
-    # Runtime State
-    # ==========================================================================
-
-    @property
-    def state(self) -> SpanState:
-        """
-        Current span state.
-        """
-
+    ) -> SpanState:
         return self._state
 
 
-
     @property
-    def status(self) -> SpanStatus:
-        """
-        Current span status.
-        """
-
+    def status(
+        self,
+    ) -> SpanStatus:
         return self._status
-
 
 
     @status.setter
@@ -2373,130 +1248,183 @@ class TraceSpan(BaseSpan):
         self,
         value: SpanStatus,
     ) -> None:
-        """
-        Update span status.
-        """
 
         if not isinstance(
             value,
             SpanStatus,
         ):
             raise SpanValidationError(
-                "status must be SpanStatus."
+                "Invalid span status."
             )
 
         self._status = value
-
         self._updated_at = time.time()
 
+
+
+    @property
+    def enabled(
+        self,
+    ) -> bool:
+        return self._enabled
+
+
+    @enabled.setter
+    def enabled(
+        self,
+        value: bool,
+    ) -> None:
+
+        self._enabled = bool(value)
+        self._updated_at = time.time()
+
+
+
+    @property
+    def started(
+        self,
+    ) -> bool:
+        return self._started
+
+
+    @property
+    def finished(
+        self,
+    ) -> bool:
+        return self._finished
+
+
+    @property
+    def cancelled(
+        self,
+    ) -> bool:
+
+        return getattr(
+            self,
+            "_cancelled",
+            False,
+        )
+
+
+    @property
+    def closed(
+        self,
+    ) -> bool:
+
+        return self._closed
+
+
+
+    # --------------------------------------------------------------------------
+    # Timing
+    # --------------------------------------------------------------------------
+
+    @property
+    def created_at(
+        self,
+    ) -> float:
+        return self._created_at
+
+
+    @property
+    def updated_at(
+        self,
+    ) -> float:
+        return self._updated_at
+
+
+    @property
+    def start_time(
+        self,
+    ) -> float:
+        return self._start_time
+
+
+    @property
+    def end_time(
+        self,
+    ) -> float:
+        return self._end_time
 
 
     @property
     def started_at(
         self,
-    ) -> Optional[float]:
-        """
-        Start timestamp.
-        """
+    ) -> float | None:
 
-        return self._started_at
-
+        return (
+            self._start_time
+            if self._started
+            else None
+        )
 
 
     @property
     def finished_at(
         self,
-    ) -> Optional[float]:
-        """
-        Finish timestamp.
-        """
+    ) -> float | None:
 
-        return self._finished_at
-
+        return (
+            self._end_time
+            if self._finished
+            else None
+        )
 
 
     @property
-    def duration(self) -> float:
-        """
-        Span duration.
-        """
+    def duration(
+        self,
+    ) -> float:
+
+        if (
+            self._started
+            and not self._finished
+            and self._start_time > 0.0
+        ):
+
+            return max(
+                0.0,
+                time.time()
+                -
+                self._start_time,
+            )
 
         return self._duration
 
 
 
-    # ==========================================================================
-    # Data
-    # ==========================================================================
+    # --------------------------------------------------------------------------
+    # Context
+    # --------------------------------------------------------------------------
 
     @property
-    def attributes(self) -> Mapping[str, Any]:
-        """
-        Span attributes.
-        """
+    def context(
+        self,
+    ) -> TraceMetadata:
 
         return dict(
-            self._attributes
+            self._context
         )
 
 
-
-    @property
-    def events(self) -> Sequence[TraceEvent]:
-        """
-        Span events.
-        """
-
-        return list(
-            self._events
-        )
-
-
-
-    @property
-    def links(self) -> Sequence[TraceLink]:
-        """
-        Span links.
-        """
-
-        return list(
-            self._links
-        )
-
-
-
-    @property
-    def tags(self) -> Sequence[str]:
-        """
-        Span tags.
-        """
-
-        return list(
-            self._tags
-        )
-
-
-
-    @tags.setter
-    def tags(
+    @context.setter
+    def context(
         self,
-        value: Sequence[str],
+        value: TraceMetadata,
     ) -> None:
-        """
-        Replace tags.
-        """
 
-        self._tags = list(value)
+        self._context = dict(
+            value
+        )
 
         self._updated_at = time.time()
 
 
 
     @property
-    def metadata(self) -> Mapping[str, Any]:
-        """
-        Span metadata.
-        """
+    def metadata(
+        self,
+    ) -> TraceMetadata:
 
         return dict(
             self._metadata
@@ -2504,266 +1432,266 @@ class TraceSpan(BaseSpan):
 
 
 
-    @metadata.setter
-    def metadata(
+    @property
+    def tags(
         self,
-        value: Mapping[str, Any],
-    ) -> None:
-        """
-        Replace metadata.
-        """
+    ) -> list[str]:
 
-        self._metadata = dict(value)
-
-        self._updated_at = time.time()
+        return list(
+            self._tags.keys()
+        )
 
 
-
-    # ==========================================================================
-    # Runtime Containers
-    # ==========================================================================
 
     @property
     def statistics(
         self,
     ) -> SpanStatistics:
-        """
-        Span statistics.
-        """
 
         return self._statistics
 
 
 
     @property
+    def capabilities(
+        self,
+    ) -> SpanCapability:
+
+        return self._capabilities
+
+
+
+    # --------------------------------------------------------------------------
+    # Attributes
+    # --------------------------------------------------------------------------
+
+    @property
+    def attributes(
+        self,
+    ) -> Attributes:
+
+        return dict(
+            self._attributes
+        )
+
+
+    @property
+    def attribute_count(
+        self,
+    ) -> int:
+
+        return len(
+            self._attributes
+        )
+
+
+
+    # --------------------------------------------------------------------------
+    # Events
+    # --------------------------------------------------------------------------
+
+    @property
+    def events(
+        self,
+    ) -> EventCollection:
+
+        return list(
+            self._events
+        )
+
+
+    @property
+    def event_count(
+        self,
+    ) -> int:
+
+        return len(
+            self._events
+        )
+
+
+
+    # --------------------------------------------------------------------------
+    # Links
+    # --------------------------------------------------------------------------
+
+    @property
+    def links(
+        self,
+    ) -> LinkCollection:
+
+        return list(
+            self._links
+        )
+
+
+    @property
+    def link_count(
+        self,
+    ) -> int:
+
+        return len(
+            self._links
+        )
+
+
+
+    # --------------------------------------------------------------------------
+    # Children
+    # --------------------------------------------------------------------------
+
+    @property
     def children(
         self,
-    ) -> Mapping[SpanId, "TraceSpan"]:
-        """
-        Child spans.
-        """
+    ) -> SpanCollection:
 
         return dict(
             self._children
         )
 
 
-
     @property
-    def created_at(self) -> float:
-        """
-        Creation timestamp.
-        """
-
-        return self._created_at
-
-
-
-    @property
-    def updated_at(self) -> float:
-        """
-        Last update timestamp.
-        """
-
-        return self._updated_at
-
-
-
-    # ==========================================================================
-    # State Helpers
-    # ==========================================================================
-
-    @property
-    def active(self) -> bool:
-        """
-        Whether span is running.
-        """
-
-        return self._state in (
-            SpanState.STARTED,
-            SpanState.RUNNING,
-        )
-
-
-
-    @property
-    def finished(self) -> bool:
-        """
-        Whether span finished.
-        """
-
-        return (
-            self._state == SpanState.FINISHED
-        )
-
-
-
-    @property
-    def closed(self) -> bool:
-        """
-        Whether span closed.
-        """
-
-        return (
-            self._state == SpanState.CLOSED
-        )
-
-
-
-    @property
-    def valid(self) -> bool:
-        """
-        Validate current span state.
-        """
-
-        try:
-            return self.validate()
-
-        except Exception:
-            return False
-# ==============================================================================
-# Part 5. Lifecycle
-# ==============================================================================
-
-
-    # ==========================================================================
-    # Internal State Transition
-    # ==========================================================================
-
-    def _transition_state(
+    def child_count(
         self,
-        state: SpanState,
-    ) -> None:
-        """
-        Update span lifecycle state.
-        """
+    ) -> int:
 
-        if not isinstance(
-            state,
-            SpanState,
-        ):
-            raise SpanStateError(
-                "Invalid span state."
-            )
-
-        self._state = state
-
-        self._updated_at = time.time()
+        return len(
+            self._children
+        )
 
 
 
-    # ==========================================================================
-    # Start
-    # ==========================================================================
 
-    def start(self) -> "TraceSpan":
-        """
-        Start span execution.
-        """
+# ==============================================================================
+# Part 4. Lifecycle
+# ==============================================================================
+
+
+    def start(
+        self,
+    ) -> "TraceSpan":
 
         with self._lock:
 
-            if self.closed:
-                raise SpanClosedError(
-                    "Cannot start closed span."
-                )
+            if self._closed:
+                raise SpanClosedError()
 
 
-            if self.active:
+            if not self._enabled:
                 return self
 
 
-            self._before_start()
+            if self._started:
+                return self
 
 
             now = time.time()
 
-            self._started_at = now
 
+            self._started = True
+            self._finished = False
+            self._cancelled = False
+
+
+            self._start_time = now
+            self._end_time = 0.0
+
+
+            self._started_at = now
             self._finished_at = None
+
 
             self._duration = 0.0
 
 
-            self._transition_state(
-                SpanState.STARTED
-            )
+            self._state = SpanState.RUNNING
+
+            self._status = SpanStatus.UNSET
 
 
-            self._transition_state(
-                SpanState.RUNNING
-            )
+            self._statistics.start_time = now
 
 
-            self._history.append(
-                {
-                    "event": "start",
-                    "timestamp": now,
-                }
-            )
-
-
-            self._statistics.update_count += 1
-
-
-            self._after_start()
+            self._updated_at = now
 
 
             return self
 
 
 
-    # ==========================================================================
-    # Finish
-    # ==========================================================================
+
+
+    def end(
+        self,
+        status: SpanStatus = SpanStatus.OK,
+    ) -> "TraceSpan":
+
+        return self.finish(
+            status=status,
+        )
+
+
+
+
 
     def finish(
         self,
         status: SpanStatus = SpanStatus.OK,
     ) -> "TraceSpan":
-        """
-        Finish span execution.
-        """
+
+
+        if not isinstance(
+            status,
+            SpanStatus,
+        ):
+
+            raise SpanValidationError(
+                "Invalid span status."
+            )
+
 
         with self._lock:
 
-            if self.closed:
-                raise SpanClosedError(
-                    "Cannot finish closed span."
-                )
+
+            if self._closed:
+                raise SpanClosedError()
 
 
-            if self.finished:
-
+            if self._finished:
                 return self
-
-
-            self._before_finish()
 
 
             now = time.time()
 
 
+            self._finished = True
+
             self._finished_at = now
 
 
-            if self._started_at is not None:
+            if self._start_time > 0.0:
 
                 self._duration = (
-                    now -
-                    self._started_at
+                    now
+                    -
+                    self._start_time
                 )
+
+
+            self._end_time = now
+
+
+            self._state = SpanState.FINISHED
 
 
             self._status = status
 
 
-            self._transition_state(
-                SpanState.FINISHED
+            self._statistics.end_time = now
+
+            self._statistics.duration = (
+                self._duration
             )
-
-
-            self._statistics.update_count += 1
 
 
             if status == SpanStatus.ERROR:
@@ -2771,267 +1699,250 @@ class TraceSpan(BaseSpan):
                 self._statistics.error_count += 1
 
 
-
-            self._history.append(
-                {
-                    "event": "finish",
-                    "status": status.value,
-                    "timestamp": now,
-                }
-            )
-
-
-            self._after_finish()
+            self._updated_at = now
 
 
             return self
 
 
 
-    # ==========================================================================
-    # Close
-    # ==========================================================================
 
-    def close(self) -> None:
-        """
-        Close span resources.
-        """
+
+    def cancel(
+        self,
+    ) -> "TraceSpan":
+
 
         with self._lock:
 
-            if self.closed:
 
-                return
-
-
-            self._before_close()
+            if self._closed:
+                raise SpanClosedError()
 
 
-            if self.active:
-
-                self.finish()
+            now = time.time()
 
 
+            self._cancelled = True
 
-            self._transition_state(
-                SpanState.CLOSED
-            )
-
-
-            self._history.append(
-                {
-                    "event": "close",
-                    "timestamp": time.time(),
-                }
-            )
+            self._finished = True
 
 
-            self._after_close()
+            self._finished_at = now
+
+            self._end_time = now
 
 
+            if self._start_time > 0.0:
 
-    # ==========================================================================
-    # Reset
-    # ==========================================================================
-
-    def reset(self) -> "TraceSpan":
-        """
-        Reset span runtime state.
-        """
-
-        with self._lock:
-
-            if self.closed:
-
-                raise SpanClosedError(
-                    "Cannot reset closed span."
+                self._duration = (
+                    now
+                    -
+                    self._start_time
                 )
 
 
-            self._state = (
-                SpanState.INITIALIZED
+            self._state = SpanState.ERROR
+
+            self._status = SpanStatus.ERROR
+
+
+            self._statistics.error_count += 1
+
+
+            self._statistics.end_time = now
+
+            self._statistics.duration = (
+                self._duration
             )
 
 
-            self._status = (
-                SpanStatus.UNSET
-            )
+            self._updated_at = now
+
+
+            return self
+
+
+
+
+
+    def reset(
+        self,
+    ) -> "TraceSpan":
+
+
+        with self._lock:
+
+
+            if self._closed:
+                raise SpanClosedError()
+
+
+            self._started = False
+
+            self._finished = False
+
+            self._cancelled = False
 
 
             self._started_at = None
 
-
             self._finished_at = None
 
 
+            self._start_time = 0.0
+
+            self._end_time = 0.0
+
             self._duration = 0.0
+
+
+            self._state = SpanState.INITIALIZED
+
+            self._status = SpanStatus.UNSET
+
 
 
             self._events.clear()
 
             self._links.clear()
 
+            self._attributes.clear()
+
+            self._metadata.clear()
+
+            self._context.clear()
+
+            self._tags.clear()
+
             self._children.clear()
 
 
-            self._history.clear()
 
-
-            self._statistics = (
-                SpanStatistics()
-            )
-
-
-            self._updated_at = (
-                time.time()
-            )
-
-
-            return self
+            if hasattr(
+                self,
+                "_cache",
+            ):
+                self._cache.clear()
 
 
 
-    # ==========================================================================
-    # Enable / Disable
-    # ==========================================================================
-
-    def enable(self) -> "TraceSpan":
-        """
-        Enable span.
-        """
-
-        self._enabled = True
-
-        self._updated_at = time.time()
-
-        return self
+            if hasattr(
+                self,
+                "_history",
+            ):
+                self._history.clear()
 
 
 
-    def disable(self) -> "TraceSpan":
-        """
-        Disable span.
-        """
-
-        self._enabled = False
-
-        self._updated_at = time.time()
-
-        return self
+            self._statistics.reset()
 
 
-
-    # ==========================================================================
-    # Freeze / Unfreeze
-    # ==========================================================================
-
-    def freeze(self) -> "TraceSpan":
-        """
-        Freeze span mutation.
-        """
-
-        with self._lock:
-
-            if self.closed:
-
-                raise SpanClosedError(
-                    "Closed span cannot freeze."
-                )
-
-
-            self._transition_state(
-                SpanState.FROZEN
-            )
+            self._updated_at = time.time()
 
 
             return self
 
 
 
-    def unfreeze(self) -> "TraceSpan":
-        """
-        Resume span mutation.
-        """
+
+
+    def close(
+        self,
+    ) -> "TraceSpan":
+
 
         with self._lock:
 
-            if self._state != SpanState.FROZEN:
 
+            if self._closed:
                 return self
 
 
-            self._transition_state(
-                SpanState.RUNNING
-            )
+            self._closed = True
+
+
+            self._state = SpanState.CLOSED
+
+
+            self._updated_at = time.time()
 
 
             return self
 
 
 
-    # ==========================================================================
-    # Lifecycle Hooks
-    # ==========================================================================
-
-    def _before_start(self) -> None:
-        """
-        Hook before start.
-        """
-
-        return None
 
 
+    def disable(
+        self,
+    ) -> "TraceSpan":
 
-    def _after_start(self) -> None:
-        """
-        Hook after start.
-        """
+        self.enabled = False
 
-        return None
+        return self
 
 
 
-    def _before_finish(self) -> None:
-        """
-        Hook before finish.
-        """
-
-        return None
 
 
+    def enable(
+        self,
+    ) -> "TraceSpan":
 
-    def _after_finish(self) -> None:
-        """
-        Hook after finish.
-        """
+        self.enabled = True
 
-        return None
+        return self
 
 
 
-    def _before_close(self) -> None:
-        """
-        Hook before close.
-        """
-
-        return None
 
 
+    def freeze(
+        self,
+    ) -> "TraceSpan":
 
-    def _after_close(self) -> None:
-        """
-        Hook after close.
-        """
+        self._frozen = True
 
-        return None
+        return self
+
+
+
+
+
+    def unfreeze(
+        self,
+    ) -> "TraceSpan":
+
+        self._frozen = False
+
+        return self
+
 # ==============================================================================
-# Part 6. Attributes
+# Part 5. Attributes
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# copy_attributes()
+# ------------------------------------------------------------------------------
 
-    # ==========================================================================
-    # Set Attribute
-    # ==========================================================================
+    def copy_attributes(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return a deep copy of all attributes.
+        """
+
+        with self._lock:
+
+            return copy.deepcopy(
+                self._attributes
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # set_attribute()
+    # ------------------------------------------------------------------------------
 
     def set_attribute(
         self,
@@ -3039,16 +1950,13 @@ class TraceSpan(BaseSpan):
         value: AttributeValue,
     ) -> "TraceSpan":
         """
-        Set or update span attribute.
+        Set or replace one attribute.
         """
 
         with self._lock:
 
-            if self.closed:
-                raise SpanClosedError(
-                    "Cannot modify closed span."
-                )
-
+            if self._closed:
+                raise SpanClosedError()
 
             if not isinstance(
                 key,
@@ -3058,175 +1966,39 @@ class TraceSpan(BaseSpan):
                     "Attribute key must be string."
                 )
 
+            key = key.strip()
 
             if not key:
                 raise SpanValidationError(
                     "Attribute key cannot be empty."
                 )
 
-
-            self._before_attribute_update(
-                key,
-                value,
-            )
-
+            if (
+                key not in self._attributes
+                and
+                len(self._attributes)
+                >= DEFAULT_ATTRIBUTES_LIMIT
+            ):
+                raise SpanValidationError(
+                    "Maximum attribute limit exceeded."
+                )
 
             self._attributes[key] = value
-
 
             self._statistics.attribute_count = (
                 len(self._attributes)
             )
 
-
             self._statistics.update_count += 1
 
-
             self._updated_at = time.time()
-
-
-            self._history.append(
-                {
-                    "event": "attribute_set",
-                    "key": key,
-                    "timestamp": self._updated_at,
-                }
-            )
-
-
-            self._after_attribute_update(
-                key,
-                value,
-            )
-
 
             return self
 
 
-
-    # ==========================================================================
-    # Get Attribute
-    # ==========================================================================
-
-    def get_attribute(
-        self,
-        key: AttributeKey,
-        default: AttributeValue = None,
-    ) -> AttributeValue:
-        """
-        Get attribute value.
-        """
-
-        return self._attributes.get(
-            key,
-            default,
-        )
-
-
-
-    # ==========================================================================
-    # Has Attribute
-    # ==========================================================================
-
-    def has_attribute(
-        self,
-        key: AttributeKey,
-    ) -> bool:
-        """
-        Check attribute existence.
-        """
-
-        return key in self._attributes
-
-
-
-    # ==========================================================================
-    # Remove Attribute
-    # ==========================================================================
-
-    def remove_attribute(
-        self,
-        key: AttributeKey,
-    ) -> bool:
-        """
-        Remove attribute.
-        """
-
-        with self._lock:
-
-            if self.closed:
-                raise SpanClosedError(
-                    "Cannot modify closed span."
-                )
-
-
-            if key not in self._attributes:
-
-                return False
-
-
-            del self._attributes[key]
-
-
-            self._statistics.attribute_count = (
-                len(self._attributes)
-            )
-
-
-            self._statistics.update_count += 1
-
-
-            self._updated_at = time.time()
-
-
-            self._history.append(
-                {
-                    "event": "attribute_remove",
-                    "key": key,
-                    "timestamp": self._updated_at,
-                }
-            )
-
-
-            return True
-
-
-
-    # ==========================================================================
-    # Clear Attributes
-    # ==========================================================================
-
-    def clear_attributes(
-        self,
-    ) -> None:
-        """
-        Remove all attributes.
-        """
-
-        with self._lock:
-
-            if self.closed:
-                raise SpanClosedError(
-                    "Cannot modify closed span."
-                )
-
-
-            self._attributes.clear()
-
-
-            self._statistics.attribute_count = 0
-
-
-            self._statistics.update_count += 1
-
-
-            self._updated_at = time.time()
-
-
-
-    # ==========================================================================
-    # Bulk Operations
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # set_attributes()
+    # ------------------------------------------------------------------------------
 
     def set_attributes(
         self,
@@ -3236,26 +2008,69 @@ class TraceSpan(BaseSpan):
         Set multiple attributes.
         """
 
+        if not isinstance(
+            attributes,
+            Mapping,
+        ):
+            raise SpanValidationError(
+                "Attributes must be mapping."
+            )
+
         with self._lock:
+
+            if self._closed:
+                raise SpanClosedError()
 
             for key, value in attributes.items():
 
-                self.set_attribute(
+                if not isinstance(
                     key,
-                    value,
-                )
+                    str,
+                ):
+                    raise SpanValidationError(
+                        "Attribute key must be string."
+                    )
+
+                key = key.strip()
+
+                if not key:
+                    raise SpanValidationError(
+                        "Attribute key cannot be empty."
+                    )
+
+                if (
+                    key not in self._attributes
+                    and
+                    len(self._attributes)
+                    >= DEFAULT_ATTRIBUTES_LIMIT
+                ):
+                    raise SpanValidationError(
+                        "Maximum attribute limit exceeded."
+                    )
+
+                self._attributes[key] = value
+
+            self._statistics.attribute_count = (
+                len(self._attributes)
+            )
+
+            self._statistics.update_count += 1
+
+            self._updated_at = time.time()
+
+            return self
 
 
-        return self
-
-
+    # ------------------------------------------------------------------------------
+    # update_attributes()
+    # ------------------------------------------------------------------------------
 
     def update_attributes(
         self,
         attributes: Mapping[str, Any],
     ) -> "TraceSpan":
         """
-        Update attributes from mapping.
+        Alias of set_attributes().
         """
 
         return self.set_attributes(
@@ -3263,360 +2078,312 @@ class TraceSpan(BaseSpan):
         )
 
 
+    # ------------------------------------------------------------------------------
+    # remove_attribute()
+    # ------------------------------------------------------------------------------
 
-    def copy_attributes(
+    def remove_attribute(
         self,
-    ) -> Attributes:
+        key: AttributeKey,
+    ) -> bool:
         """
-        Return attribute copy.
-        """
-
-        return dict(
-            self._attributes
-        )
-
-
-
-    # ==========================================================================
-    # Attribute Statistics
-    # ==========================================================================
-
-    @property
-    def attribute_count(
-        self,
-    ) -> int:
-        """
-        Number of attributes.
-        """
-
-        return len(
-            self._attributes
-        )
-
-
-
-    # ==========================================================================
-    # Attribute Hooks
-    # ==========================================================================
-
-    def _before_attribute_update(
-        self,
-        key: str,
-        value: Any,
-    ) -> None:
-        """
-        Hook before attribute update.
-        """
-
-        return None
-
-
-
-    def _after_attribute_update(
-        self,
-        key: str,
-        value: Any,
-    ) -> None:
-        """
-        Hook after attribute update.
-        """
-
-        return None
-# ==============================================================================
-# Part 7. Events
-# ==============================================================================
-
-
-    # ==========================================================================
-    # Add Event
-    # ==========================================================================
-
-    def add_event(
-        self,
-        name: str,
-        attributes: Optional[Attributes] = None,
-    ) -> "TraceSpan":
-        """
-        Add tracing event.
-
-        Example:
-            span.add_event(
-                "database.query",
-                {
-                    "sql": "SELECT *"
-                }
-            )
+        Remove one attribute.
         """
 
         with self._lock:
 
-            if self.closed:
-                raise SpanClosedError(
-                    "Cannot add event to closed span."
+            if self._closed:
+                raise SpanClosedError()
+
+            if not isinstance(
+                key,
+                str,
+            ):
+                raise SpanValidationError(
+                    "Attribute key must be string."
                 )
 
+            key = key.strip()
 
-            if not isinstance(name, str):
+            if key not in self._attributes:
+                return False
 
+            del self._attributes[key]
+
+            self._statistics.attribute_count = (
+                len(self._attributes)
+            )
+
+            self._statistics.update_count += 1
+
+            self._updated_at = time.time()
+
+            return True
+
+
+    # ------------------------------------------------------------------------------
+    # clear_attributes()
+    # ------------------------------------------------------------------------------
+
+    def clear_attributes(
+        self,
+    ) -> "TraceSpan":
+        """
+        Remove all attributes.
+        """
+
+        with self._lock:
+
+            if self._closed:
+                raise SpanClosedError()
+
+            if not self._attributes:
+                return self
+
+            self._attributes.clear()
+
+            self._statistics.attribute_count = 0
+
+            self._statistics.update_count += 1
+
+            self._updated_at = time.time()
+
+            return self
+
+
+    # ------------------------------------------------------------------------------
+    # get_attribute()
+    # ------------------------------------------------------------------------------
+
+    def get_attribute(
+        self,
+        key: AttributeKey,
+        default: Any = None,
+    ) -> Any:
+        """
+        Get one attribute.
+        """
+
+        with self._lock:
+
+            return self._attributes.get(
+                key,
+                default,
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # has_attribute()
+    # ------------------------------------------------------------------------------
+
+    def has_attribute(
+        self,
+        key: AttributeKey,
+    ) -> bool:
+        """
+        Return True if attribute exists.
+        """
+
+        with self._lock:
+
+            return key in self._attributes
+
+
+    # ------------------------------------------------------------------------------
+    # attribute_keys()
+    # ------------------------------------------------------------------------------
+
+    def attribute_keys(
+        self,
+    ) -> list[str]:
+        """
+        Return attribute keys.
+        """
+
+        with self._lock:
+
+            return list(
+                self._attributes.keys()
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # attribute_values()
+    # ------------------------------------------------------------------------------
+
+    def attribute_values(
+        self,
+    ) -> list[Any]:
+        """
+        Return attribute values.
+        """
+
+        with self._lock:
+
+            return list(
+                self._attributes.values()
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # attribute_items()
+    # ------------------------------------------------------------------------------
+
+    def attribute_items(
+        self,
+    ) -> list[tuple[str, Any]]:
+        """
+        Return attribute items.
+        """
+
+        with self._lock:
+
+            return list(
+                self._attributes.items()
+            )
+
+# ==============================================================================
+# Part 6. Events
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# add_event()
+# ------------------------------------------------------------------------------
+
+    def add_event(
+        self,
+        name: str,
+        attributes: Mapping[str, Any] | None = None,
+    ) -> "TraceSpan":
+        """
+        Record a runtime event.
+        """
+
+        with self._lock:
+
+            if self._closed:
+                raise SpanClosedError()
+
+            if not isinstance(
+                name,
+                str,
+            ):
                 raise SpanValidationError(
                     "Event name must be string."
                 )
 
+            name = name.strip()
 
             if not name:
-
                 raise SpanValidationError(
                     "Event name cannot be empty."
                 )
 
+            if (
+                len(self._events)
+                >= DEFAULT_EVENTS_LIMIT
+            ):
+                raise SpanValidationError(
+                    "Maximum event limit exceeded."
+                )
 
-            self._before_event(
-                name,
-                attributes,
-            )
+            if (
+                attributes is not None
+                and
+                not isinstance(
+                    attributes,
+                    Mapping,
+                )
+            ):
+                raise SpanValidationError(
+                    "Event attributes must be mapping."
+                )
 
+            now = time.time()
 
-            event = {
+            event: TraceEvent = {
 
                 "id":
-                    str(uuid.uuid4()),
+                    uuid.uuid4().hex,
 
                 "name":
                     name,
 
                 "timestamp":
-                    time.time(),
+                    now,
 
                 "attributes":
-                    dict(attributes or {}),
-
+                    copy.deepcopy(
+                        dict(
+                            attributes or {}
+                        )
+                    ),
             }
-
 
             self._events.append(
                 event
             )
 
-
             self._statistics.event_count = (
                 len(self._events)
             )
 
-
             self._statistics.update_count += 1
 
-
-            self._updated_at = time.time()
-
-
-            self._history.append(
-                {
-                    "event": "event_added",
-                    "name": name,
-                    "timestamp": self._updated_at,
-                }
-            )
-
-
-            self._after_event(
-                event
-            )
-
+            self._updated_at = now
 
             return self
 
 
-
-    # ==========================================================================
-    # Get Event
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # get_event()
+    # ------------------------------------------------------------------------------
 
     def get_event(
         self,
         event_id: str,
-    ) -> Optional[TraceEvent]:
+    ) -> TraceEvent | None:
         """
-        Retrieve event by id.
+        Return event by id.
         """
 
-        for event in self._events:
+        with self._lock:
 
-            if event.get(
-                "id"
-            ) == event_id:
+            for event in self._events:
 
-                return dict(event)
+                if (
+                    event.get("id")
+                    ==
+                    event_id
+                ):
+                    return copy.deepcopy(
+                        event
+                    )
+
+            return None
 
 
-        return None
-
-
-
-    # ==========================================================================
-    # Get Events
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # get_events()
+    # ------------------------------------------------------------------------------
 
     def get_events(
         self,
-    ) -> List[TraceEvent]:
+    ) -> list[TraceEvent]:
         """
         Return all events.
         """
 
-        return [
-            dict(event)
-            for event in self._events
-        ]
-
-
-
-    # ==========================================================================
-    # Remove Event
-    # ==========================================================================
-
-    def remove_event(
-        self,
-        event_id: str,
-    ) -> bool:
-        """
-        Remove event.
-        """
-
         with self._lock:
 
-            if self.closed:
-                raise SpanClosedError(
-                    "Cannot modify closed span."
-                )
-
-
-            for index, event in enumerate(
+            return copy.deepcopy(
                 self._events
-            ):
-
-                if event.get(
-                    "id"
-                ) == event_id:
-
-                    del self._events[index]
-
-
-                    self._statistics.event_count = (
-                        len(self._events)
-                    )
-
-
-                    self._statistics.update_count += 1
-
-
-                    self._updated_at = time.time()
-
-
-                    return True
-
-
-            return False
-
-
-
-    # ==========================================================================
-    # Clear Events
-    # ==========================================================================
-
-    def clear_events(
-        self,
-    ) -> None:
-        """
-        Remove all events.
-        """
-
-        with self._lock:
-
-            if self.closed:
-
-                raise SpanClosedError(
-                    "Cannot modify closed span."
-                )
-
-
-            self._events.clear()
-
-
-            self._statistics.event_count = 0
-
-
-            self._statistics.update_count += 1
-
-
-            self._updated_at = time.time()
-
-
-
-    # ==========================================================================
-    # Record Exception
-    # ==========================================================================
-
-    def record_exception(
-        self,
-        exception: BaseException,
-        *,
-        attributes: Optional[Attributes] = None,
-    ) -> "TraceSpan":
-        """
-        Record exception as tracing event.
-        """
-
-        if not isinstance(
-            exception,
-            BaseException,
-        ):
-
-            raise SpanValidationError(
-                "exception must derive from BaseException."
             )
 
 
-        data = {
-
-            "exception.type":
-                type(exception).__name__,
-
-
-            "exception.message":
-                str(exception),
-
-
-        }
-
-
-        if attributes:
-
-            data.update(
-                attributes
-            )
-
-
-        self.add_event(
-            "exception",
-            data,
-        )
-
-
-        self._status = (
-            SpanStatus.ERROR
-        )
-
-
-        self._statistics.error_count += 1
-
-
-        return self
-
-
-
-    # ==========================================================================
-    # Event Count
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # event_count
+    # ------------------------------------------------------------------------------
 
     @property
     def event_count(
@@ -3631,159 +2398,603 @@ class TraceSpan(BaseSpan):
         )
 
 
+    # ------------------------------------------------------------------------------
+    # has_event()
+    # ------------------------------------------------------------------------------
 
-    # ==========================================================================
-    # Event Hooks
-    # ==========================================================================
-
-    def _before_event(
+    def has_event(
         self,
-        name: str,
-        attributes: Optional[Attributes],
-    ) -> None:
+        event_id: str,
+    ) -> bool:
         """
-        Hook before adding event.
+        Check event existence.
         """
 
-        return None
+        return (
+            self.get_event(
+                event_id
+            )
+            is not None
+        )
 
 
+    # ------------------------------------------------------------------------------
+    # remove_event()
+    # ------------------------------------------------------------------------------
 
-    def _after_event(
+    def remove_event(
         self,
-        event: TraceEvent,
-    ) -> None:
+        event_id: str,
+    ) -> bool:
         """
-        Hook after adding event.
-        """
-
-        return None
-# ==============================================================================
-# Part 8. Serialization
-# ==============================================================================
-
-
-    # ==========================================================================
-    # Convert To Dictionary
-    # ==========================================================================
-
-    def to_dict(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Serialize TraceSpan into dictionary.
+        Remove event by id.
         """
 
         with self._lock:
 
-            self._before_serialize()
+            if self._closed:
+                raise SpanClosedError()
 
+            for index, event in enumerate(
+                self._events
+            ):
 
-            data = {
+                if (
+                    event.get("id")
+                    ==
+                    event_id
+                ):
 
-                "identity": {
+                    del self._events[
+                        index
+                    ]
 
-                    "trace_id":
-                        self.trace_id,
-
-                    "span_id":
-                        self.span_id,
-
-                    "parent_id":
-                        self.parent_id,
-
-                    "name":
-                        self.name,
-
-                },
-
-
-                "configuration": {
-
-                    "kind":
-                        self.kind.value
-                        if isinstance(
-                            self.kind,
-                            Enum,
+                    self._statistics.event_count = (
+                        len(
+                            self._events
                         )
-                        else self.kind,
+                    )
 
-                },
+                    self._statistics.update_count += 1
 
+                    self._updated_at = (
+                        time.time()
+                    )
 
-                "runtime": {
+                    return True
 
-                    "state":
-                        self._state.value
-                        if isinstance(
-                            self._state,
-                            Enum,
-                        )
-                        else self._state,
+            return False
 
 
-                    "status":
-                        self._status.value
-                        if isinstance(
-                            self._status,
-                            Enum,
-                        )
-                        else self._status,
+    # ------------------------------------------------------------------------------
+    # clear_events()
+    # ------------------------------------------------------------------------------
+
+    def clear_events(
+        self,
+    ) -> "TraceSpan":
+        """
+        Remove all events.
+        """
+
+        with self._lock:
+
+            if self._closed:
+                raise SpanClosedError()
+
+            if not self._events:
+                return self
+
+            self._events.clear()
+
+            self._statistics.event_count = 0
+
+            self._statistics.update_count += 1
+
+            self._updated_at = time.time()
+
+            return self
 
 
-                    "started_at":
-                        self._started_at,
+    # ------------------------------------------------------------------------------
+    # record_exception()
+    # ------------------------------------------------------------------------------
 
+    def record_exception(
+        self,
+        exc: BaseException,
+        **attributes: Any,
+    ) -> "TraceSpan":
+        """
+        Record exception as an event.
+        """
 
-                    "finished_at":
-                        self._finished_at,
+        if not isinstance(
+            exc,
+            BaseException,
+        ):
+            raise SpanValidationError(
+                "exc must be BaseException."
+            )
 
+        payload = {
 
-                    "duration":
-                        self.duration,
+            "type":
+                exc.__class__.__name__,
 
-                },
+            "message":
+                str(exc),
+        }
 
+        payload.update(
+            attributes
+        )
+
+        self.add_event(
+            "exception",
+            payload,
+        )
+
+        self._status = (
+            SpanStatus.ERROR
+        )
+
+        self._statistics.error_count += 1
+
+        return self
+
+# ==============================================================================
+# Part 7. Links
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# add_link()
+# ------------------------------------------------------------------------------
+
+    def add_link(
+        self,
+        trace_id: TraceId,
+        span_id: SpanId,
+        attributes: Mapping[str, Any] | None = None,
+        **metadata: Any,
+    ) -> "TraceSpan":
+        """
+        Add a link to another span.
+        """
+
+        with self._lock:
+
+            if self._closed:
+                raise SpanClosedError()
+
+            if (
+                not isinstance(trace_id, str)
+                or
+                not trace_id.strip()
+            ):
+                raise SpanValidationError(
+                    "trace_id cannot be empty."
+                )
+
+            if (
+                not isinstance(span_id, str)
+                or
+                not span_id.strip()
+            ):
+                raise SpanValidationError(
+                    "span_id cannot be empty."
+                )
+
+            trace_id = trace_id.strip()
+            span_id = span_id.strip()
+
+            payload: dict[str, Any] = {}
+
+            if attributes is not None:
+
+                if not isinstance(
+                    attributes,
+                    Mapping,
+                ):
+                    raise SpanValidationError(
+                        "Link attributes must be mapping."
+                    )
+
+                payload.update(attributes)
+
+            payload.update(metadata)
+
+            if (
+                len(self._links)
+                >=
+                DEFAULT_LINKS_LIMIT
+            ):
+                raise SpanValidationError(
+                    "Maximum link limit exceeded."
+                )
+
+            for link in self._links:
+
+                if (
+                    link["trace_id"] == trace_id
+                    and
+                    link["span_id"] == span_id
+                ):
+                    link["attributes"].update(
+                        copy.deepcopy(payload)
+                    )
+
+                    self._updated_at = time.time()
+
+                    return self
+
+            now = time.time()
+
+            link: TraceLink = {
+
+                "id":
+                    uuid.uuid4().hex,
+
+                "trace_id":
+                    trace_id,
+
+                "span_id":
+                    span_id,
 
                 "attributes":
-                    dict(
-                        self._attributes
+                    copy.deepcopy(payload),
+
+                "timestamp":
+                    now,
+            }
+
+            self._links.append(
+                link
+            )
+
+            self._statistics.link_count = (
+                len(self._links)
+            )
+
+            self._statistics.update_count += 1
+
+            self._updated_at = now
+
+            return self
+
+
+    # ------------------------------------------------------------------------------
+    # get_link()
+    # ------------------------------------------------------------------------------
+
+    def get_link(
+        self,
+        trace_id: TraceId,
+        span_id: SpanId,
+    ) -> TraceLink | None:
+        """
+        Return one link.
+        """
+
+        with self._lock:
+
+            for link in self._links:
+
+                if (
+                    link["trace_id"] == trace_id
+                    and
+                    link["span_id"] == span_id
+                ):
+                    return copy.deepcopy(
+                        link
+                    )
+
+            return None
+
+
+    # ------------------------------------------------------------------------------
+    # get_links()
+    # ------------------------------------------------------------------------------
+
+    def get_links(
+        self,
+    ) -> list[TraceLink]:
+        """
+        Return all links.
+        """
+
+        with self._lock:
+
+            return copy.deepcopy(
+                self._links
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # has_link()
+    # ------------------------------------------------------------------------------
+
+    def has_link(
+        self,
+        trace_id: TraceId,
+        span_id: SpanId,
+    ) -> bool:
+        """
+        Check whether link exists.
+        """
+
+        return (
+            self.get_link(
+                trace_id,
+                span_id,
+            )
+            is not None
+        )
+
+
+    # ------------------------------------------------------------------------------
+    # remove_link()
+    # ------------------------------------------------------------------------------
+
+    def remove_link(
+        self,
+        trace_id: TraceId,
+        span_id: SpanId | None = None,
+    ) -> bool:
+        """
+        Remove a link.
+
+        Supports:
+            remove_link(link_id)
+            remove_link(trace_id, span_id)
+        """
+
+        with self._lock:
+
+            if self._closed:
+                raise SpanClosedError()
+
+            for index, link in enumerate(
+                self._links
+            ):
+
+                matched = False
+
+                if span_id is None:
+
+                    matched = (
+                        link["id"]
+                        ==
+                        trace_id
+                    )
+
+                else:
+
+                    matched = (
+
+                        link["trace_id"]
+                        ==
+                        trace_id
+
+                        and
+
+                        link["span_id"]
+                        ==
+                        span_id
+
+                    )
+
+                if matched:
+
+                    del self._links[index]
+
+                    self._statistics.link_count = (
+                        len(self._links)
+                    )
+
+                    self._statistics.update_count += 1
+
+                    self._updated_at = (
+                        time.time()
+                    )
+
+                    return True
+
+            return False
+
+
+    # ------------------------------------------------------------------------------
+    # clear_links()
+    # ------------------------------------------------------------------------------
+
+    def clear_links(
+        self,
+    ) -> "TraceSpan":
+        """
+        Remove all links.
+        """
+
+        with self._lock:
+
+            if self._closed:
+                raise SpanClosedError()
+
+            if not self._links:
+                return self
+
+            self._links.clear()
+
+            self._statistics.link_count = 0
+
+            self._statistics.update_count += 1
+
+            self._updated_at = time.time()
+
+            return self
+
+
+    # ------------------------------------------------------------------------------
+    # link_count
+    # ------------------------------------------------------------------------------
+
+    @property
+    def link_count(
+        self,
+    ) -> int:
+        """
+        Number of links.
+        """
+
+        return len(
+            self._links
+        )
+
+# ==============================================================================
+# Part 8. Serialization
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# to_dict()
+# ------------------------------------------------------------------------------
+
+    def to_dict(
+        self,
+    ) -> SerializedSpan:
+        """
+        Serialize span into dictionary.
+        """
+
+        with self._lock:
+
+            return {
+
+                # ------------------------------------------------------------------
+                # Identity
+                # ------------------------------------------------------------------
+
+                "trace_id":
+                    self._trace_id,
+
+                "span_id":
+                    self._span_id,
+
+                "parent_span_id":
+                    self._parent_span_id,
+
+                # ------------------------------------------------------------------
+                # Metadata
+                # ------------------------------------------------------------------
+
+                "name":
+                    self._name,
+
+                "kind":
+                    self._kind.value,
+
+                # ------------------------------------------------------------------
+                # Lifecycle
+                # ------------------------------------------------------------------
+
+                "state":
+                    self._state.value,
+
+                "status":
+                    self._status.value,
+
+                "enabled":
+                    self._enabled,
+
+                "started":
+                    self._started,
+
+                "finished":
+                    self._finished,
+
+                "cancelled":
+                    getattr(
+                        self,
+                        "_cancelled",
+                        False,
                     ),
 
-
-                "events":
-                    list(
-                        self._events
+                "closed":
+                    getattr(
+                        self,
+                        "_closed",
+                        False,
                     ),
 
+                # ------------------------------------------------------------------
+                # Timing
+                # ------------------------------------------------------------------
 
-                "links":
-                    list(
-                        self._links
+                "created_at":
+                    self._created_at,
+
+                "updated_at":
+                    self._updated_at,
+
+                "started_at":
+                    self._started_at,
+
+                "finished_at":
+                    self._finished_at,
+
+                "start_time":
+                    self._start_time,
+
+                "end_time":
+                    self._end_time,
+
+                "duration":
+                    self.duration,
+
+                # ------------------------------------------------------------------
+                # Runtime
+                # ------------------------------------------------------------------
+
+                "context":
+                    copy.deepcopy(
+                        self._context
                     ),
-
-
-                "statistics":
-                    asdict(
-                        self._statistics
-                    ),
-
 
                 "metadata":
-                    dict(
+                    copy.deepcopy(
                         self._metadata
                     ),
 
+                "tags":
+                    copy.deepcopy(
+                        self._tags
+                    ),
+
+                "attributes":
+                    copy.deepcopy(
+                        self._attributes
+                    ),
+
+                "events":
+                    copy.deepcopy(
+                        self._events
+                    ),
+
+                "links":
+                    copy.deepcopy(
+                        self._links
+                    ),
+
+                # ------------------------------------------------------------------
+                # Statistics
+                # ------------------------------------------------------------------
+
+                "statistics":
+                    self._statistics.to_dict(),
             }
 
 
-            return data
-
-
-
-    # ==========================================================================
-    # Create From Dictionary
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # from_dict()
+    # ------------------------------------------------------------------------------
 
     @classmethod
     def from_dict(
@@ -3791,144 +3002,259 @@ class TraceSpan(BaseSpan):
         data: Mapping[str, Any],
     ) -> "TraceSpan":
         """
-        Restore TraceSpan from dictionary.
+        Restore span from dictionary.
         """
 
-        identity = (
-            data.get(
-                "identity",
-                {},
+        if not isinstance(
+            data,
+            Mapping,
+        ):
+            raise SpanValidationError(
+                "Serialized span must be mapping."
             )
-        )
-
-
-        configuration = (
-            data.get(
-                "configuration",
-                {},
-            )
-        )
-
 
         span = cls(
 
-            name=
-                identity.get(
-                    "name",
-                    DEFAULT_SPAN_NAME,
-                ),
+            name=data.get(
+                "name",
+                DEFAULT_SPAN_NAME,
+            ),
 
-            trace_id=
-                identity.get(
-                    "trace_id",
-                ),
+            trace_id=data.get(
+                "trace_id",
+            ),
 
-            parent_id=
-                identity.get(
-                    "parent_id",
-                ),
+            span_id=data.get(
+                "span_id",
+            ),
 
-            kind=
-                SpanKind(
-                    configuration.get(
-                        "kind",
-                        DEFAULT_KIND,
-                    )
-                ),
+            parent_span_id=data.get(
+                "parent_span_id",
+            ),
 
+            kind=SpanKind(
+                data.get(
+                    "kind",
+                    SpanKind.INTERNAL.value,
+                )
+            ),
+
+            attributes=copy.deepcopy(
+                data.get(
+                    "attributes",
+                    {},
+                )
+            ),
+
+            metadata=copy.deepcopy(
+                data.get(
+                    "metadata",
+                    {},
+                )
+            ),
+
+            tags=copy.deepcopy(
+                data.get(
+                    "tags",
+                    {},
+                )
+            ),
+
+            enabled=bool(
+                data.get(
+                    "enabled",
+                    True,
+                )
+            ),
         )
 
+        # ------------------------------------------------------------------
+        # Lifecycle
+        # ------------------------------------------------------------------
 
-        span._attributes.update(
+        span._state = SpanState(
             data.get(
-                "attributes",
+                "state",
+                SpanState.INITIALIZED.value,
+            )
+        )
+
+        span._status = SpanStatus(
+            data.get(
+                "status",
+                SpanStatus.UNSET.value,
+            )
+        )
+
+        span._started = bool(
+            data.get(
+                "started",
+                False,
+            )
+        )
+
+        span._finished = bool(
+            data.get(
+                "finished",
+                False,
+            )
+        )
+
+        span._cancelled = bool(
+            data.get(
+                "cancelled",
+                False,
+            )
+        )
+
+        span._closed = bool(
+            data.get(
+                "closed",
+                False,
+            )
+        )
+
+        # ------------------------------------------------------------------
+        # Timing
+        # ------------------------------------------------------------------
+
+        span._created_at = float(
+            data.get(
+                "created_at",
+                span._created_at,
+            )
+        )
+
+        span._updated_at = float(
+            data.get(
+                "updated_at",
+                span._updated_at,
+            )
+        )
+
+        span._started_at = data.get(
+            "started_at",
+        )
+
+        span._finished_at = data.get(
+            "finished_at",
+        )
+
+        span._start_time = float(
+            data.get(
+                "start_time",
+                0.0,
+            )
+        )
+
+        span._end_time = float(
+            data.get(
+                "end_time",
+                0.0,
+            )
+        )
+
+        span._duration = float(
+            data.get(
+                "duration",
+                0.0,
+            )
+        )
+
+        # ------------------------------------------------------------------
+        # Collections
+        # ------------------------------------------------------------------
+
+        span._context = copy.deepcopy(
+            data.get(
+                "context",
                 {},
             )
         )
 
-
-        span._events.extend(
+        span._events = copy.deepcopy(
             data.get(
                 "events",
                 [],
             )
         )
 
-
-        span._links.extend(
+        span._links = copy.deepcopy(
             data.get(
                 "links",
                 [],
             )
         )
 
+        # ------------------------------------------------------------------
+        # Statistics
+        # ------------------------------------------------------------------
 
-        runtime = (
-            data.get(
-                "runtime",
-                {},
-            )
+        statistics = data.get(
+            "statistics",
         )
 
-
-        if runtime.get(
-            "status"
+        if (
+            isinstance(
+                statistics,
+                Mapping,
+            )
+            and
+            hasattr(
+                SpanStatistics,
+                "from_dict",
+            )
         ):
-
-            span._status = SpanStatus(
-                runtime["status"]
+            span._statistics = (
+                SpanStatistics.from_dict(
+                    statistics
+                )
             )
 
-
-        if runtime.get(
-            "state"
+        elif isinstance(
+            statistics,
+            Mapping,
         ):
-
-            span._state = SpanState(
-                runtime["state"]
+            span._statistics = (
+                SpanStatistics(
+                    **statistics
+                )
             )
 
+        else:
 
-        span._started_at = (
-            runtime.get(
-                "started_at"
+            span._statistics.attribute_count = (
+                len(
+                    span._attributes
+                )
             )
-        )
 
-
-        span._finished_at = (
-            runtime.get(
-                "finished_at"
+            span._statistics.event_count = (
+                len(
+                    span._events
+                )
             )
-        )
 
-
-        span._metadata.update(
-            data.get(
-                "metadata",
-                {},
+            span._statistics.link_count = (
+                len(
+                    span._links
+                )
             )
-        )
-
-
-        span._after_deserialize()
-
 
         return span
 
 
-
-    # ==========================================================================
-    # JSON Serialization
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # to_json()
+    # ------------------------------------------------------------------------------
 
     def to_json(
         self,
         *,
-        indent: int = 2,
+        indent: int = DEFAULT_INDENT,
     ) -> str:
         """
-        Serialize span to JSON.
+        Serialize span into JSON.
         """
 
         return json.dumps(
@@ -3937,11 +3263,18 @@ class TraceSpan(BaseSpan):
 
             indent=indent,
 
+            sort_keys=DEFAULT_JSON_SORT_KEYS,
+
+            ensure_ascii=DEFAULT_JSON_ENSURE_ASCII,
+
             default=str,
 
         )
 
 
+    # ------------------------------------------------------------------------------
+    # from_json()
+    # ------------------------------------------------------------------------------
 
     @classmethod
     def from_json(
@@ -3952,6 +3285,14 @@ class TraceSpan(BaseSpan):
         Restore span from JSON.
         """
 
+        if not isinstance(
+            payload,
+            str,
+        ):
+            raise SpanValidationError(
+                "JSON payload must be string."
+            )
+
         return cls.from_dict(
             json.loads(
                 payload
@@ -3959,586 +3300,1102 @@ class TraceSpan(BaseSpan):
         )
 
 
-
-    # ==========================================================================
-    # File Persistence
-    # ==========================================================================
-
-    def save(
-        self,
-        path: Union[str, Path],
-    ) -> None:
-        """
-        Save span snapshot to file.
-        """
-
-        target = Path(
-            path
-        )
-
-
-        target.write_text(
-
-            self.to_json(),
-
-            encoding=DEFAULT_ENCODING,
-
-        )
-
-
-
-    @classmethod
-    def load(
-        cls,
-        path: Union[str, Path],
-    ) -> "TraceSpan":
-        """
-        Load span from file.
-        """
-
-        source = Path(
-            path
-        )
-
-
-        return cls.from_json(
-
-            source.read_text(
-                encoding=DEFAULT_ENCODING,
-            )
-
-        )
-
-
-
-    # ==========================================================================
-    # Snapshot
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # snapshot()
+    # ------------------------------------------------------------------------------
 
     def snapshot(
         self,
     ) -> SpanSnapshot:
         """
-        Create runtime snapshot.
+        Create snapshot.
         """
 
-        return SpanSnapshot(
+        with self._lock:
 
-            identity={
-                "trace_id":
-                    self.trace_id,
+            return SpanSnapshot(
 
-                "span_id":
-                    self.span_id,
+                trace_id=self._trace_id,
 
-                "name":
-                    self.name,
-            },
+                span_id=self._span_id,
 
+                parent_span_id=self._parent_span_id,
 
-            runtime={
-                "state":
-                    self._state.value,
+                name=self._name,
 
-                "status":
-                    self._status.value,
+                kind=self._kind.value,
 
-            },
+                state=self._state.value,
 
+                status=self._status.value,
 
-            attributes=
-                dict(
+                start_time=self._start_time,
+
+                end_time=self._end_time,
+
+                duration=self.duration,
+
+                attributes=copy.deepcopy(
                     self._attributes
                 ),
 
-
-            events=
-                list(
+                events=copy.deepcopy(
                     self._events
                 ),
 
-
-            links=
-                list(
+                links=copy.deepcopy(
                     self._links
                 ),
 
-
-            statistics=
-                asdict(
-                    self._statistics
+                metadata=copy.deepcopy(
+                    self._metadata
                 ),
 
-        )
+                statistics=self._statistics.to_dict(),
+
+            )
 
 
+    # ------------------------------------------------------------------------------
+    # restore()
+    # ------------------------------------------------------------------------------
 
     def restore(
         self,
         snapshot: SpanSnapshot,
     ) -> "TraceSpan":
         """
-        Restore runtime snapshot.
+        Restore current object from snapshot.
         """
 
-        self._attributes.clear()
-
-        self._attributes.update(
-            snapshot.attributes
-        )
-
-
-        self._events.clear()
-
-        self._events.extend(
-            snapshot.events
-        )
-
-
-        self._links.clear()
-
-        self._links.extend(
-            snapshot.links
-        )
-
-
-        self._statistics = (
-            SpanStatistics(
-                **snapshot.statistics
+        if not isinstance(
+            snapshot,
+            SpanSnapshot,
+        ):
+            raise SpanValidationError(
+                "Invalid snapshot."
             )
-        )
 
+        with self._lock:
 
-        return self
+            self._trace_id = snapshot.trace_id
+            self._span_id = snapshot.span_id
+            self._parent_span_id = (
+                snapshot.parent_span_id
+            )
 
+            self._name = snapshot.name
+            self._kind = SpanKind(
+                snapshot.kind
+            )
+            self._state = SpanState(
+                snapshot.state
+            )
+            self._status = SpanStatus(
+                snapshot.status
+            )
 
+            self._start_time = (
+                snapshot.start_time
+            )
 
-    # ==========================================================================
-    # Serialization Hooks
-    # ==========================================================================
+            self._end_time = (
+                snapshot.end_time
+                or
+                0.0
+            )
 
-    def _before_serialize(
-        self,
-    ) -> None:
-        """
-        Hook before serialization.
-        """
+            self._duration = (
+                snapshot.duration
+            )
 
-        return None
+            self._attributes = copy.deepcopy(
+                snapshot.attributes
+            )
 
+            self._events = copy.deepcopy(
+                snapshot.events
+            )
 
+            self._links = copy.deepcopy(
+                snapshot.links
+            )
 
-    def _after_deserialize(
-        self,
-    ) -> None:
-        """
-        Hook after deserialization.
-        """
+            self._metadata = copy.deepcopy(
+                snapshot.metadata
+            )
 
-        return None
+            if hasattr(
+                SpanStatistics,
+                "from_dict",
+            ):
+                self._statistics = (
+                    SpanStatistics.from_dict(
+                        snapshot.statistics
+                    )
+                )
+            else:
+                self._statistics = (
+                    SpanStatistics(
+                        **snapshot.statistics
+                    )
+                )
+
+            self._updated_at = time.time()
+
+            return self
+
+    
 # ==============================================================================
-# Part 9. Statistics & Reports
+# Part 9. Validation
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# validate()
+# ------------------------------------------------------------------------------
 
-    # ==========================================================================
-    # Statistics
-    # ==========================================================================
-
-    def statistics(
+    def validate(
         self,
-    ) -> SpanStatistics:
+    ) -> bool:
         """
-        Return runtime statistics snapshot.
+        Validate runtime integrity.
         """
 
         with self._lock:
 
-            return copy.deepcopy(
-                self._statistics
+            self._validate_identity()
+            self._validate_state()
+            self._validate_flags()
+            self._validate_timing()
+            self._validate_collections()
+            self._validate_statistics()
+
+            return True
+
+
+    # ------------------------------------------------------------------------------
+    # _validate_identity()
+    # ------------------------------------------------------------------------------
+
+    def _validate_identity(
+        self,
+    ) -> None:
+        """
+        Validate identity fields.
+        """
+
+        if (
+            not isinstance(
+                self._trace_id,
+                str,
+            )
+            or
+            not self._trace_id.strip()
+        ):
+            raise SpanValidationError(
+                "Invalid trace_id."
+            )
+
+        if (
+            not isinstance(
+                self._span_id,
+                str,
+            )
+            or
+            not self._span_id.strip()
+        ):
+            raise SpanValidationError(
+                "Invalid span_id."
+            )
+
+        if (
+            self._parent_span_id is not None
+            and
+            (
+                not isinstance(
+                    self._parent_span_id,
+                    str,
+                )
+                or
+                not self._parent_span_id.strip()
+            )
+        ):
+            raise SpanValidationError(
+                "Invalid parent_span_id."
+            )
+
+        if (
+            not isinstance(
+                self._name,
+                str,
+            )
+            or
+            not self._name.strip()
+        ):
+            raise SpanValidationError(
+                "Span name cannot be empty."
             )
 
 
+    # ------------------------------------------------------------------------------
+    # _validate_state()
+    # ------------------------------------------------------------------------------
 
-    # ==========================================================================
-    # Runtime Statistics
-    # ==========================================================================
+    def _validate_state(
+        self,
+    ) -> None:
+        """
+        Validate enum objects.
+        """
+
+        if not isinstance(
+            self._kind,
+            SpanKind,
+        ):
+            raise SpanValidationError(
+                "Invalid span kind."
+            )
+
+        if not isinstance(
+            self._state,
+            SpanState,
+        ):
+            raise SpanValidationError(
+                "Invalid span state."
+            )
+
+        if not isinstance(
+            self._status,
+            SpanStatus,
+        ):
+            raise SpanValidationError(
+                "Invalid span status."
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # _validate_flags()
+    # ------------------------------------------------------------------------------
+
+    def _validate_flags(
+        self,
+    ) -> None:
+        """
+        Validate lifecycle flags.
+        """
+
+        flags = (
+
+            getattr(
+                self,
+                "_enabled",
+                True,
+            ),
+
+            getattr(
+                self,
+                "_started",
+                False,
+            ),
+
+            getattr(
+                self,
+                "_finished",
+                False,
+            ),
+
+            getattr(
+                self,
+                "_cancelled",
+                False,
+            ),
+
+            getattr(
+                self,
+                "_closed",
+                False,
+            ),
+        )
+
+        if not all(
+            isinstance(
+                value,
+                bool,
+            )
+            for value in flags
+        ):
+            raise SpanValidationError(
+                "Lifecycle flags must be bool."
+            )
+
+        if (
+            self._finished
+            and
+            not self._started
+        ):
+            raise SpanValidationError(
+                "Finished span must be started."
+            )
+
+        if (
+            self._closed
+            and
+            not self._finished
+            and
+            not self._cancelled
+        ):
+            raise SpanValidationError(
+                "Closed span must be finished or cancelled."
+            )
+
+        if (
+            self._cancelled
+            and
+            self._status
+            not in (
+                SpanStatus.ERROR,
+                SpanStatus.CANCELLED,
+            )
+        ):
+            raise SpanValidationError(
+                "Cancelled span has invalid status."
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # _validate_timing()
+    # ------------------------------------------------------------------------------
+
+    def _validate_timing(
+        self,
+    ) -> None:
+        """
+        Validate timestamps.
+        """
+
+        values = (
+
+            self._created_at,
+
+            self._updated_at,
+
+            self._start_time,
+
+            self._end_time,
+        )
+
+        for value in values:
+
+            if (
+                value is not None
+                and
+                value < 0.0
+            ):
+                raise SpanValidationError(
+                    "Timestamp cannot be negative."
+                )
+
+        if (
+            self._updated_at
+            <
+            self._created_at
+        ):
+            raise SpanValidationError(
+                "updated_at precedes created_at."
+            )
+
+        if (
+            self._start_time > 0.0
+            and
+            self._end_time > 0.0
+            and
+            self._end_time < self._start_time
+        ):
+            raise SpanValidationError(
+                "end_time precedes start_time."
+            )
+
+        duration = getattr(
+            self,
+            "_duration",
+            self.duration,
+        )
+
+        if duration < 0.0:
+            raise SpanValidationError(
+                "Negative duration."
+            )
+
+        if (
+            self._finished
+            and
+            self._start_time > 0.0
+            and
+            self._end_time > 0.0
+        ):
+
+            expected = (
+                self._end_time
+                -
+                self._start_time
+            )
+
+            if abs(
+                expected - duration
+            ) > 1e-6:
+                raise SpanValidationError(
+                    "Duration mismatch."
+                )
+
+
+    # ------------------------------------------------------------------------------
+    # _validate_collections()
+    # ------------------------------------------------------------------------------
+
+    def _validate_collections(
+        self,
+    ) -> None:
+        """
+        Validate runtime collections.
+        """
+
+        mappings = {
+
+            "attributes":
+                self._attributes,
+
+            "context":
+                self._context,
+
+            "metadata":
+                self._metadata,
+
+            "children":
+                self._children,
+
+            "cache":
+                self._cache,
+        }
+
+        for name, value in mappings.items():
+
+            if not isinstance(
+                value,
+                dict,
+            ):
+                raise SpanValidationError(
+                    f"{name} must be dict."
+                )
+
+        if not isinstance(
+            self._tags,
+            (
+                dict,
+                list,
+                set,
+            ),
+        ):
+            raise SpanValidationError(
+                "tags must be collection."
+            )
+
+        if not isinstance(
+            self._events,
+            list,
+        ):
+            raise SpanValidationError(
+                "events must be list."
+            )
+
+        if not isinstance(
+            self._links,
+            list,
+        ):
+            raise SpanValidationError(
+                "links must be list."
+            )
+
+        if not isinstance(
+            self._history,
+            deque,
+        ):
+            raise SpanValidationError(
+                "history must be deque."
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # _validate_statistics()
+    # ------------------------------------------------------------------------------
+
+    def _validate_statistics(
+        self,
+    ) -> None:
+        """
+        Validate statistics consistency.
+        """
+
+        if not isinstance(
+            self._statistics,
+            SpanStatistics,
+        ):
+            raise SpanValidationError(
+                "Invalid statistics object."
+            )
+
+        checks = (
+
+            (
+                "attribute_count",
+                len(
+                    self._attributes
+                ),
+            ),
+
+            (
+                "event_count",
+                len(
+                    self._events
+                ),
+            ),
+
+            (
+                "link_count",
+                len(
+                    self._links
+                ),
+            ),
+        )
+
+        for field, expected in checks:
+
+            actual = getattr(
+                self._statistics,
+                field,
+                expected,
+            )
+
+            if actual != expected:
+                raise SpanValidationError(
+                    f"{field} mismatch."
+                )
+# ==============================================================================
+# Part 10. Diagnostics
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# health()
+# ------------------------------------------------------------------------------
+
+    def health(
+        self,
+    ) -> bool:
+        """
+        Return runtime health status.
+        """
+
+        with self._lock:
+
+            try:
+
+                self.validate()
+
+            except Exception:
+
+                return False
+
+            return (
+
+                not getattr(
+                    self,
+                    "_closed",
+                    False,
+                )
+
+                and
+
+                self._state is not SpanState.CLOSED
+
+            )
+
+
+    # ------------------------------------------------------------------------------
+    # diagnostics()
+    # ------------------------------------------------------------------------------
+
+    def diagnostics(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return detailed runtime diagnostics.
+        """
+
+        with self._lock:
+
+            statistics = self._statistics.to_dict()
+
+            return {
+
+                # --------------------------------------------------------------
+                # Health
+                # --------------------------------------------------------------
+
+                "healthy":
+                    self.health(),
+
+                "valid":
+                    self.health(),
+
+                # --------------------------------------------------------------
+                # Identity
+                # --------------------------------------------------------------
+
+                "trace_id":
+                    self._trace_id,
+
+                "span_id":
+                    self._span_id,
+
+                "parent_span_id":
+                    self._parent_span_id,
+
+                "name":
+                    self._name,
+
+                "kind":
+                    self._kind.value,
+
+                # --------------------------------------------------------------
+                # Lifecycle
+                # --------------------------------------------------------------
+
+                "state":
+                    self._state.value,
+
+                "status":
+                    self._status.value,
+
+                "enabled":
+                    self._enabled,
+
+                "started":
+                    self._started,
+
+                "finished":
+                    self._finished,
+
+                "cancelled":
+                    getattr(
+                        self,
+                        "_cancelled",
+                        False,
+                    ),
+
+                "closed":
+                    getattr(
+                        self,
+                        "_closed",
+                        False,
+                    ),
+
+                # --------------------------------------------------------------
+                # Timing
+                # --------------------------------------------------------------
+
+                "created_at":
+                    self._created_at,
+
+                "updated_at":
+                    self._updated_at,
+
+                "started_at":
+                    self._started_at,
+
+                "finished_at":
+                    self._finished_at,
+
+                "start_time":
+                    self._start_time,
+
+                "end_time":
+                    self._end_time,
+
+                "duration":
+                    self.duration,
+
+                # --------------------------------------------------------------
+                # Collections
+                # --------------------------------------------------------------
+
+                "attributes":
+                    len(self._attributes),
+
+                "events":
+                    len(self._events),
+
+                "links":
+                    len(self._links),
+
+                "children":
+                    len(self._children),
+
+                "history":
+                    len(self._history),
+
+                "tags":
+                    copy.deepcopy(
+                        self._tags,
+                    ),
+
+                "metadata":
+                    copy.deepcopy(
+                        self._metadata,
+                    ),
+
+                "context":
+                    copy.deepcopy(
+                        self._context,
+                    ),
+
+                # --------------------------------------------------------------
+                # Statistics
+                # --------------------------------------------------------------
+
+                "statistics":
+                    statistics,
+            }
+
+
+    # ------------------------------------------------------------------------------
+    # summary()
+    # ------------------------------------------------------------------------------
+
+    def summary(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return compact runtime summary.
+        """
+
+        with self._lock:
+
+            return {
+
+                "trace_id":
+                    self._trace_id,
+
+                "span_id":
+                    self._span_id,
+
+                "name":
+                    self._name,
+
+                "kind":
+                    self._kind.value,
+
+                "state":
+                    self._state.value,
+
+                "status":
+                    self._status.value,
+
+                "duration":
+                    self.duration,
+
+                "events":
+                    len(
+                        self._events
+                    ),
+
+                "attributes":
+                    len(
+                        self._attributes
+                    ),
+
+                "links":
+                    len(
+                        self._links
+                    ),
+
+                "healthy":
+                    self.health(),
+
+            }
+
+
+    # ------------------------------------------------------------------------------
+    # report()
+    # ------------------------------------------------------------------------------
+
+    def report(
+        self,
+    ) -> SpanReport:
+        """
+        Generate SpanReport.
+        """
+
+        with self._lock:
+
+            report = SpanReport()
+
+            report.trace_id = self._trace_id
+            report.span_id = self._span_id
+            report.parent_span_id = self._parent_span_id
+
+            report.name = self._name
+            report.kind = self._kind.value
+
+            report.state = self._state.value
+            report.status = self._status.value
+
+            report.duration = self.duration
+
+            report.event_count = len(
+                self._events
+            )
+
+            report.attribute_count = len(
+                self._attributes
+            )
+
+            report.link_count = len(
+                self._links
+            )
+
+            report.child_count = len(
+                self._children
+            )
+
+            report.error_count = getattr(
+                self._statistics,
+                "error_count",
+                0,
+            )
+
+            report.created_at = self._created_at
+
+            return report
+
+
+    # ------------------------------------------------------------------------------
+    # runtime_statistics()
+    # ------------------------------------------------------------------------------
 
     def runtime_statistics(
         self,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
-        Return detailed runtime metrics.
+        Return runtime statistics.
         """
 
         with self._lock:
 
-            now = time.time()
+            uptime = max(
 
+                0.0,
+
+                time.time()
+                -
+                self._created_at,
+
+            )
 
             return {
 
                 "identity": {
 
                     "trace_id":
-                        self.trace_id,
+                        self._trace_id,
 
                     "span_id":
-                        self.span_id,
+                        self._span_id,
 
                     "name":
-                        self.name,
+                        self._name,
 
                 },
 
+                "lifecycle": {
 
-                "state":
-                    self._state.value,
+                    "state":
+                        self._state.value,
 
+                    "status":
+                        self._status.value,
 
-                "status":
-                    self._status.value,
+                    "enabled":
+                        self._enabled,
 
+                    "started":
+                        self._started,
 
-                "duration":
-                    self.duration,
+                    "finished":
+                        self._finished,
 
+                },
 
-                "uptime":
+                "counts": {
 
-                    now -
-                    self._created_at,
+                    "attributes":
+                        len(
+                            self._attributes
+                        ),
 
+                    "events":
+                        len(
+                            self._events
+                        ),
 
-                "events":
+                    "links":
+                        len(
+                            self._links
+                        ),
 
-                    len(
-                        self._events
-                    ),
+                    "children":
+                        len(
+                            self._children
+                        ),
 
+                },
 
-                "attributes":
+                "timing": {
 
-                    len(
-                        self._attributes
-                    ),
+                    "duration":
+                        self.duration,
 
+                    "uptime":
+                        uptime,
 
-                "links":
-
-                    len(
-                        self._links
-                    ),
-
+                },
 
                 "statistics":
-
-                    asdict(
-                        self._statistics
-                    ),
+                    self._statistics.to_dict(),
 
             }
 
 
-
-    # ==========================================================================
-    # Report
-    # ==========================================================================
-
-    def report(
-        self,
-    ) -> SpanReport:
-        """
-        Generate span report.
-        """
-
-        duration = (
-            self.duration
-        )
-
-
-        return SpanReport(
-
-            name=self.name,
-
-            trace_id=self.trace_id,
-
-            span_id=self.span_id,
-
-            kind=(
-                self.kind.value
-                if isinstance(
-                    self.kind,
-                    Enum,
-                )
-                else str(self.kind)
-            ),
-
-
-            status=(
-                self._status.value
-                if isinstance(
-                    self._status,
-                    Enum,
-                )
-                else str(self._status)
-            ),
-
-
-            duration=duration,
-
-
-            event_count=
-                len(
-                    self._events
-                ),
-
-
-            attribute_count=
-                len(
-                    self._attributes
-                ),
-
-
-            error_count=
-                self._statistics.error_count,
-
-
-            created_at=
-                self._created_at,
-
-        )
-
-
-
-    # ==========================================================================
-    # Summary
-    # ==========================================================================
-
-    def summary(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Compact human-readable summary.
-        """
-
-        return {
-
-            "name":
-                self.name,
-
-
-            "trace_id":
-                self.trace_id,
-
-
-            "span_id":
-                self.span_id,
-
-
-            "status":
-                self._status.value,
-
-
-            "state":
-                self._state.value,
-
-
-            "duration":
-                self.duration,
-
-
-            "events":
-                self.event_count,
-
-
-            "attributes":
-                len(
-                    self._attributes
-                ),
-
-
-            "errors":
-                self._statistics.error_count,
-
-        }
-
-
-
-    # ==========================================================================
-    # Diagnostics
-    # ==========================================================================
-
-    def diagnostics(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Full diagnostic information.
-        """
-
-        return {
-
-            "healthy":
-                self.health(),
-
-
-            "summary":
-                self.summary(),
-
-
-            "runtime":
-                self.runtime_statistics(),
-
-
-            "snapshot":
-                self.snapshot(),
-
-        }
-
-
-
-    # ==========================================================================
-    # Success Rate
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # success_rate()
+    # ------------------------------------------------------------------------------
 
     def success_rate(
         self,
     ) -> float:
         """
-        Calculate successful execution rate.
-
-        Span level:
-            OK -> 1.0
-            ERROR -> 0.0
+        Return success rate.
         """
 
-        if self._status == SpanStatus.OK:
+        with self._lock:
 
-            return 1.0
+            status = self._status
+
+            if status is SpanStatus.OK:
+                return 1.0
+
+            if status is SpanStatus.ERROR:
+                return 0.0
+
+            if status is SpanStatus.UNSET:
+                return 0.5
+
+            return 0.5
 
 
-        if self._status == SpanStatus.ERROR:
-
-            return 0.0
-
-
-        return 0.5
-
-
-
-    # ==========================================================================
-    # Failure Rate
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # failure_rate()
+    # ------------------------------------------------------------------------------
 
     def failure_rate(
         self,
     ) -> float:
         """
-        Calculate failure rate.
+        Return failure rate.
         """
 
-        return (
-            1.0 -
-            self.success_rate()
+        return max(
+
+            0.0,
+
+            1.0
+            -
+            self.success_rate(),
+
         )
 
 
-
-    # ==========================================================================
-    # Duration Statistics
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # duration_statistics()
+    # ------------------------------------------------------------------------------
 
     def duration_statistics(
         self,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
-        Duration metrics.
+        Return duration statistics.
         """
 
-        duration = (
-            self.duration
-        )
+        with self._lock:
+
+            duration = max(
+                0.0,
+                self.duration,
+            )
+
+            return {
+
+                "current":
+                    duration,
+
+                "minimum":
+                    duration,
+
+                "maximum":
+                    duration,
+
+                "average":
+                    duration,
+
+            }
 
 
-        return {
-
-            "current":
-                duration,
-
-
-            "minimum":
-                duration,
-
-
-            "maximum":
-                duration,
-
-
-            "average":
-                duration,
-
-        }
-
-
-
-    # ==========================================================================
-    # Throughput
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
+    # throughput()
+    # ------------------------------------------------------------------------------
 
     def throughput(
         self,
     ) -> float:
         """
-        Calculate events throughput.
+        Return event throughput.
         """
 
-        duration = (
-            self.duration
-        )
+        with self._lock:
 
+            duration = self.duration
 
-        if duration <= 0:
+            if duration <= 0.0:
 
-            return 0.0
+                return 0.0
 
+            return (
 
-        return (
-            self.event_count /
-            duration
-        )
+                len(
+                    self._events
+                )
 
+                /
 
+                duration
 
-    # ==========================================================================
-    # Health Check
-    # ==========================================================================
+            ) 
 
-    def health(
-        self,
-    ) -> bool:
-        """
-        Runtime health status.
-        """
-
-        if self.closed:
-
-            return False
-
-
-        if self._state == SpanState.ERROR:
-
-            return False
-
-
-        return True
 # ==============================================================================
-# Part 10. Python Protocols
+# Part 11. Python Protocols
 # ==============================================================================
 
-
-    # ==========================================================================
-    # Representation
-    # ==========================================================================
+# ------------------------------------------------------------------------------
+# Representation
+# ------------------------------------------------------------------------------
 
     def __repr__(
         self,
@@ -4547,16 +4404,31 @@ class TraceSpan(BaseSpan):
         Developer representation.
         """
 
-        return (
-            f"TraceSpan("
-            f"name={self.name!r}, "
-            f"trace_id={self.trace_id!r}, "
-            f"span_id={self.span_id!r}, "
-            f"state={self._state.value!r}, "
-            f"status={self._status.value!r}"
-            f")"
-        )
+        with self._lock:
 
+            return (
+
+                "TraceSpan("
+
+                f"name={self._name!r}, "
+
+                f"trace_id={self._trace_id!r}, "
+
+                f"span_id={self._span_id!r}, "
+
+                f"state={self._state.value!r}, "
+
+                f"status={self._status.value!r}, "
+
+                f"events={len(self._events)}, "
+
+                f"attributes={len(self._attributes)}, "
+
+                f"links={len(self._links)}"
+
+                ")"
+
+            )
 
 
     def __str__(
@@ -4566,86 +4438,116 @@ class TraceSpan(BaseSpan):
         Human readable representation.
         """
 
-        return (
-            f"{self.name}"
-            f"[{self.span_id}] "
-            f"{self._status.value}"
-        )
+        with self._lock:
+
+            return (
+
+                f"{self._name}"
+
+                f"[{self._span_id}] "
+
+                f"{self._status.value}"
+
+            )
 
 
-
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
     # Container Protocol
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
 
     def __len__(
         self,
     ) -> int:
         """
-        Return number of stored items.
+        Return runtime object count.
 
-        Items:
-            attributes
-            events
-            links
+        attributes + events + links
         """
 
-        return (
-            len(self._attributes)
-            +
-            len(self._events)
-            +
-            len(self._links)
-        )
+        with self._lock:
 
+            return (
+
+                len(
+                    self._attributes
+                )
+
+                +
+
+                len(
+                    self._events
+                )
+
+                +
+
+                len(
+                    self._links
+                )
+
+            )
 
 
     def __iter__(
         self,
     ) -> Iterator[str]:
         """
-        Iterate attributes.
+        Iterate attribute keys.
         """
 
-        return iter(
-            self._attributes
-        )
+        with self._lock:
 
+            return iter(
+
+                tuple(
+                    self._attributes.keys()
+                )
+
+            )
 
 
     def __contains__(
         self,
-        item: str,
+        key: object,
     ) -> bool:
         """
         Check attribute existence.
         """
 
-        return (
-            item in self._attributes
-        )
+        if not isinstance(
+            key,
+            str,
+        ):
+
+            return False
+
+        with self._lock:
+
+            return (
+
+                key
+                in
+                self._attributes
+
+            )
 
 
-
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
     # Mapping Protocol
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
 
     def __getitem__(
         self,
         key: str,
     ) -> Any:
         """
-        Dictionary-style access.
-
-        Example:
-
-            span["service"]
-
+        Get attribute.
         """
 
-        return self._attributes[key]
+        with self._lock:
 
+            return self._attributes[
+                key
+            ]
 
 
     def __setitem__(
@@ -4654,64 +4556,100 @@ class TraceSpan(BaseSpan):
         value: Any,
     ) -> None:
         """
-        Dictionary-style assignment.
-
-        Example:
-
-            span["model"] = "QTC"
-
+        Set attribute.
         """
 
         self.set_attribute(
+
             key,
+
             value,
+
         )
 
 
+    def __delitem__(
+        self,
+        key: str,
+    ) -> None:
+        """
+        Delete attribute.
+        """
 
-    # ==========================================================================
+        if not self.remove_attribute(
+            key
+        ):
+
+            raise KeyError(
+                key
+            )
+
+
+    # ------------------------------------------------------------------------------
     # Boolean Protocol
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
 
     def __bool__(
         self,
     ) -> bool:
         """
-        Span truth evaluation.
+        Runtime truth state.
         """
 
-        return (
-            not self.closed
-            and
-            self._state
-            != SpanState.ERROR
-        )
+        with self._lock:
+
+            return (
+
+                self._enabled
+
+                and
+
+                not getattr(
+                    self,
+                    "_cancelled",
+                    False,
+                )
+
+                and
+
+                not getattr(
+                    self,
+                    "_closed",
+                    False,
+                )
+
+                and
+
+                self._state
+                is not SpanState.CLOSED
+
+            )
 
 
-
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
     # Copy Protocol
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
 
     def __copy__(
         self,
     ) -> "TraceSpan":
         """
-        Shallow copy.
+        Shallow runtime copy.
         """
 
-        return self.from_dict(
-            self.to_dict()
-        )
+        return self.__class__.from_dict(
 
+            self.to_dict()
+
+        )
 
 
     def __deepcopy__(
         self,
-        memo: Optional[Dict[int, Any]] = None,
+        memo: dict[int, Any] | None = None,
     ) -> "TraceSpan":
         """
-        Deep copy.
+        Deep runtime copy.
         """
 
         if memo is None:
@@ -4719,30 +4657,97 @@ class TraceSpan(BaseSpan):
             memo = {}
 
 
-        copied = self.from_dict(
+        existing = memo.get(
+            id(self)
+        )
+
+        if existing is not None:
+
+            return existing
+
+
+        obj = self.__class__.from_dict(
+
             copy.deepcopy(
+
                 self.to_dict(),
+
                 memo,
+
             )
+
+        )
+
+        memo[
+            id(self)
+        ] = obj
+
+        return obj
+
+
+    # ------------------------------------------------------------------------------
+    # Equality / Hash
+    # ------------------------------------------------------------------------------
+
+    def __eq__(
+        self,
+        other: object,
+    ) -> bool:
+        """
+        Compare spans by identity.
+        """
+
+        if not isinstance(
+            other,
+            TraceSpan,
+        ):
+
+            return NotImplemented
+
+        return (
+
+            self._trace_id
+            ==
+            other._trace_id
+
+            and
+
+            self._span_id
+            ==
+            other._span_id
+
         )
 
 
-        memo[id(self)] = copied
+    def __hash__(
+        self,
+    ) -> int:
+        """
+        Hash by identity.
+        """
+
+        return hash(
+
+            (
+
+                self._trace_id,
+
+                self._span_id,
+
+            )
+
+        )
 
 
-        return copied
-
-
-
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
     # Context Manager
-    # ==========================================================================
+    # ------------------------------------------------------------------------------
 
     def __enter__(
         self,
     ) -> "TraceSpan":
         """
-        Enter tracing context.
+        Enter runtime context.
         """
 
         self.start()
@@ -4750,146 +4755,101 @@ class TraceSpan(BaseSpan):
         return self
 
 
-
     def __exit__(
         self,
-        exc_type: Optional[type],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
-    ) -> None:
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
         """
-        Exit tracing context.
+        Exit runtime context.
         """
 
         if exc_value is not None:
 
-            self.record_exception(
-                exc_value
-            )
+            self.finish()
 
+            self._status = SpanStatus.ERROR
 
-        self.finish()
+            if hasattr(
+                self,
+                "record_exception",
+            ):
+
+                self.record_exception(
+                    exc_value
+                )
+
+        else:
+
+            self.finish()
+
+            self._status = SpanStatus.OK
+
+        return False
+
 # ==============================================================================
-# Part 11. Public API
+# Public Alias
 # ==============================================================================
 
 Span = TraceSpan
 
+
+
+# ==============================================================================
+# Public API
+# ==============================================================================
+
+
 __all__ = [
 
-    # --------------------------------------------------------------------------
-    # Metadata
-    # --------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Main Runtime Objects
+    # ------------------------------------------------------------------
 
-    "__version__",
+    "TraceSpan",
 
-
-    # --------------------------------------------------------------------------
-    # Constants
-    # --------------------------------------------------------------------------
-
-    "TRACER_NAME",
-
-    "TRACER_DESCRIPTION",
-
-    "TRACER_VERSION",
-
-    "DEFAULT_HISTORY_LIMIT",
-
-    "DEFAULT_TIMEOUT",
-
-    "DEFAULT_ENCODING",
-
-    "DEFAULT_TRACER_TYPE",
-
-    "DEFAULT_TRACE_NAME",
-
-    "DEFAULT_SPAN_NAME",
-
-    "DEFAULT_CACHE_SIZE",
-
-    "DEFAULT_MAX_ACTIVE_SPANS",
-
-    "LOGGER_NAME",
+    "Span",
 
 
-
-    # --------------------------------------------------------------------------
-    # Type Aliases
-    # --------------------------------------------------------------------------
-
-    "TraceId",
-
-    "SpanId",
-
-    "TracerOptions",
-
-    "TracerMetadata",
-
-    "TracerStatisticsMap",
-
-    "HookName",
-
-    "TraceHook",
-
-    "TraceCallback",
-
-    "SpanCollection",
-
-    "TraceCollection",
-
-
-
-    # --------------------------------------------------------------------------
-    # Exceptions
-    # --------------------------------------------------------------------------
-
-    "TracerError",
-
-    "TracerClosedError",
-
-    "TracerValidationError",
-
-    "TraceNotFoundError",
-
-    "SpanNotFoundError",
-
-
-
-    # --------------------------------------------------------------------------
-    # Enums
-    # --------------------------------------------------------------------------
-
-    "TracerType",
-
-    "TracerState",
-
-
-
-    # --------------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Dataclasses
-    # --------------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
-    "TracerStatistics",
+    "SpanStatistics",
 
-    "TracerSnapshot",
+    "SpanSnapshot",
 
-    "TracerReport",
-
-
-
-    # --------------------------------------------------------------------------
-    # Base Classes
-    # --------------------------------------------------------------------------
-
-    "BaseTracer",
+    "SpanReport",
 
 
+    # ------------------------------------------------------------------
+    # Enumerations
+    # ------------------------------------------------------------------
 
-    # --------------------------------------------------------------------------
-    # Main Implementation
-    # --------------------------------------------------------------------------
+    "SpanKind",
 
-    "TraceTracer",
+    "SpanState",
 
-]                                                                                    
+    "SpanStatus",
+
+    "SpanCapability",
+
+
+    # ------------------------------------------------------------------
+    # Exceptions
+    # ------------------------------------------------------------------
+
+    "TraceSpanError",
+
+    "SpanValidationError",
+
+    "SpanStateError",
+
+    "SpanClosedError",
+
+    "SpanFinishedError",
+
+    "InvalidTraceError",
+
+]

@@ -354,99 +354,74 @@ class ExecutionEngine:
         metadata=None,
     ):
 
-
         if self._state == "created":
-
             self.initialize()
-
-
 
         self._state = "running"
 
-
         context = None
 
-
-
         try:
-
 
             self.submit(
                 task,
                 metadata=metadata,
             )
 
-
             context = self._scheduler.next()
 
-
             if context is None:
-
                 raise ExecutionError(
                     "No scheduled task"
                 )
 
-
-
-            # lifecycle log
+            # --------------------------------------------------
+            # Lifecycle
+            # --------------------------------------------------
 
             context.log(
                 f"Task received: {task}"
             )
 
-
-
             context.start()
-
-
 
             self._emit_hook(
                 "execution_started",
                 context,
             )
 
-
-
-            # ------------------------------
+            # --------------------------------------------------
             # Pipeline
-            # ------------------------------
+            # --------------------------------------------------
 
             if self._pipeline is not None:
-
 
                 context.log(
                     "Pipeline started"
                 )
 
-
                 self._pipeline.execute(
                     context
                 )
-
 
                 context.log(
                     "Pipeline completed"
                 )
 
-
-
-            # ------------------------------
+            # --------------------------------------------------
             # Worker
-            # ------------------------------
+            # --------------------------------------------------
 
             if not context.has_result:
-
 
                 self._emit_hook(
                     "before_execute",
                     context,
                 )
 
-
                 raw = self._worker.execute(
                     context
                 )
-
 
                 self._emit_hook(
                     "after_execute",
@@ -454,16 +429,16 @@ class ExecutionEngine:
                     raw,
                 )
 
-
             else:
 
                 raw = (
                     context.get_execution_result()
-                    or
-                    context.result
+                    or context.execution_result
                 )
 
-
+            # --------------------------------------------------
+            # Normalize
+            # --------------------------------------------------
 
             if isinstance(
                 raw,
@@ -472,43 +447,31 @@ class ExecutionEngine:
 
                 result = raw
 
-
             else:
 
                 result = ExecutionResult.ok(
                     raw
                 )
 
-
-
-            # normalize
-
             context.set_result(
                 result
             )
 
-
-
-            # ------------------------------
+            # --------------------------------------------------
             # Success
-            # ------------------------------
+            # --------------------------------------------------
 
             if result.success:
-
 
                 context.finish(
                     result
                 )
 
-
                 self._scheduler.complete(
                     context
                 )
 
-
                 self._executions += 1
-
-
 
                 self._emit_hook(
                     "execution_completed",
@@ -516,6 +479,11 @@ class ExecutionEngine:
                     result,
                 )
 
+                self._emit_hook(
+                    "after_success",
+                    context,
+                    result,
+                )
 
                 self._publish(
                     "task.completed",
@@ -523,24 +491,22 @@ class ExecutionEngine:
                     result=result,
                 )
 
-
+            # --------------------------------------------------
+            # Failure Result
+            # --------------------------------------------------
 
             else:
 
-
                 error = (
                     result.error
-                    or
-                    ExecutionError(
+                    or ExecutionError(
                         result.message
                     )
                 )
 
-
                 context.fail(
                     error
                 )
-
 
                 self._emit_hook(
                     "execution_failed",
@@ -548,6 +514,11 @@ class ExecutionEngine:
                     error,
                 )
 
+                self._emit_hook(
+                    "after_failure",
+                    context,
+                    error,
+                )
 
                 self._publish(
                     "task.failed",
@@ -555,32 +526,23 @@ class ExecutionEngine:
                     error=error,
                 )
 
-
-
             return context
-
-
 
         except Exception as exc:
 
-
             if context is not None:
-
 
                 failure = ExecutionResult.fail(
                     exc
                 )
 
-
                 context.set_result(
                     failure
                 )
 
-
                 context.fail(
                     exc
                 )
-
 
             self._emit_hook(
                 "execution_failed",
@@ -588,13 +550,15 @@ class ExecutionEngine:
                 exc,
             )
 
+            self._emit_hook(
+                "after_failure",
+                context,
+                exc,
+            )
 
             raise
 
-
-
         finally:
-
 
             if context is not None:
 
@@ -603,11 +567,9 @@ class ExecutionEngine:
                     context,
                 )
 
-
             if self._state != "stopped":
 
                 self._state = "idle"
-
 
 
     # ======================================================

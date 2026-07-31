@@ -1,227 +1,257 @@
 """
-SciOS Observability - Trace Attributes
-======================================
+SciOS Runtime Observability
+===========================
 
-Structured attribute container used by Trace, Span and Event.
+Structured attribute container used throughout the tracing subsystem.
 
 Responsibilities
 ----------------
-- Store structured attributes
-- Type-safe validation
-- Bulk operations
-- Serialization
-- Snapshot / Restore
-- Diagnostics
-- Python container protocol
+- Store structured key-value attributes.
+- Provide validation and safe mutation.
+- Support bulk operations.
+- Support serialization.
+- Support snapshot/restore.
+- Provide diagnostics and Python container protocols.
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
+
 import json
-from collections.abc import Iterable
+
 from collections.abc import Iterator
 from copy import deepcopy
-from typing import Any
+from typing import Any, TypeAlias
 
-__all__ = [
-    "Attributes",
-]
+
+__all__: list[str] = []
+
+
+# ==============================================================================
+# Part 2. Constants & Type Aliases
+# ==============================================================================
+
+
+DEFAULT_ATTRIBUTES: dict[str, Any] = {}
+
+ATTRIBUTES_VERSION = "1.0.0"
+
+ATTRIBUTES_API_VERSION = "1"
+
+
+AttributeMap: TypeAlias = dict[str, Any]
+
+AttributeJSON: TypeAlias = dict[str, Any]
+
+
+
+# ==============================================================================
+# Part 3. Exceptions
+# ==============================================================================
+
+
+class AttributesError(Exception):
+    """
+    Base exception for Attributes operations.
+    """
+
+
+
+class AttributeValidationError(
+    AttributesError
+):
+    """
+    Raised when attribute validation fails.
+    """
+
+
+
+class AttributeSerializationError(
+    AttributesError
+):
+    """
+    Raised when serialization fails.
+    """
+
+
+
+# ==============================================================================
+# Part 4. Core Class
+# ==============================================================================
 
 
 class Attributes:
     """
-    Structured attribute container.
-
-    This class is the canonical attribute storage used throughout the
-    SciOS Observability subsystem.
+    Canonical structured attribute container.
 
     Used by
-    -------
+    -----
     - Trace
     - Span
     - Event
-
-    Notes
-    -----
-    Keys must always be non-empty strings.
-
-    Values may be any JSON-serializable Python object, although arbitrary
-    Python objects are also accepted internally.
+    - Link
     """
 
-    # ==========================================================
-    # Constructor
-    # ==========================================================
+
+
+    # ==========================================================================
+    # Part 4. Constructor
+    # ==========================================================================
+
 
     def __init__(
         self,
-        initial: dict[str, Any] | None = None,
+        initial: AttributeMap | None = None,
     ) -> None:
         """
-        Create a new attribute container.
-
-        Parameters
-        ----------
-        initial:
-            Optional initial mapping.
+        Initialize Attributes container.
         """
 
-        self._data: dict[str, Any] = {}
+        self._data: AttributeMap = {}
+
 
         if initial is not None:
-            self.update(initial)
 
-    # ==========================================================
-    # Internal State
-    # ==========================================================
+            if not isinstance(
+                initial,
+                dict,
+            ):
+                raise TypeError(
+                    "initial must be a dictionary."
+                )
+
+
+            self._validate_mapping(
+                initial
+            )
+
+
+            self._data.update(
+                deepcopy(initial)
+            )
+
+
+
+    # ==========================================================================
+    # Part 5. Constructor & Properties
+    # ==========================================================================
+
 
     @property
-    def data(self) -> dict[str, Any]:
+    def data(
+        self,
+    ) -> AttributeMap:
         """
-        Return a deep copy of internal storage.
+        Return deep copy of internal data.
         """
 
-        return deepcopy(self._data)
+        return deepcopy(
+            self._data
+        )
+
+
 
     @property
-    def empty(self) -> bool:
+    def empty(
+        self,
+    ) -> bool:
         """
-        True if no attributes exist.
+        Return True if empty.
         """
 
-        return len(self._data) == 0
+        return len(
+            self._data
+        ) == 0
+
+
 
     @property
-    def size(self) -> int:
+    def size(
+        self,
+    ) -> int:
         """
-        Number of stored attributes.
-        """
-
-        return len(self._data)
-
-    # ==========================================================
-    # Validation Helpers
-    # ==========================================================
-
-    @staticmethod
-    def _validate_key(
-        key: Any,
-    ) -> str:
-        """
-        Validate an attribute key.
-
-        Returns
-        -------
-        str
-            Validated key.
-
-        Raises
-        ------
-        TypeError
-            If key is not a string.
-
-        ValueError
-            If key is empty.
+        Number of attributes.
         """
 
-        if key is None:
-            raise ValueError(
-                "Attribute key cannot be None."
-            )
+        return len(
+            self._data
+        )
 
-        if not isinstance(
-            key,
-            str,
-        ):
-            raise TypeError(
-                "Attribute key must be a string."
-            )
 
-        key = key.strip()
 
-        if not key:
-            raise ValueError(
-                "Attribute key cannot be empty."
-            )
-
-        return key
-
-    @staticmethod
-    def _validate_mapping(
-        mapping: dict[str, Any],
-    ) -> None:
+    def count(
+        self,
+    ) -> int:
         """
-        Validate an attribute mapping.
+        Return number of attributes.
         """
 
-        if not isinstance(
-            mapping,
-            dict,
-        ):
-            raise TypeError(
-                "Expected a dictionary."
-            )
+        return len(
+            self._data
+        )
 
-        for key in mapping:
-            Attributes._validate_key(key)
 
-    @staticmethod
-    def _deep_copy(
-        value: Any,
-    ) -> Any:
+
+    def keys(
+        self,
+    ):
         """
-        Safely deep-copy an object.
+        Return attribute keys.
         """
 
-        return deepcopy(value)
+        return self._data.keys()
 
-    @staticmethod
-    def _json_default(
-        value: Any,
-    ) -> Any:
+
+
+    def values(
+        self,
+    ):
         """
-        JSON serializer fallback.
-
-        Non-serializable objects are converted using ``str()``.
+        Return attribute values.
         """
 
-        try:
-            json.dumps(value)
-            return value
-        except TypeError:
-            return str(value)
-    # ==========================================================
-    # Part 2 - Basic Operations
-    # ==========================================================
+        return self._data.values()
+
+
+
+    def items(
+        self,
+    ):
+        """
+        Return attribute items.
+        """
+
+        return self._data.items()
+
+
+
+    # ==========================================================================
+    # Part 6. Core API
+    # ==========================================================================
+
 
     def set(
         self,
         key: str,
         value: Any,
-    ) -> None:
+    ) -> "Attributes":
         """
-        Set or replace an attribute.
-
-        Parameters
-        ----------
-        key:
-            Attribute name.
-
-        value:
-            Attribute value.
-
-        Raises
-        ------
-        TypeError
-            If the key is not a string.
-
-        ValueError
-            If the key is empty or None.
+        Set attribute.
         """
 
-        key = self._validate_key(key)
+        key = self._validate_key(
+            key
+        )
+
 
         self._data[key] = value
+
+
+        return self
+
+
 
     def get(
         self,
@@ -229,278 +259,320 @@ class Attributes:
         default: Any = None,
     ) -> Any:
         """
-        Retrieve an attribute.
-
-        Parameters
-        ----------
-        key:
-            Attribute name.
-
-        default:
-            Value returned when the key does not exist.
-
-        Returns
-        -------
-        Any
-            Stored value or default.
+        Get attribute.
         """
 
-        key = self._validate_key(key)
+        key = self._validate_key(
+            key
+        )
+
 
         return self._data.get(
             key,
             default,
         )
 
+
+
+    def get_or_set(
+        self,
+        key: str,
+        default: Any,
+    ) -> Any:
+        """
+        Return existing value or create.
+        """
+
+        key = self._validate_key(
+            key
+        )
+
+
+        return self._data.setdefault(
+            key,
+            default,
+        )
+
+
+
+    def exists(
+        self,
+        key: str,
+    ) -> bool:
+        """
+        Check attribute existence.
+        """
+
+        key = self._validate_key(
+            key
+        )
+
+
+        return key in self._data
+
+
+
     def remove(
         self,
         key: str,
     ) -> Any:
         """
-        Remove an attribute.
-
-        Parameters
-        ----------
-        key:
-            Attribute name.
-
-        Returns
-        -------
-        Any
-            Removed value.
-
-        Raises
-        ------
-        KeyError
-            If the key does not exist.
+        Remove attribute.
         """
 
-        key = self._validate_key(key)
+        key = self._validate_key(
+            key
+        )
 
-        return self._data.pop(key)
+
+        return self._data.pop(
+            key
+        )
+
+
+
+    def pop(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        """
+        Pop attribute.
+        """
+
+        key = self._validate_key(
+            key
+        )
+
+
+        return self._data.pop(
+            key,
+            default,
+        )
+
+
 
     def clear(
         self,
-    ) -> None:
+    ) -> "Attributes":
         """
-        Remove every attribute.
+        Clear all attributes.
         """
 
         self._data.clear()
 
-    def count(
+
+        return self
+
+
+
+    def update(
         self,
-    ) -> int:
+        other: AttributeMap | "Attributes",
+    ) -> "Attributes":
         """
-        Return the number of stored attributes.
-
-        Returns
-        -------
-        int
-            Attribute count.
+        Update attributes.
         """
 
-        return len(self._data)
+        if isinstance(
+            other,
+            Attributes,
+        ):
+            mapping = other._data
+
+
+        elif isinstance(
+            other,
+            dict,
+        ):
+            mapping = other
+
+
+        else:
+            raise TypeError(
+                "Expected dict or Attributes."
+            )
+
+
+        self._validate_mapping(
+            mapping
+        )
+
+
+        for key, value in mapping.items():
+
+            self._data[key] = deepcopy(
+                value
+            )
+
+
+        return self
+
+
+
+    def merge(
+        self,
+        other: AttributeMap | "Attributes",
+        *,
+        overwrite: bool = False,
+    ) -> "Attributes":
+        """
+        Merge attributes.
+        """
+
+        if isinstance(
+            other,
+            Attributes,
+        ):
+            mapping = other._data
+
+
+        elif isinstance(
+            other,
+            dict,
+        ):
+            mapping = other
+
+
+        else:
+            raise TypeError(
+                "Expected dict or Attributes."
+            )
+
+
+        self._validate_mapping(
+            mapping
+        )
+
+
+        for key, value in mapping.items():
+
+            if overwrite or key not in self._data:
+
+                self._data[key] = deepcopy(
+                    value
+                )
+
+
+        return self
+
+
+
+    # ==========================================================================
+    # Part 7. Validation
+    # ==========================================================================
+
+
+    @staticmethod
+    def _validate_key(
+        key: Any,
+    ) -> str:
+        """
+        Validate attribute key.
+        """
+
+        if not isinstance(
+            key,
+            str,
+        ):
+            raise AttributeValidationError(
+                "Attribute key must be string."
+            )
+
+
+        key = key.strip()
+
+
+        if not key:
+
+            raise AttributeValidationError(
+                "Attribute key cannot be empty."
+            )
+
+
+        return key
+
+
+
+    @classmethod
+    def _validate_mapping(
+        cls,
+        mapping: AttributeMap,
+    ) -> None:
+        """
+        Validate mapping.
+        """
+
+        if not isinstance(
+            mapping,
+            dict,
+        ):
+            raise AttributeValidationError(
+                "Attributes must be dictionary."
+            )
+
+
+        for key in mapping:
+
+            cls._validate_key(
+                key
+            )
+
+
 
     def validate(
         self,
     ) -> bool:
         """
-        Validate the current attribute container.
-
-        Validation Rules
-        ----------------
-        - every key is a non-empty string
-        - internal storage is a dictionary
-
-        Returns
-        -------
-        bool
-            True if valid.
-
-        Raises
-        ------
-        TypeError
-            If internal storage is corrupted.
+        Validate current state.
         """
 
-        if not isinstance(
-            self._data,
-            dict,
-        ):
-            raise TypeError(
-                "Internal attribute storage must be a dictionary."
-            )
-
-        for key in self._data.keys():
-            self._validate_key(key)
-
-        return True
-    # ==========================================================
-    # Part 3 - Bulk Operations
-    # ==========================================================
-
-    def update(
-        self,
-        other: dict[str, Any] | "Attributes",
-    ) -> "Attributes":
-        """
-        Update attributes from another mapping or Attributes object.
-
-        Existing keys are overwritten.
-
-        Parameters
-        ----------
-        other:
-            Source attributes.
-
-        Returns
-        -------
-        Attributes
-            Self (for method chaining).
-
-        Raises
-        ------
-        TypeError
-            If the input type is unsupported.
-        """
-
-        if isinstance(other, Attributes):
-            mapping = other._data
-
-        elif isinstance(other, dict):
-            mapping = other
-
-        else:
-            raise TypeError(
-                "update() expects a dict or Attributes instance."
-            )
-
-        self._validate_mapping(mapping)
-
-        for key, value in mapping.items():
-            self._data[key] = deepcopy(value)
-
-        return self
-
-    def merge(
-        self,
-        other: dict[str, Any] | "Attributes",
-        *,
-        overwrite: bool = False,
-    ) -> "Attributes":
-        """
-        Merge another mapping into this container.
-
-        Unlike update(), merge() preserves existing values by default.
-
-        Parameters
-        ----------
-        other:
-            Source mapping.
-
-        overwrite:
-            Replace existing keys if True.
-
-        Returns
-        -------
-        Attributes
-            Self.
-        """
-
-        if isinstance(other, Attributes):
-            mapping = other._data
-
-        elif isinstance(other, dict):
-            mapping = other
-
-        else:
-            raise TypeError(
-                "merge() expects a dict or Attributes instance."
-            )
-
-        self._validate_mapping(mapping)
-
-        for key, value in mapping.items():
-
-            if overwrite or key not in self._data:
-                self._data[key] = deepcopy(value)
-
-        return self
-
-    def copy(
-        self,
-    ) -> "Attributes":
-        """
-        Create a deep copy.
-
-        Returns
-        -------
-        Attributes
-            Independent copy.
-        """
-
-        return Attributes(
-            deepcopy(self._data)
+        self._validate_mapping(
+            self._data
         )
 
-    def clone(
-        self,
-    ) -> "Attributes":
-        """
-        Clone this attribute container.
 
-        Alias of copy().
+        return True
 
-        Returns
-        -------
-        Attributes
-            Independent clone.
-        """
 
-        return self.copy()
-    # ==========================================================
-    # Part 4 - Serialization
-    # ==========================================================
+
+    # ==========================================================================
+    # Part 8. Serialization
+    # ==========================================================================
+
 
     def to_dict(
         self,
-    ) -> dict[str, Any]:
+    ) -> AttributeMap:
         """
-        Export attributes as a deep-copied dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-            Independent dictionary representation.
+        Convert to dictionary.
         """
 
-        return deepcopy(self._data)
+        return deepcopy(
+            self._data
+        )
+
+
 
     @classmethod
     def from_dict(
         cls,
-        data: dict[str, Any],
+        data: AttributeMap,
     ) -> "Attributes":
         """
-        Create an Attributes instance from a dictionary.
-
-        Parameters
-        ----------
-        data:
-            Source dictionary.
-
-        Returns
-        -------
-        Attributes
-            New attribute container.
+        Restore from dictionary.
         """
 
-        cls._validate_mapping(data)
+        cls._validate_mapping(
+            data
+        )
+
 
         return cls(
             deepcopy(data)
         )
+
+
 
     def to_json(
         self,
@@ -510,32 +582,27 @@ class Attributes:
         ensure_ascii: bool = False,
     ) -> str:
         """
-        Serialize attributes to JSON.
-
-        Parameters
-        ----------
-        indent:
-            JSON indentation.
-
-        sort_keys:
-            Sort keys alphabetically.
-
-        ensure_ascii:
-            Escape non-ASCII characters.
-
-        Returns
-        -------
-        str
-            JSON string.
+        Serialize to JSON.
         """
 
-        return json.dumps(
-            self._data,
-            default=self._json_default,
-            indent=indent,
-            sort_keys=sort_keys,
-            ensure_ascii=ensure_ascii,
-        )
+        try:
+
+            return json.dumps(
+                self._data,
+                indent=indent,
+                sort_keys=sort_keys,
+                ensure_ascii=ensure_ascii,
+                default=str,
+            )
+
+
+        except Exception as exc:
+
+            raise AttributeSerializationError(
+                "Failed to serialize Attributes."
+            ) from exc
+
+
 
     @classmethod
     def from_json(
@@ -543,62 +610,68 @@ class Attributes:
         value: str,
     ) -> "Attributes":
         """
-        Construct an Attributes object from JSON.
-
-        Parameters
-        ----------
-        value:
-            JSON string.
-
-        Returns
-        -------
-        Attributes
-            New attribute container.
-
-        Raises
-        ------
-        TypeError
-            If the decoded JSON is not a dictionary.
+        Restore from JSON.
         """
 
-        data = json.loads(value)
+        try:
+
+            data = json.loads(
+                value
+            )
+
+
+        except Exception as exc:
+
+            raise AttributeSerializationError(
+                "Invalid JSON."
+            ) from exc
+
 
         if not isinstance(
             data,
             dict,
         ):
-            raise TypeError(
-                "JSON must decode to a dictionary."
+            raise AttributeSerializationError(
+                "JSON must decode to dictionary."
             )
 
-        return cls.from_dict(data)
+
+        return cls.from_dict(
+            data
+        )
+# ==============================================================================
+# Part B. Snapshot / Clone
+# ==============================================================================
 
     def snapshot(
         self,
-    ) -> dict[str, Any]:
+    ) -> AttributeJSON:
         """
-        Create a snapshot of the current attributes.
+        Create a deep snapshot of current attributes.
 
         Returns
         -------
-        dict[str, Any]
-            Deep-copied snapshot.
+        AttributeJSON
+            Independent snapshot data.
         """
 
-        return deepcopy(self._data)
+        return deepcopy(
+            self._data
+        )
+
 
     @classmethod
     def restore(
         cls,
-        snapshot: dict[str, Any],
+        snapshot: AttributeJSON,
     ) -> "Attributes":
         """
-        Restore an Attributes instance from a snapshot.
+        Restore Attributes from snapshot.
 
         Parameters
         ----------
         snapshot:
-            Snapshot previously returned by ``snapshot()``.
+            Snapshot generated by ``snapshot()``.
 
         Returns
         -------
@@ -606,72 +679,132 @@ class Attributes:
             Restored attribute container.
         """
 
-        cls._validate_mapping(snapshot)
+        cls._validate_mapping(
+            snapshot
+        )
 
         return cls(
             deepcopy(snapshot)
         )
-    # ==========================================================
-    # Part 5 - Diagnostics
-    # ==========================================================
+
+
+    def copy(
+        self,
+    ) -> "Attributes":
+        """
+        Create a deep copy of Attributes.
+
+        Returns
+        -------
+        Attributes
+            Independent copy.
+        """
+
+        return self.__class__.restore(
+            self.snapshot()
+        )
+
+
+    def clone(
+        self,
+    ) -> "Attributes":
+        """
+        Create a clone of Attributes.
+
+        Alias of copy().
+        """
+
+        return self.copy()
+
+
+    def __copy__(
+        self,
+    ) -> "Attributes":
+        """
+        Support Python copy.copy().
+        """
+
+        return self.copy()
+
+
+    def __deepcopy__(
+        self,
+        memo: dict[int, Any],
+    ) -> "Attributes":
+        """
+        Support Python copy.deepcopy().
+        """
+
+        if id(self) in memo:
+            return memo[id(self)]
+
+        result = self.__class__()
+
+        memo[id(self)] = result
+
+        result._data = deepcopy(
+            self._data,
+            memo,
+        )
+
+        return result
+
+
+# ==============================================================================
+# Part 10. Diagnostics
+# ==============================================================================
 
     def diagnostics(
         self,
     ) -> dict[str, Any]:
         """
-        Return diagnostic information for this attribute container.
-
-        The returned information is intended for debugging,
-        monitoring and observability.
-
-        Returns
-        -------
-        dict[str, Any]
-            Diagnostic information.
+        Return detailed diagnostic information.
         """
-
-        value_types: dict[str, str] = {
-            key: type(value).__name__
-            for key, value in self._data.items()
-        }
 
         return {
             "valid": self.validate(),
+            "version": ATTRIBUTES_VERSION,
+            "api_version": ATTRIBUTES_API_VERSION,
             "count": self.count(),
-            "empty": self.empty,
             "size": self.size,
-            "keys": list(self._data.keys()),
-            "types": value_types,
+            "empty": self.empty,
+            "keys": list(
+                self._data.keys()
+            ),
+            "types": {
+                key: type(value).__name__
+                for key, value in self._data.items()
+            },
         }
+
 
     def summary(
         self,
     ) -> dict[str, Any]:
         """
-        Return a concise summary of the attribute container.
-
-        Returns
-        -------
-        dict[str, Any]
-            Summary information.
+        Return compact summary.
         """
 
         return {
-            "count": self.count(),
-            "empty": self.empty,
             "valid": self.validate(),
+            "count": self.count(),
             "size": self.size,
-            "keys": list(self._data.keys()),
+            "empty": self.empty,
+            "keys": list(
+                self._data.keys()
+            ),
         }
-    # ==========================================================
-    # Part 6 - Python Protocols
-    # ==========================================================
+
+
+# ==============================================================================
+# Part 11. Python Protocols
+# ==============================================================================
 
     def __repr__(
         self,
     ) -> str:
         """
-        Official string representation.
+        Developer representation.
         """
 
         return (
@@ -679,11 +812,12 @@ class Attributes:
             f"({self._data!r})"
         )
 
+
     def __str__(
         self,
     ) -> str:
         """
-        Human-readable representation.
+        Human readable representation.
         """
 
         return (
@@ -694,45 +828,54 @@ class Attributes:
             f")"
         )
 
+
     def __len__(
         self,
     ) -> int:
         """
-        Return the number of stored attributes.
+        Return attribute count.
         """
 
         return self.count()
 
+
     def __iter__(
         self,
-    ) -> Iterator[str]:
+    ):
         """
-        Iterate over attribute keys.
+        Iterate over keys.
         """
 
-        return iter(self._data)
+        return iter(
+            self._data
+        )
+
 
     def __contains__(
         self,
         key: object,
     ) -> bool:
         """
-        Return True if the key exists.
+        Check key existence.
         """
 
         return key in self._data
+
 
     def __getitem__(
         self,
         key: str,
     ) -> Any:
         """
-        Dictionary-style lookup.
+        Dictionary-style access.
         """
 
-        key = self._validate_key(key)
+        key = self._validate_key(
+            key
+        )
 
         return self._data[key]
+
 
     def __setitem__(
         self,
@@ -748,6 +891,7 @@ class Attributes:
             value,
         )
 
+
     def __delitem__(
         self,
         key: str,
@@ -756,25 +900,27 @@ class Attributes:
         Dictionary-style deletion.
         """
 
-        self.remove(key)
+        self.remove(
+            key
+        )
+
 
     def __bool__(
         self,
     ) -> bool:
         """
-        Truthiness.
-
-        Empty container -> False.
+        Return True when attributes exist.
         """
 
         return not self.empty
+
 
     def __eq__(
         self,
         other: object,
     ) -> bool:
         """
-        Equality comparison.
+        Compare Attributes objects.
         """
 
         if not isinstance(
@@ -783,50 +929,62 @@ class Attributes:
         ):
             return NotImplemented
 
-        return self._data == other._data
+        return (
+            self._data
+            ==
+            other._data
+        )
+
 
     def __hash__(
         self,
     ) -> int:
         """
-        Hash value.
-
-        Uses a deterministic JSON representation.
+        Deterministic hash value.
         """
 
         return hash(
             json.dumps(
                 self._data,
-                default=self._json_default,
+                default=str,
                 sort_keys=True,
                 ensure_ascii=False,
             )
         )
 
-    def __copy__(
-        self,
-    ) -> "Attributes":
-        """
-        Support copy.copy().
-        """
 
-        return self.copy()
+# ==============================================================================
+# Part 12. Public API
+# ==============================================================================
 
-    def __deepcopy__(
-        self,
-        memo: dict[int, Any],
-    ) -> "Attributes":
-        """
-        Support copy.deepcopy().
-        """
+__all__ = [
 
-        obj = self.__class__()
+    # ------------------------------------------------------------------
+    # Constants
+    # ------------------------------------------------------------------
 
-        memo[id(self)] = obj
+    "DEFAULT_ATTRIBUTES",
+    "ATTRIBUTES_VERSION",
+    "ATTRIBUTES_API_VERSION",
 
-        obj._data = deepcopy(
-            self._data,
-            memo,
-        )
+    # ------------------------------------------------------------------
+    # Types
+    # ------------------------------------------------------------------
 
-        return obj
+    "AttributeMap",
+    "AttributeJSON",
+
+    # ------------------------------------------------------------------
+    # Exceptions
+    # ------------------------------------------------------------------
+
+    "AttributesError",
+    "AttributeValidationError",
+    "AttributeSerializationError",
+
+    # ------------------------------------------------------------------
+    # Core
+    # ------------------------------------------------------------------
+
+    "Attributes",
+]        

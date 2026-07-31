@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from scios.runtime.observability.tracing.context import (
+from scios.runtime.observability.tracing.scope import (
     TraceScope,
     trace_scope,
 )

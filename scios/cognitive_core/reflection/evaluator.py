@@ -1,48 +1,187 @@
-# scios/cognitive_core/reflection/evaluator.py
-
 """
 SciOS Reflection Evaluator
 ==========================
 
-Evaluator is the first step in the reflection pipeline.
-It inspects execution results and produces a structured
-evaluation summary (success/failure, metrics, notes).
+Evaluates execution results.
+
+Compatible APIs:
+- evaluate()
+- process()
+
+Python 3.11+
 """
 
 from __future__ import annotations
-from typing import Any, Dict
-from .base import ReflectionComponent
+
+from typing import Any
 
 
-class Evaluator(ReflectionComponent):
+__all__ = [
+    "Evaluator",
+]
+
+
+class Evaluator:
     """
-    Evaluator analyzes execution results and produces
-    a structured evaluation dictionary.
+    Evaluator component of reflection pipeline.
     """
+
 
     def __init__(self) -> None:
-        super().__init__("Evaluator")
 
-    def evaluate(self, execution_result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Evaluate execution result and return summary.
-        """
-        success = execution_result.get("success", False)
-        metrics = execution_result.get("metrics", {})
-        notes = execution_result.get("notes", "")
+        self.count = 0
 
-        evaluation = {
-            "success": success,
-            "metrics": metrics,
-            "notes": notes,
-            "task": execution_result.get("task"),
-            "timestamp": execution_result.get("timestamp"),
+
+    # ======================================================
+    # Core API
+    # ======================================================
+
+    def evaluate(
+        self,
+        execution_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Evaluate execution result.
+
+        Input:
+
+        {
+            "success": True,
+            "output": "..."
         }
 
-        return evaluation
+        """
 
-    def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.count += 1
+
+
+        success = bool(
+            execution_result.get(
+                "success",
+                False,
+            )
+        )
+
+
+        result: dict[str, Any] = {
+
+            "success":
+                success,
+
+
+            "output":
+                execution_result.get(
+                    "output"
+                ),
+
+
+            "error":
+                execution_result.get(
+                    "error"
+                ),
+
+
+            "evaluated":
+                True,
+
+        }
+
+
+        if success:
+
+            result["status"] = (
+                "success"
+            )
+
+            result["message"] = (
+                "Execution succeeded"
+            )
+
+
+        else:
+
+            result["status"] = (
+                "failed"
+            )
+
+            result["message"] = (
+                "Execution failed"
+            )
+
+
+        return result
+
+
+    # ======================================================
+    # Process API
+    # ======================================================
+
+    def process(
+        self,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
         """
-        Standard interface: wraps evaluate().
+        Generic evaluator entrypoint.
+
+        Accepts:
+
+        {
+            "execution_result": {
+                "success": True
+            }
+        }
+
         """
-        return self.evaluate(data)
+
+        execution_result = data.get(
+            "execution_result",
+            data,
+        )
+
+
+        return self.evaluate(
+            execution_result
+        )
+
+
+    # ======================================================
+    # Status
+    # ======================================================
+
+    def status(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+
+            "count":
+                self.count,
+
+        }
+
+
+    # ======================================================
+    # Reset
+    # ======================================================
+
+    def reset(
+        self,
+    ) -> None:
+
+        self.count = 0
+
+
+    # ======================================================
+    # Protocol
+    # ======================================================
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+
+            f"{self.__class__.__name__}"
+            f"(count={self.count})"
+
+        )

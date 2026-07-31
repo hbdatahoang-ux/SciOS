@@ -2,32 +2,15 @@
 SciOS-NG Metrics Core
 =====================
 
-Core building blocks for the Metrics subsystem.
+Low-level building blocks for the Metrics subsystem.
 
-Exports
--------
-- Metric
-- MetricState
-- MetricSnapshot
-- MetricHooks
-- MetricDescriptor
-- MetricMetadata
-- MetricLabels
-- MetricAttributes
-- MetricValidator
-- Metric exceptions
+This package intentionally exposes only immutable/core components.
+
+Runtime objects (Metric, MetricState, MetricSnapshot, MetricHooks)
+are exported by the parent metrics package.
 """
 
 from __future__ import annotations
-
-# ---------------------------------------------------------------------
-# Core Objects
-# ---------------------------------------------------------------------
-
-from .metric import Metric
-from .metric_state import MetricState
-from .metric_snapshot import MetricSnapshot
-from .metric_hooks import MetricHooks
 
 # ---------------------------------------------------------------------
 # Descriptor & Metadata
@@ -54,55 +37,64 @@ from .validation import MetricValidator
 # ---------------------------------------------------------------------
 
 from .exceptions import (
-    MetricException,
+    MetricError,
+    MetricValidationError,
+
     InvalidMetricName,
-    InvalidUnit,
-    InvalidLabel,
-    InvalidAttribute,
-    InvalidState,
-    SnapshotError,
-    RegistryError,
-    CollectorError,
-    ExporterError,
+    InvalidMetricValue,
+    InvalidMetricUnit,
+    InvalidMetricLabel,
+    InvalidMetricAttribute,
+    InvalidMetricMetadata,
+
+    MetricStateError,
+    MetricFrozenError,
+    MetricDisabledError,
+    MetricClosedError,
+
+    MetricSnapshotError,
+    MetricSerializationError,
+
+    MetricRegistryError,
+    MetricAlreadyExists,
+    MetricNotFound,
+
+    MetricCollectorError,
+    MetricExporterError,
 )
 
-# ---------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------
-
 __all__ = [
-    # Core
-    "Metric",
-    "MetricState",
-    "MetricSnapshot",
-    "MetricHooks",
 
-    # Descriptor
     "MetricDescriptor",
     "MetricMetadata",
-
-    # Labels
     "MetricLabels",
     "MetricAttributes",
-
-    # Validation
     "MetricValidator",
 
-    # Exceptions
-    "MetricException",
-    "InvalidMetricName",
-    "InvalidUnit",
-    "InvalidLabel",
-    "InvalidAttribute",
-    "InvalidState",
-    "SnapshotError",
-    "RegistryError",
-    "CollectorError",
-    "ExporterError",
-]
+    "MetricError",
+    "MetricValidationError",
 
-# ---------------------------------------------------------------------
-# Version
-# ---------------------------------------------------------------------
+    "InvalidMetricName",
+    "InvalidMetricValue",
+    "InvalidMetricUnit",
+    "InvalidMetricLabel",
+    "InvalidMetricAttribute",
+    "InvalidMetricMetadata",
+
+    "MetricStateError",
+    "MetricFrozenError",
+    "MetricDisabledError",
+    "MetricClosedError",
+
+    "MetricSnapshotError",
+    "MetricSerializationError",
+
+    "MetricRegistryError",
+    "MetricAlreadyExists",
+    "MetricNotFound",
+
+    "MetricCollectorError",
+    "MetricExporterError",
+]
 
 __version__ = "0.1.0"

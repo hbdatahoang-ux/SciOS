@@ -86,15 +86,14 @@ def utc_now() -> str:
     return datetime.now(
         timezone.utc
     ).isoformat()
-
-
-
 # ==========================================================
 # Execution Context
 # ==========================================================
 
 
-@dataclass(slots=True)
+@dataclass(
+    slots=True,
+)
 class ExecutionContext:
     """
     Runtime execution state container.
@@ -122,6 +121,13 @@ class ExecutionContext:
     """
 
 
+    # ======================================================
+    # Task
+    # ======================================================
+
+    task: Any = None
+
+
 
     # ======================================================
     # Identity
@@ -131,13 +137,6 @@ class ExecutionContext:
         default_factory=lambda: str(uuid4())
     )
 
-
-
-    # ======================================================
-    # Task
-    # ======================================================
-
-    task: Any = None
 
 
 
@@ -156,22 +155,34 @@ class ExecutionContext:
     # ======================================================
 
     """
-    Public canonical result.
+    Canonical execution result.
 
-    Always:
+    Contract:
 
-        ExecutionResult | None
+        ctx.result
+            |
+            v
+        ExecutionResult
+
+
+        ctx.result.value
+            |
+            v
+        Actual payload
     """
 
-    result: ExecutionResult | None = None
+    _result: ExecutionResult | None = field(
+    default=None,
+    repr=False,
+)
 
 
 
     """
-    Internal alias.
+    Internal execution result alias.
 
-    Kept for compatibility with
-    ExecutionEngine and advanced runtime.
+    Used for compatibility with
+    advanced runtime components.
     """
 
     _execution_result: ExecutionResult | None = field(
@@ -180,6 +191,10 @@ class ExecutionContext:
     )
 
 
+
+    # ======================================================
+    # Error
+    # ======================================================
 
     error: BaseException | None = None
 
@@ -194,6 +209,9 @@ class ExecutionContext:
 
 
     worker: str | None = None
+
+
+
     # ======================================================
     # Diagnostics
     # ======================================================
@@ -239,6 +257,7 @@ class ExecutionContext:
     finished_at: str | None = None
 
 
+
     _start_perf: float | None = field(
         default=None,
         repr=False,
@@ -250,67 +269,215 @@ class ExecutionContext:
         repr=False,
     )
 
-
-
-    # ======================================================
+    # ==========================================================
     # Properties
-    # ======================================================
+    # ==========================================================
 
     @property
-    def status(self):
+    def status(self) -> RuntimeState:
+        """
+        Compatibility alias for runtime state.
+        """
+
         return self.state
 
 
     @status.setter
     def status(
         self,
-        value,
-    ):
+        value: RuntimeState,
+    ) -> None:
         self.state = value
 
 
-
     @property
-    def running(self):
+    def running(
+        self,
+    ) -> bool:
+        """
+        True if execution is currently running.
+        """
+
         return self.state == "running"
 
 
-
     @property
-    def completed(self):
+    def completed(
+        self,
+    ) -> bool:
+        """
+        True if execution completed successfully.
+        """
+
         return self.state == "completed"
 
 
-
     @property
-    def failed(self):
+    def failed(
+        self,
+    ) -> bool:
+        """
+        True if execution failed.
+        """
+
         return self.state == "failed"
 
 
+    @property
+    def done(
+        self,
+    ) -> bool:
+        """
+        True if execution reached a terminal state.
+        """
+
+        return self.completed or self.failed
+
 
     @property
-    def done(self):
-        return (
-            self.completed
-            or self.failed
-        )
+    def succeeded(
+        self,
+    ) -> bool:
+        """
+        Alias for completed.
+        """
 
-
-
-    @property
-    def succeeded(self):
         return self.completed
 
 
+    @property
+    def has_result(
+        self,
+    ) -> bool:
+        """
+        Whether an execution result exists.
+        """
+
+        return self._result is not None
+
 
     @property
-    def has_result(self):
-        return self.result is not None
+    def result(
+        self,
+    ):
+        """
+        Canonical execution result.
 
+        Returns
+        -------
+        ExecutionResult | None
+        """
+
+        return self._result
+
+
+    @result.setter
+    def result(
+        self,
+        value,
+    ) -> None:
+        """
+        Accept either an ExecutionResult or a raw payload.
+        """
+
+        from .result import ExecutionResult
+
+        if value is None:
+
+            self._result = None
+
+        elif isinstance(
+            value,
+            ExecutionResult,
+        ):
+
+            self._result = value
+
+        else:
+
+            self._result = ExecutionResult.ok(
+                value
+            )
 
 
     @property
-    def duration(self):
+    def result_value(
+        self,
+    ) -> Any:
+        """
+        Raw execution payload.
+
+        Equivalent to:
+
+            ctx.result.value
+        """
+
+        if self._result is None:
+            return None
+
+        return self._result.value
+
+
+    @property
+    def value(
+        self,
+    ) -> Any:
+        """
+        Shortcut for the raw execution payload.
+        """
+
+        if self._result is None:
+            return None
+
+        return self._result.value
+
+
+    @property
+    def error(
+        self,
+    ):
+        """
+        Execution error, if any.
+        """
+
+        if self._result is None:
+            return None
+
+        return self._result.error
+
+
+    @property
+    def success(
+        self,
+    ) -> bool:
+        """
+        Whether execution succeeded.
+        """
+
+        return (
+            self._result is not None
+            and self._result.success
+        )
+
+
+    @property
+    def duration(
+        self,
+    ) -> float | None:
+        """
+        Execution duration in seconds.
+        """
+
+        if self._result is not None:
+
+            result_duration = getattr(
+                self._result,
+                "duration",
+                None,
+            )
+
+            if result_duration is not None:
+                return result_duration
 
         if (
             self._start_perf is None
@@ -320,17 +487,26 @@ class ExecutionContext:
 
         return (
             self._finish_perf
-            -
-            self._start_perf
+            - self._start_perf
         )
+# ==========================================================
+# Lifecycle
+# ==========================================================
 
 
+    def start(
+        self,
+    ) -> "ExecutionContext":
+        """
+        Start execution lifecycle.
 
-    # ======================================================
-    # Lifecycle
-    # ======================================================
+        Transition:
 
-    def start(self):
+            created
+                |
+                v
+            running
+        """
 
         self.state = "running"
 
@@ -355,8 +531,16 @@ class ExecutionContext:
 
     def finish(
         self,
-        result,
-    ):
+        result: Any,
+    ) -> "ExecutionContext":
+        """
+        Complete execution successfully.
+
+        Accept:
+
+            raw value
+            ExecutionResult
+        """
 
         from .result import ExecutionResult
 
@@ -372,6 +556,8 @@ class ExecutionContext:
 
 
         self.result = result
+
+        self._execution_result = result
 
 
         self.state = "completed"
@@ -399,7 +585,17 @@ class ExecutionContext:
     def fail(
         self,
         error: BaseException,
-    ):
+    ) -> "ExecutionContext":
+        """
+        Mark execution failed.
+
+        Transition:
+
+            running
+                |
+                v
+             failed
+        """
 
         from .result import ExecutionResult
 
@@ -410,6 +606,8 @@ class ExecutionContext:
         self.result = ExecutionResult.fail(
             error
         )
+
+        self._execution_result = self.result
 
 
         self.state = "failed"
@@ -437,10 +635,23 @@ class ExecutionContext:
     def reset(
         self,
         *,
-        clear_logs=False,
-    ):
+        clear_logs: bool = False,
+    ) -> "ExecutionContext":
+        """
+        Reset context lifecycle.
+
+        Transition:
+
+            any state
+                |
+                v
+             created
+        """
 
         self.result = None
+
+        self._execution_result = None
+
 
         self.error = None
 
@@ -476,42 +687,44 @@ class ExecutionContext:
 
 
         return self
-    # ======================================================
-    # Result API
-    # ======================================================
+
+# ==========================================================
+# Result API
+# ==========================================================
 
     def set_result(
         self,
-        result,
-    ):
+        result: Any,
+    ) -> "ExecutionContext":
         """
-        Attach execution result.
+        Attach canonical execution result.
 
-        Contract:
+        Accepts:
 
-            ctx.result
-                |
-                v
-            ExecutionResult
+            • ExecutionResult
+            • raw payload
+
+        Always stores an ExecutionResult internally.
         """
 
         from .result import ExecutionResult
 
+        if result is None:
 
-        if isinstance(
+            self._result = None
+
+        elif isinstance(
             result,
             ExecutionResult,
         ):
 
-            self.result = result
-
+            self._result = result
 
         else:
 
-            self.result = ExecutionResult.ok(
+            self._result = ExecutionResult.ok(
                 result
             )
-
 
         return self
 
@@ -519,15 +732,21 @@ class ExecutionContext:
 
     def get_result(
         self,
-        default=None,
+        default: Any = None,
     ):
+        """
+        Return canonical ExecutionResult.
 
-        if self.result is None:
+        Returns
+        -------
+        ExecutionResult | default
+        """
+
+        if self._result is None:
 
             return default
 
-
-        return self.result
+        return self._result
 
 
 
@@ -536,9 +755,11 @@ class ExecutionContext:
     ):
         """
         Return canonical ExecutionResult.
+
+        Alias of get_result().
         """
 
-        return self.result
+        return self._result
 
 
 
@@ -548,26 +769,39 @@ class ExecutionContext:
     ):
         """
         Compatibility alias.
+
+        Returns
+        -------
+        ExecutionResult | None
         """
 
-        return self.result
+        return self._result
 
+# ==========================================================
+# Logging API
+# ==========================================================
 
-
-    # ======================================================
-    # Logging
-    # ======================================================
 
     def log(
         self,
         message: str,
         *,
         level: str = "INFO",
-    ):
+    ) -> "ExecutionContext":
+        """
+        Append plain runtime log.
+
+        Compatible with:
+
+            ctx.logs
+        """
 
         self.logs.append(
             message
         )
+
+
+        return self
 
 
 
@@ -576,7 +810,10 @@ class ExecutionContext:
         message: str,
         *,
         level: str = "INFO",
-    ):
+    ) -> "ExecutionContext":
+        """
+        Append structured runtime log.
+        """
 
         self.logs.append(
             {
@@ -587,19 +824,29 @@ class ExecutionContext:
         )
 
 
+        return self
 
-    # ======================================================
-    # Events
-    # ======================================================
+
+
+# ==========================================================
+# Events API
+# ==========================================================
+
 
     def add_event(
         self,
         event: str,
-    ):
+    ) -> "ExecutionContext":
+        """
+        Add runtime event.
+        """
 
         self.events.append(
             event
         )
+
+
+        return self
 
 
 
@@ -607,19 +854,40 @@ class ExecutionContext:
         self,
         event: str,
     ) -> bool:
+        """
+        Check event existence.
+        """
 
         return event in self.events
 
 
 
-    # ======================================================
-    # History
-    # ======================================================
+    def clear_events(
+        self,
+    ) -> "ExecutionContext":
+        """
+        Clear runtime events.
+        """
+
+        self.events.clear()
+
+
+        return self
+
+
+
+# ==========================================================
+# History API
+# ==========================================================
+
 
     def _record_state(
         self,
         state: str,
-    ):
+    ) -> None:
+        """
+        Record lifecycle transition.
+        """
 
         self.history.append(
             {
@@ -627,25 +895,49 @@ class ExecutionContext:
                 "time": utc_now(),
             }
         )
-    # ======================================================
-    # Metadata API
-    # ======================================================
+
+
+
+    def history_snapshot(
+        self,
+    ) -> list[dict[str, Any]]:
+        """
+        Return immutable history copy.
+        """
+
+        return deepcopy(
+            self.history
+        )
+
+# ==========================================================
+# Metadata API
+# ==========================================================
+
 
     def set(
         self,
         key: str,
         value: Any,
-    ):
+    ) -> "ExecutionContext":
+        """
+        Set metadata value.
+        """
 
         self.metadata[key] = value
+
+
+        return self
 
 
 
     def get(
         self,
         key: str,
-        default=None,
-    ):
+        default: Any = None,
+    ) -> Any:
+        """
+        Get metadata value.
+        """
 
         return self.metadata.get(
             key,
@@ -654,25 +946,66 @@ class ExecutionContext:
 
 
 
-    # ======================================================
-    # Artifact API
-    # ======================================================
+    def update_metadata(
+        self,
+        values: dict[str, Any],
+    ) -> "ExecutionContext":
+        """
+        Update metadata in bulk.
+        """
+
+        self.metadata.update(
+            values
+        )
+
+
+        return self
+
+
+
+    def clear_metadata(
+        self,
+    ) -> "ExecutionContext":
+        """
+        Clear metadata.
+        """
+
+        self.metadata.clear()
+
+
+        return self
+
+
+
+# ==========================================================
+# Artifact API
+# ==========================================================
+
 
     def set_artifact(
         self,
         name: str,
         value: Any,
-    ):
+    ) -> "ExecutionContext":
+        """
+        Store execution artifact.
+        """
 
         self.artifacts[name] = value
+
+
+        return self
 
 
 
     def get_artifact(
         self,
         name: str,
-        default=None,
-    ):
+        default: Any = None,
+    ) -> Any:
+        """
+        Retrieve execution artifact.
+        """
 
         return self.artifacts.get(
             name,
@@ -681,14 +1014,50 @@ class ExecutionContext:
 
 
 
-    # ======================================================
-    # Tags
-    # ======================================================
+    def remove_artifact(
+        self,
+        name: str,
+    ) -> "ExecutionContext":
+        """
+        Remove artifact.
+        """
+
+        self.artifacts.pop(
+            name,
+            None,
+        )
+
+
+        return self
+
+
+
+    def clear_artifacts(
+        self,
+    ) -> "ExecutionContext":
+        """
+        Clear all artifacts.
+        """
+
+        self.artifacts.clear()
+
+
+        return self
+
+
+
+# ==========================================================
+# Tags API
+# ==========================================================
+
 
     def add_tag(
         self,
         tag: str,
-    ):
+    ) -> "ExecutionContext":
+        """
+        Add unique runtime tag.
+        """
 
         if tag not in self.tags:
 
@@ -697,11 +1066,17 @@ class ExecutionContext:
             )
 
 
+        return self
+
+
 
     def remove_tag(
         self,
         tag: str,
-    ):
+    ) -> "ExecutionContext":
+        """
+        Remove runtime tag.
+        """
 
         if tag in self.tags:
 
@@ -710,24 +1085,46 @@ class ExecutionContext:
             )
 
 
+        return self
+
+
 
     def has_tag(
         self,
         tag: str,
     ) -> bool:
+        """
+        Check tag existence.
+        """
 
         return tag in self.tags
 
 
 
-    # ======================================================
-    # Worker
-    # ======================================================
+    def clear_tags(
+        self,
+    ) -> "ExecutionContext":
+        """
+        Clear all tags.
+        """
+
+        self.tags.clear()
+
+
+        return self
+
+# ==========================================================
+# Worker API
+# ==========================================================
+
 
     def attach_worker(
         self,
         worker: str,
-    ):
+    ) -> "ExecutionContext":
+        """
+        Attach runtime worker identifier.
+        """
 
         self.worker = worker
 
@@ -736,11 +1133,23 @@ class ExecutionContext:
 
 
 
-    # ======================================================
-    # Copy
-    # ======================================================
+# ==========================================================
+# Copy API
+# ==========================================================
 
-    def copy(self):
+
+    def copy(
+        self,
+    ) -> "ExecutionContext":
+        """
+        Create deep copy of execution context.
+
+        Used for:
+
+            snapshot
+            rollback
+            branching execution
+        """
 
         return deepcopy(
             self
@@ -748,13 +1157,19 @@ class ExecutionContext:
 
 
 
-    # ======================================================
-    # Serialization
-    # ======================================================
+# ==========================================================
+# Serialization API
+# ==========================================================
+
 
     def to_dict(
         self,
     ) -> dict[str, Any]:
+        """
+        Serialize execution context.
+
+        Returns plain dictionary.
+        """
 
         return {
 
@@ -770,6 +1185,10 @@ class ExecutionContext:
                 self.state,
 
 
+            "status":
+                self.status,
+
+
             "worker":
                 self.worker,
 
@@ -780,6 +1199,10 @@ class ExecutionContext:
                     if self.result
                     else None
                 ),
+
+
+            "value":
+                self.value,
 
 
             "error":
@@ -843,20 +1266,40 @@ class ExecutionContext:
 
         }
 
+# ==========================================================
+# Representation API
+# ==========================================================
 
-
-    # ======================================================
-    # Representation
-    # ======================================================
 
     def __repr__(
         self,
     ) -> str:
+        """
+        Developer representation.
+        """
 
         return (
             "ExecutionContext("
             f"id='{self.id}', "
             f"state='{self.state}', "
+            f"task={self.task!r}, "
             f"worker={self.worker!r}"
             ")"
-        )                    
+        )
+
+
+
+    def __str__(
+        self,
+    ) -> str:
+        """
+        Human readable representation.
+        """
+
+        return (
+            f"ExecutionContext<"
+            f"state={self.state}, "
+            f"task={self.task!r}, "
+            f"worker={self.worker!r}"
+            ">"
+        )

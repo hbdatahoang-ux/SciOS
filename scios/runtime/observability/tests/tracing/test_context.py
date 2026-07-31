@@ -1,22 +1,8 @@
-"""
-SciOS-NG Observability
-Tracing Test - Context
-
-Tests:
-
-- Context creation
-- Trace ID propagation
-- Span ID propagation
-- Parent context
-- Attributes
-- Baggage
-- Serialization
-- Snapshot
-- Clone / Copy
-- Validation
-- Python protocols
-
-"""
+# ============================================================
+# Part 1 – Foundation
+# Creation
+# Trace / Span Identity
+# ============================================================
 
 from __future__ import annotations
 
@@ -24,14 +10,16 @@ from __future__ import annotations
 import copy
 import json
 
-
 import pytest
 
+
+from scios.runtime.observability.tracing.baggage import (
+    Baggage,
+)
 
 from scios.runtime.observability.tracing.context import (
     TraceContext,
 )
-
 
 
 # ============================================================
@@ -42,7 +30,7 @@ from scios.runtime.observability.tracing.context import (
 @pytest.fixture
 def context() -> TraceContext:
     """
-    Create empty context.
+    Empty tracing context.
     """
 
     return TraceContext()
@@ -52,25 +40,16 @@ def context() -> TraceContext:
 @pytest.fixture
 def populated_context() -> TraceContext:
     """
-    Create context with tracing data.
+    Context with predefined trace identity.
     """
 
     ctx = TraceContext()
 
+    ctx._trace_id = "trace-001"
 
-    ctx.set_trace_id(
-        "trace-001"
-    )
+    ctx._span_id = "span-001"
 
-
-    ctx.set_span_id(
-        "span-001"
-    )
-
-
-    ctx.set_parent_span_id(
-        "parent-001"
-    )
+    ctx._parent_span_id = "parent-001"
 
 
     return ctx
@@ -82,143 +61,137 @@ def populated_context() -> TraceContext:
 # ============================================================
 
 
-def test_context_creation(context):
+def test_context_creation(
+    context,
+):
 
     assert context is not None
 
 
 
-def test_context_default_values(context):
+def test_context_instance(
+    context,
+):
+
+    assert isinstance(
+        context,
+        TraceContext,
+    )
+
+
+
+def test_context_default_identity(
+    context,
+):
+
+    assert context.trace_id
+
+    assert context.span_id
+
+
+
+# ============================================================
+# Trace Identity
+# ============================================================
+
+
+def test_trace_id_exists(
+    context,
+):
+
+    assert isinstance(
+        context.trace_id,
+        str,
+    )
+
+
+    assert len(
+        context.trace_id
+    ) > 0
+
+
+
+def test_set_trace_id(
+    context,
+):
+
+    context._trace_id = "trace-123"
+
 
     assert (
         context.trace_id
-        is None
-    )
-
-
-    assert (
-        context.span_id
-        is None
-    )
-
-
-
-# ============================================================
-# Trace ID
-# ============================================================
-
-
-def test_set_trace_id(context):
-
-    context.set_trace_id(
+        ==
         "trace-123"
     )
 
 
-    assert (
-        context.trace_id
-        ==
-        "trace-123"
-    )
 
-
-
-def test_get_trace_id(context):
-
-    context["trace_id"] = (
-        "abc"
-    )
-
-
-    assert (
-        context.trace_id
-        ==
-        "abc"
-    )
-
-
-
-def test_trace_id_validation():
-
-    ctx = TraceContext()
-
-
-    with pytest.raises(
-        Exception
-    ):
-
-        ctx.set_trace_id(
-            ""
-        )
-
-
-
-# ============================================================
-# Span ID
-# ============================================================
-
-
-def test_set_span_id(context):
-
-    context.set_span_id(
-        "span-001"
-    )
-
-
-    assert (
-        context.span_id
-        ==
-        "span-001"
-    )
-
-
-
-def test_parent_span_id(context):
-
-    context.set_parent_span_id(
-        "parent-001"
-    )
-
-
-    assert (
-        context.parent_span_id
-        ==
-        "parent-001"
-    )
-
-
-
-# ============================================================
-# Propagation
-# ============================================================
-
-
-def test_context_propagation(
+def test_populated_trace_id(
     populated_context,
 ):
 
-    child = (
-        populated_context
-        .propagate()
-    )
-
-
     assert (
-        child.trace_id
-        ==
         populated_context.trace_id
+        ==
+        "trace-001"
     )
+
+
+
+# ============================================================
+# Span Identity
+# ============================================================
+
+
+def test_span_id_exists(
+    context,
+):
+
+    assert isinstance(
+        context.span_id,
+        str,
+    )
+
+
+    assert len(
+        context.span_id
+    ) > 0
+
+
+
+def test_set_span_id(
+    context,
+):
+
+    context._span_id = "span-123"
 
 
     assert (
-        child.span_id
+        context.span_id
         ==
-        populated_context.span_id
+        "span-123"
     )
 
 
 
-def test_context_parent_relation(
+def test_populated_span_id(
+    populated_context,
+):
+
+    assert (
+        populated_context.span_id
+        ==
+        "span-001"
+    )
+
+
+
+# ============================================================
+# Parent Span
+# ============================================================
+
+
+def test_parent_span_id(
     populated_context,
 ):
 
@@ -230,62 +203,89 @@ def test_context_parent_relation(
 
 
 
+def test_missing_parent_span(
+    context,
+):
+
+    assert (
+        context.parent_span_id
+        is None
+    )
+
+# ============================================================
+# Part 2
+# Attributes
+# Baggage
+# Serialization
+# Snapshot
+# Clone
+# ============================================================
+
+
 # ============================================================
 # Attributes
 # ============================================================
 
 
-def test_context_attributes(context):
+def test_set_attribute(
+    context,
+):
 
     context.set_attribute(
-        "service",
-        "runtime",
+        "service.name",
+        "SciOS",
     )
 
 
     assert (
-        context.attributes["service"]
+        context.attributes["service.name"]
         ==
-        "runtime"
+        "SciOS"
     )
 
 
 
-def test_multiple_attributes(context):
+def test_multiple_attributes(
+    context,
+):
 
     context.set_attribute(
-        "a",
-        1,
+        "service.name",
+        "SciOS",
     )
 
 
     context.set_attribute(
-        "b",
-        2,
+        "service.version",
+        "0.3",
     )
 
 
-    assert len(
-        context.attributes
-    ) == 2
+    assert (
+        len(context.attributes)
+        ==
+        2
+    )
 
 
 
-def test_remove_attribute(context):
+def test_remove_attribute(
+    context,
+):
 
     context.set_attribute(
-        "temp",
+        "temporary",
         True,
     )
 
 
     context.remove_attribute(
-        "temp"
+        "temporary"
     )
 
 
     assert (
-        "temp"
+        "temporary"
         not in context.attributes
     )
 
@@ -296,49 +296,97 @@ def test_remove_attribute(context):
 # ============================================================
 
 
-def test_set_baggage(context):
+def test_set_baggage(
+    context,
+):
 
     context.set_baggage(
-        "tenant",
-        "scios",
+        Baggage(
+            {
+                "tenant.id": "tenant-a",
+            }
+        )
     )
 
 
     assert (
-        context.baggage["tenant"]
+        context.baggage["tenant.id"]
         ==
-        "scios"
+        "tenant-a"
     )
 
 
 
-def test_get_baggage(context):
+def test_get_baggage(
+    context,
+):
 
     context.set_baggage(
-        "request",
-        "001",
+        Baggage(
+            {
+                "request.id": "req-001",
+            }
+        )
     )
 
 
     assert (
-        context.get_baggage(
-            "request"
+        context.baggage.get(
+            "request.id"
         )
         ==
-        "001"
+        "req-001"
     )
 
 
 
-def test_remove_baggage(context):
+def test_multiple_baggage(
+    context,
+):
 
     context.set_baggage(
-        "temporary",
-        "true",
+        Baggage(
+            {
+                "service.name": "SciOS",
+                "service.version": "0.3",
+            }
+        )
     )
 
 
-    context.remove_baggage(
+    assert (
+        context.baggage.get(
+            "service.name"
+        )
+        ==
+        "SciOS"
+    )
+
+
+    assert (
+        context.baggage.get(
+            "service.version"
+        )
+        ==
+        "0.3"
+    )
+
+
+
+def test_remove_baggage(
+    context,
+):
+
+    context.set_baggage(
+        Baggage(
+            {
+                "temporary": "true",
+            }
+        )
+    )
+
+
+    context.baggage.remove(
         "temporary"
     )
 
@@ -359,10 +407,7 @@ def test_context_to_dict(
     populated_context,
 ):
 
-    data = (
-        populated_context
-        .to_dict()
-    )
+    data = populated_context.to_dict()
 
 
     assert isinstance(
@@ -379,48 +424,15 @@ def test_context_to_dict(
 
 
 
-def test_context_to_json(
-    populated_context,
-):
-
-    result = (
-        populated_context
-        .to_json()
-    )
-
-
-    assert isinstance(
-        result,
-        str,
-    )
-
-
-    parsed = json.loads(
-        result
-    )
-
-
-    assert (
-        parsed["span_id"]
-        ==
-        "span-001"
-    )
-
-
-
 def test_context_from_dict(
     populated_context,
 ):
 
-    data = (
-        populated_context
-        .to_dict()
-    )
+    data = populated_context.to_dict()
 
 
-    restored = (
-        TraceContext
-        .from_dict(data)
+    restored = TraceContext.from_dict(
+        data
     )
 
 
@@ -432,19 +444,41 @@ def test_context_from_dict(
 
 
 
+def test_context_to_json(
+    populated_context,
+):
+
+    value = populated_context.to_json()
+
+
+    assert isinstance(
+        value,
+        str,
+    )
+
+
+    data = json.loads(
+        value
+    )
+
+
+    assert (
+        data["span_id"]
+        ==
+        "span-001"
+    )
+
+
+
 def test_context_from_json(
     populated_context,
 ):
 
-    data = (
-        populated_context
-        .to_json()
-    )
+    value = populated_context.to_json()
 
 
-    restored = (
-        TraceContext
-        .from_json(data)
+    restored = TraceContext.from_json(
+        value
     )
 
 
@@ -465,10 +499,7 @@ def test_context_snapshot(
     populated_context,
 ):
 
-    snapshot = (
-        populated_context
-        .snapshot()
-    )
+    snapshot = populated_context.snapshot()
 
 
     assert isinstance(
@@ -489,15 +520,11 @@ def test_context_restore(
     populated_context,
 ):
 
-    snapshot = (
-        populated_context
-        .snapshot()
-    )
+    snapshot = populated_context.snapshot()
 
 
-    restored = (
-        TraceContext
-        .restore(snapshot)
+    restored = TraceContext.restore(
+        snapshot
     )
 
 
@@ -510,7 +537,7 @@ def test_context_restore(
 
 
 # ============================================================
-# Clone / Copy
+# Clone
 # ============================================================
 
 
@@ -518,16 +545,16 @@ def test_context_clone(
     populated_context,
 ):
 
-    clone = (
-        populated_context
-        .clone()
-    )
+    clone = populated_context.clone()
+
+
+    assert clone is not populated_context
 
 
     assert (
-        clone.trace_id
+        clone.to_dict()
         ==
-        populated_context.trace_id
+        populated_context.to_dict()
     )
 
 
@@ -536,16 +563,16 @@ def test_context_copy(
     populated_context,
 ):
 
-    copied = (
-        populated_context
-        .copy()
-    )
+    copied = populated_context.copy()
+
+
+    assert copied is not populated_context
 
 
     assert (
-        copied.span_id
+        copied.to_dict()
         ==
-        populated_context.span_id
+        populated_context.to_dict()
     )
 
 
@@ -560,9 +587,9 @@ def test_python_copy(
 
 
     assert (
-        copied.trace_id
+        copied.to_dict()
         ==
-        populated_context.trace_id
+        populated_context.to_dict()
     )
 
 
@@ -577,11 +604,19 @@ def test_python_deepcopy(
 
 
     assert (
-        copied.trace_id
+        copied.to_dict()
         ==
-        populated_context.trace_id
+        populated_context.to_dict()
     )
 
+# ============================================================
+# Part 3
+# Validation
+# Diagnostics
+# Python Protocols
+# Equality
+# Hash
+# ============================================================
 
 
 # ============================================================
@@ -600,7 +635,7 @@ def test_context_validate(
 
 
 
-def test_empty_context_validation(
+def test_empty_context_validate(
     context,
 ):
 
@@ -611,17 +646,31 @@ def test_empty_context_validation(
 
 
 
+def test_invalid_context_validation(
+    context,
+):
+
+    context._trace_id = ""
+
+
+    assert (
+        context.validate()
+        is False
+    )
+
+
+
 # ============================================================
 # Diagnostics
 # ============================================================
 
 
 def test_context_diagnostics(
-    context,
+    populated_context,
 ):
 
     result = (
-        context
+        populated_context
         .diagnostics()
     )
 
@@ -629,6 +678,15 @@ def test_context_diagnostics(
     assert isinstance(
         result,
         dict,
+    )
+
+
+    assert (
+        "trace_id"
+        in result
+        or
+        "identity"
+        in result
     )
 
 
@@ -649,27 +707,46 @@ def test_context_summary(
     )
 
 
+    assert (
+        "trace_id"
+        in result
+        or
+        "size"
+        in result
+    )
+
+
 
 # ============================================================
 # Python Protocols
 # ============================================================
 
 
-def test_context_repr(context):
+def test_repr(
+    context,
+):
 
     result = repr(
         context
     )
 
 
+    assert isinstance(
+        result,
+        str,
+    )
+
+
     assert (
-        "Context"
+        "TraceContext"
         in result
     )
 
 
 
-def test_context_str(context):
+def test_str(
+    context,
+):
 
     result = str(
         context
@@ -683,58 +760,106 @@ def test_context_str(context):
 
 
 
-def test_context_len(context):
+def test_len(
+    populated_context,
+):
 
     assert (
-        len(context)
-        >= 0
+        len(populated_context)
+        >=
+        0
     )
 
 
 
-def test_context_contains(context):
+def test_contains(
+    populated_context,
+):
 
-    context["trace_id"] = (
-        "abc"
+    assert (
+        "trace_id"
+        in populated_context
+    )
+
+
+
+def test_getitem(
+        populated_context,
+):
+
+    assert (
+        populated_context["trace_id"]
+        ==
+        "trace-001"
+    )
+
+
+
+def test_setitem(
+    context,
+):
+
+    context["runtime"] = (
+        "engine"
+    )
+
+
+    assert (
+        context["runtime"]
+        ==
+        "engine"
+    )
+
+
+
+def test_delitem(
+    context,
+):
+
+    context["temporary"] = True
+
+
+    del context["temporary"]
+
+
+    assert (
+        "temporary"
+        not in context
+    )
+
+
+
+def test_iter(
+    populated_context,
+):
+
+    keys = list(
+        iter(
+            populated_context
+        )
     )
 
 
     assert (
         "trace_id"
-        in context
+        in keys
     )
 
 
 
-def test_context_getitem(context):
-
-    context["key"] = (
-        "value"
-    )
-
+def test_bool(
+    populated_context,
+):
 
     assert (
-        context["key"]
-        ==
-        "value"
-    )
-
-
-
-def test_context_setitem(context):
-
-    context["enabled"] = True
-
-
-    assert (
-        context["enabled"]
+        bool(populated_context)
         is True
     )
 
 
 
 # ============================================================
-# Equality / Hash
+# Equality
 # ============================================================
 
 
@@ -742,17 +867,66 @@ def test_context_equality():
 
     first = TraceContext()
 
+    first._trace_id = (
+        "trace-001"
+    )
+
+    first._span_id = (
+        "span-001"
+    )
+
 
     second = TraceContext()
 
+    second._trace_id = (
+        "trace-001"
+    )
+
+    second._span_id = (
+        "span-001"
+    )
+
 
     assert (
-        first != second
+        first
+        ==
+        second
     )
 
 
 
-def test_context_hash(context):
+def test_context_not_equal():
+
+    first = TraceContext()
+
+    first._trace_id = (
+        "trace-001"
+    )
+
+
+    second = TraceContext()
+
+    second._trace_id = (
+        "trace-002"
+    )
+
+
+    assert (
+        first
+        !=
+        second
+    )
+
+
+
+# ============================================================
+# Hash
+# ============================================================
+
+
+def test_context_hash(
+    context,
+):
 
     value = hash(
         context

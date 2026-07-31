@@ -1,70 +1,119 @@
-# pipeline.py
-# Cognitive Pipeline Orchestrator cho SciOS Cognitive Core
+"""
+SciOS Cognitive Pipeline
 
-from typing import Any, Dict
-from scios.cognitive_core.perception.base import BasePerceptor
+Stage based execution pipeline.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
 
 class CognitivePipeline:
     """
-    CognitivePipeline định nghĩa chuỗi xử lý perception cho một modality.
-    Nó nhận một Perceptor (theo modality), chạy qua các bước chuẩn hóa,
-    và trả về dữ liệu đã xử lý dưới dạng dict để tạo PerceptionContext.
+    Executes cognitive stages sequentially.
     """
 
-    def __init__(self, name: str = "default_pipeline") -> None:
-        self.name = name
-        self.steps = [
-            "loader",
-            "parser",
-            "cleaner",
-            "normalizer",
-            "extractor",
-            "embedding"
-        ]
 
-    def run(self, perceptor: BasePerceptor, raw_input: Any, metadata: Dict | None = None) -> Dict:
+    def __init__(
+        self,
+        stages: list[Any] | None = None,
+    ) -> None:
+
+        self.stages = (
+            stages
+            if stages
+            else []
+        )
+
+
+    def run(
+        self,
+        raw_input: Any,
+        context: Any | None = None,
+    ) -> dict[str, Any]:
         """
-        Chạy pipeline perception cho một input.
+        Execute pipeline.
 
-        Args:
-            perceptor (BasePerceptor): đối tượng xử lý input theo modality
-            raw_input (Any): dữ liệu thô
-            metadata (Dict): thông tin bổ sung
+        Example:
 
-        Returns:
-            Dict: dữ liệu đã xử lý (text, embeddings, entities, relations, confidence…)
+            pipeline.run(
+                "calculate 2+2"
+            )
         """
-        processed: Dict = {}
 
-        # Loader
-        processed.update(perceptor.load(raw_input, metadata))
 
-        # Parser
-        processed.update(perceptor.parse(processed))
+        state = {
 
-        # Cleaner
-        processed.update(perceptor.clean(processed))
+            "input":
+                raw_input,
 
-        # Normalizer
-        processed.update(perceptor.normalize(processed))
+        }
 
-        # Entity & Relation Extraction
-        processed["entities"] = perceptor.extract_entities(processed)
-        processed["relations"] = perceptor.extract_relations(processed)
 
-        # Embedding
-        processed.update(perceptor.embed(processed))
+        if context is not None:
 
-        # Confidence score
-        processed["confidence"] = perceptor.confidence(processed)
+            state["context"] = context
 
-        return processed
 
-    def summary(self) -> Dict[str, Any]:
-        """
-        Trả về thông tin pipeline hiện tại.
-        """
+
+        for stage in self.stages:
+
+            name = getattr(
+                stage,
+                "name",
+                stage.__class__.__name__,
+            )
+
+
+            output = stage.run(
+                raw_input
+            )
+
+
+            state[name.lower()] = output
+
+
+
+        return state
+
+        context.add_event(
+            "pipeline.completed"
+        )
+
+        context.log(
+            "Pipeline completed"
+        )
+
+        return context
+
+
+
+    def add_stage(
+        self,
+        stage: Any,
+    ) -> None:
+
+        self.stages.append(
+            stage
+        )
+
+
+
+    def summary(
+        self,
+    ) -> dict[str, Any]:
+
         return {
-            "name": self.name,
-            "steps": self.steps
+
+            "stages":
+            [
+                getattr(
+                    s,
+                    "name",
+                    s.__class__.__name__,
+                )
+                for s in self.stages
+            ]
+
         }

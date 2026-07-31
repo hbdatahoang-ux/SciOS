@@ -2,43 +2,118 @@
 SciOS Cognitive Request
 =======================
 
-CognitiveRequest là đầu vào chuẩn cho CognitiveKernel.
-Nó chứa query, inputs, metadata và thông tin tracing.
+Kernel level request model.
+
+Python 3.11+
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from __future__ import annotations
+
+
+from dataclasses import (
+    dataclass,
+    field,
+)
+
+from uuid import uuid4
+
 from typing import Any
 
 
-@dataclass(slots=True)
+__all__ = [
+    "CognitiveRequest",
+]
+
+
+
+@dataclass
 class CognitiveRequest:
     """
-    CognitiveRequest đại diện cho một yêu cầu nhận thức.
+    Request object flowing through SciOS cognitive pipeline.
+
+    Features
+    --------
+    - Automatic request id generation
+    - Metadata support
+    - Serialization
+    - Stable public API
     """
 
-    request_id: str
+
+    # ------------------------------------------------------
+    # Required payload
+    # ------------------------------------------------------
+
     query: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.utcnow)
 
-    # -----------------------------------------------------
-    # Serialization
-    # -----------------------------------------------------
 
-    def to_dict(self) -> dict[str, Any]:
+
+    # ------------------------------------------------------
+    # Optional identity
+    # ------------------------------------------------------
+
+    request_id: str = field(
+        default_factory=lambda: str(uuid4())
+    )
+
+
+
+    # ------------------------------------------------------
+    # Context
+    # ------------------------------------------------------
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+
+
+    # ------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
         return {
             "request_id": self.request_id,
             "query": self.query,
-            "inputs": self.inputs,
             "metadata": self.metadata,
-            "created_at": self.created_at.isoformat(),
         }
 
-    # -----------------------------------------------------
-    # Representation
-    # -----------------------------------------------------
 
-    def __repr__(self) -> str:
-        return f"<CognitiveRequest id={self.request_id} query={self.query}>"
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+    ) -> "CognitiveRequest":
+
+        return cls(
+            query=data.get(
+                "query",
+                "",
+            ),
+            request_id=data.get(
+                "request_id",
+                str(uuid4()),
+            ),
+            metadata=data.get(
+                "metadata",
+                {},
+            ),
+        )
+
+
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+            "CognitiveRequest("
+            f"request_id={self.request_id!r}, "
+            f"query={self.query!r}"
+            ")"
+        )

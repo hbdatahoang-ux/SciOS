@@ -2,26 +2,30 @@
 SciOS Kernel Bootstrap
 ======================
 
-Composition Root for the SciOS Kernel.
+Composition Root for SciOS Kernel.
 
-Responsibilities
-----------------
-- Construct all kernel subsystems.
-- Wire subsystem dependencies.
-- Register default services.
-- Attach lifecycle hooks.
+Builds and wires all kernel subsystems.
 
-This module intentionally DOES NOT import Kernel in order to
-avoid circular imports. Kernel construction should be performed
-by the public API (kernel/__init__.py).
+Python 3.11+
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 
-from scios.runtime import ExecutionEngine
+from dataclasses import dataclass
+from typing import Any, Iterator
+from scios.runtime import Stage
+
+
+from scios.runtime import (
+    ExecutionEngine,
+    Pipeline,
+    Stage,
+)
+
+
 from scios.shared import EventBus
+
 
 from .artifact_manager import ArtifactManager
 from .dispatcher import Dispatcher
@@ -30,6 +34,7 @@ from .plugin_manager import PluginManager
 from .registry import ServiceRegistry
 from .scheduler import Scheduler
 
+
 __all__ = [
     "KernelComponents",
     "Bootstrap",
@@ -37,18 +42,29 @@ __all__ = [
 ]
 
 
+
 # ==========================================================
-# Kernel Components
+# Components Container
 # ==========================================================
 
 
 @dataclass(slots=True)
 class KernelComponents:
     """
-    Fully wired kernel components.
+    Kernel dependency container.
 
-    This object is consumed by Kernel during construction.
+    Supports both:
+
+        components.runtime
+
+    and legacy:
+
+        components["runtime"]
     """
+
+
+    state: str
+
 
     event_bus: EventBus
 
@@ -62,9 +78,111 @@ class KernelComponents:
 
     dispatcher: Dispatcher
 
+
+    pipeline: Pipeline
+
+
     plugin_manager: PluginManager
 
     artifact_manager: ArtifactManager
+
+
+
+    # ------------------------------------------------------
+    # Dictionary compatibility
+    # ------------------------------------------------------
+
+
+    def keys(self):
+        return self.to_dict().keys()
+
+
+
+    def values(self):
+
+        return self.to_dict().values()
+
+
+
+    def items(self):
+
+        return self.to_dict().items()
+
+
+
+    def __getitem__(
+        self,
+        key: str,
+    ) -> Any:
+
+        return self.to_dict()[key]
+
+
+
+    def __contains__(
+        self,
+        key: str,
+    ) -> bool:
+
+        return key in self.to_dict()
+
+
+
+    def __iter__(
+        self,
+    ) -> Iterator[str]:
+
+        return iter(self.keys())
+
+
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+
+            "state":
+                self.state,
+
+
+            "event_bus":
+                self.event_bus,
+
+
+            "lifecycle":
+                self.lifecycle,
+
+
+            "registry":
+                self.registry,
+
+
+            "scheduler":
+                self.scheduler,
+
+
+            "runtime":
+                self.runtime,
+
+
+            "dispatcher":
+                self.dispatcher,
+
+
+            "pipeline":
+                self.pipeline,
+
+
+            "plugin_manager":
+                self.plugin_manager,
+
+
+            "artifact_manager":
+                self.artifact_manager,
+
+        }
+
 
 
 # ==========================================================
@@ -74,69 +192,193 @@ class KernelComponents:
 
 class Bootstrap:
     """
-    Kernel composition root.
-
-    Responsible for wiring together all kernel infrastructure.
+    SciOS kernel composition root.
     """
 
-    def __init__(self) -> None:
 
-        # --------------------------------------------------
-        # Shared Infrastructure
-        # --------------------------------------------------
+
+    def __init__(
+        self,
+    ) -> None:
+
+
+        self.state = "created"
+
+
+        #
+        # Shared
+        #
 
         self.event_bus = EventBus()
 
-        # --------------------------------------------------
-        # Core Infrastructure
-        # --------------------------------------------------
+
+
+        #
+        # Infrastructure
+        #
 
         self.lifecycle = LifecycleManager()
 
         self.registry = ServiceRegistry()
 
-        # --------------------------------------------------
-        # Execution
-        # --------------------------------------------------
+
+
+        #
+        # Runtime
+        #
 
         self.scheduler = Scheduler()
 
+
+
+        #
+        # Cognitive Pipeline
+        #
+
+        self.pipeline = Pipeline()
+
+
+
+        self._build_default_pipeline()
+
+
+
         self.runtime = ExecutionEngine(
+            pipeline=self.pipeline,
             event_bus=self.event_bus,
         )
+
+
+
+        #
+        # Dispatcher
+        #
 
         self.dispatcher = Dispatcher(
             scheduler=self.scheduler,
             engine=self.runtime,
         )
 
-        # --------------------------------------------------
+
+
+        #
         # Managers
-        # --------------------------------------------------
+        #
 
         self.plugin_manager = PluginManager()
 
         self.artifact_manager = ArtifactManager()
 
+
+
     # ======================================================
-    # Registration
+    # Pipeline
     # ======================================================
 
-    def register_services(self) -> None:
+
+    def _build_default_pipeline(
+        self,
+    ) -> None:
         """
-        Register all default kernel services.
+        Default SciOS cognitive pipeline.
+
+        planner
+            |
+        memory
+            |
+        reasoner
         """
+
+        class DefaultStage(Stage):
+
+            def run(
+                self,
+                context,
+            ):
+
+                # pass-through stage
+                #
+                # Real cognitive modules
+                # will replace these later.
+
+                return context
+
+
+
+        stages = [
+
+            DefaultStage(
+                "planner"
+            ),
+
+            DefaultStage(
+                "memory"
+            ),
+
+            DefaultStage(
+                "reasoner"
+            ),
+
+        ]
+
+
+        for stage in stages:
+
+            self.pipeline.add_stage(
+                stage
+            )
+
+
+    # ======================================================
+    # Registry
+    # ======================================================
+
+
+    def register_services(
+        self,
+    ) -> None:
+
 
         services = {
-            "event_bus": self.event_bus,
-            "lifecycle": self.lifecycle,
-            "registry": self.registry,
-            "scheduler": self.scheduler,
-            "runtime": self.runtime,
-            "dispatcher": self.dispatcher,
-            "plugin_manager": self.plugin_manager,
-            "artifact_manager": self.artifact_manager,
+
+            "event_bus":
+                self.event_bus,
+
+
+            "lifecycle":
+                self.lifecycle,
+
+
+            "registry":
+                self.registry,
+
+
+            "scheduler":
+                self.scheduler,
+
+
+            "runtime":
+                self.runtime,
+
+
+            "dispatcher":
+                self.dispatcher,
+
+
+            "pipeline":
+                self.pipeline,
+
+
+            "plugin_manager":
+                self.plugin_manager,
+
+
+            "artifact_manager":
+                self.artifact_manager,
+
         }
+
+
 
         for name, service in services.items():
 
@@ -146,70 +388,113 @@ class Bootstrap:
                 overwrite=True,
             )
 
+
+
     # ======================================================
-    # Lifecycle Hooks
+    # Hooks
     # ======================================================
 
-    def attach_hooks(self) -> None:
-        """
-        Register lifecycle-aware components.
-        """
+
+    def attach_hooks(
+        self,
+    ) -> None:
+
 
         hooks = (
+
             self.runtime,
+
             self.scheduler,
+
             self.dispatcher,
+
             self.plugin_manager,
+
             self.artifact_manager,
+
         )
+
 
         for hook in hooks:
 
-            self.lifecycle.add_hook(hook)
+            self.lifecycle.add_hook(
+                hook
+            )
+
+
 
     # ======================================================
     # Build
     # ======================================================
 
-    def build(self) -> KernelComponents:
-        """
-        Build a fully wired kernel dependency graph.
 
-        Returns
-        -------
-        KernelComponents
-            Ready-to-use kernel components.
-        """
+    def build(
+        self,
+    ) -> KernelComponents:
+
 
         self.register_services()
 
         self.attach_hooks()
 
+
+        self.state = "ready"
+
+
+
         return KernelComponents(
+
+            state=self.state,
+
             event_bus=self.event_bus,
+
             lifecycle=self.lifecycle,
+
             registry=self.registry,
+
             scheduler=self.scheduler,
+
             runtime=self.runtime,
+
             dispatcher=self.dispatcher,
+
+            pipeline=self.pipeline,
+
             plugin_manager=self.plugin_manager,
+
             artifact_manager=self.artifact_manager,
+
         )
 
 
+
+    # ======================================================
+    # Compatibility API
+    # ======================================================
+
+
+    @classmethod
+    def init_kernel(
+        cls,
+    ) -> KernelComponents:
+        """
+        Legacy bootstrap entrypoint.
+
+        Used by older tests and integrations.
+        """
+
+        return cls().build()
+
+
+
 # ==========================================================
-# Public Factory
+# Factory
 # ==========================================================
 
 
 def build_components() -> KernelComponents:
     """
-    Build the complete kernel dependency graph.
-
-    Unlike build_kernel(), this function does NOT construct
-    a Kernel instance. It only returns fully wired components,
-    preventing circular imports between bootstrap.py and
-    kernel.py.
+    Build kernel components.
     """
 
     return Bootstrap().build()

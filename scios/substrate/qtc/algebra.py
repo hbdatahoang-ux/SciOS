@@ -24,6 +24,7 @@ from typing import Dict, FrozenSet
 __all__ = [
     "QTCRelation",
     "QTCAlgebra",
+    "AlgebraElement",
 ]
 
 
@@ -209,3 +210,17 @@ class QTCAlgebra:
             f"relations={len(QTCRelation)})"
 
         )
+# ==========================================================
+# Compatibility Alias
+# ==========================================================
+
+"""
+Backward compatibility.
+
+Older SciOS APIs exposed the algebra primitive
+as AlgebraElement.
+
+SciOS-NG uses QTCAlgebra as the canonical name.
+"""
+
+AlgebraElement = QTCAlgebra

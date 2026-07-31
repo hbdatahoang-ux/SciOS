@@ -138,3 +138,4 @@ def test_unknown_task_returns_none():
     graph = TaskGraph()
 
     assert graph.get_task("missing") is None
+    

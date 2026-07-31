@@ -1,31 +1,138 @@
-# scios/cognitive_core/tool_use/base.py
+"""
+SciOS Cognitive Core Tool Base
+================================
+
+Base abstraction for cognitive tool execution.
+
+Python 3.11+
+"""
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any
+
+
+__all__ = [
+    "Tool",
+]
+
 
 class Tool(ABC):
     """
-    Abstract base class cho mọi Tool trong SciOS-NG.
+    Base Tool abstraction.
+
+    Supports:
+
+    - class-level metadata
+    - instance metadata
+    - validation
+    - execution
     """
 
-    def __init__(self, name: str, description: str = ""):
-        self.name = name
-        self.description = description
+    name: str = "unnamed"
+
+    description: str = ""
+
+
+    def __init__(
+        self,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> None:
+
+        # Preserve subclass class attributes
+
+        if name is not None:
+
+            self.name = name
+
+        elif not getattr(
+            self,
+            "name",
+            None,
+        ):
+
+            self.name = (
+                self.__class__.__name__
+            )
+
+
+        if description is not None:
+
+            self.description = description
+
+
+
+    # ==================================================
+    # Required APIs
+    # ==================================================
 
     @abstractmethod
-    def execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(
+        self,
+        request: Any,
+    ) -> Any:
         """
-        Thực thi tool với một request chuẩn hóa.
-        Phải trả về response chuẩn hóa.
+        Execute tool request.
         """
-        pass
 
-    @abstractmethod
-    def validate(self, request: Dict[str, Any]) -> bool:
-        """
-        Kiểm tra request có hợp lệ cho tool này không.
-        """
-        pass
+        raise NotImplementedError
 
-    def __repr__(self) -> str:
-        return f"<Tool name={self.name}>"
+
+
+    # ==================================================
+    # Validation
+    # ==================================================
+
+    def validate(
+        self,
+        request: Any,
+    ) -> bool:
+        """
+        Validate request.
+
+        Default accepts all requests.
+        """
+
+        return True
+
+
+
+    # ==================================================
+    # Metadata
+    # ==================================================
+
+    def info(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+
+            "name":
+                self.name,
+
+            "description":
+                self.description,
+
+            "type":
+                self.__class__.__name__,
+
+        }
+
+
+
+    # ==================================================
+    # Protocol
+    # ==================================================
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+
+            f"{self.__class__.__name__}"
+            f"(name={self.name!r})"
+
+        )

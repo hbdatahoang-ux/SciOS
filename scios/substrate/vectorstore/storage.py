@@ -18,18 +18,22 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Iterable
 
+
 from scios.substrate.tensor import SciOSTensor
 from .metadata import Metadata
+
 
 __all__ = [
     "VectorRecord",
     "VectorStorage",
+    "VectorStore",
 ]
 
 
 # ==========================================================
 # Vector Record
 # ==========================================================
+
 
 @dataclass(slots=True)
 class VectorRecord:
@@ -44,28 +48,31 @@ class VectorRecord:
     metadata: Metadata
 
 
+
 # ==========================================================
 # Abstract Storage
 # ==========================================================
 
+
 class VectorStorage(ABC):
     """
-    Abstract storage backend.
+    Abstract vector storage backend.
 
-    Every storage implementation must implement this API.
+    Low-level storage contract.
 
-    Examples
-    --------
-    MemoryStorage
-    SQLiteStorage
-    LMDBStorage
-    RocksDBStorage
-    CloudStorage
+    Implementations:
+    - MemoryStorage
+    - SQLiteStorage
+    - LMDBStorage
+    - QdrantStorage
+    - CloudStorage
     """
+
 
     # ======================================================
     # CRUD
     # ======================================================
+
 
     @abstractmethod
     def add(
@@ -73,9 +80,11 @@ class VectorStorage(ABC):
         record: VectorRecord,
     ) -> None:
         """
-        Insert one vector.
+        Insert one vector record.
         """
         raise NotImplementedError
+
+
 
     @abstractmethod
     def get(
@@ -83,9 +92,11 @@ class VectorStorage(ABC):
         record_id: str,
     ) -> VectorRecord | None:
         """
-        Retrieve a vector.
+        Retrieve vector record.
         """
         raise NotImplementedError
+
+
 
     @abstractmethod
     def update(
@@ -93,9 +104,11 @@ class VectorStorage(ABC):
         record: VectorRecord,
     ) -> None:
         """
-        Update existing vector.
+        Update existing record.
         """
         raise NotImplementedError
+
+
 
     @abstractmethod
     def delete(
@@ -103,13 +116,16 @@ class VectorStorage(ABC):
         record_id: str,
     ) -> None:
         """
-        Remove vector.
+        Delete record.
         """
         raise NotImplementedError
+
+
 
     # ======================================================
     # Batch
     # ======================================================
+
 
     @abstractmethod
     def add_many(
@@ -117,78 +133,132 @@ class VectorStorage(ABC):
         records: Iterable[VectorRecord],
     ) -> None:
         """
-        Insert multiple vectors.
+        Insert multiple records.
         """
         raise NotImplementedError
+
+
 
     # ======================================================
     # Query
     # ======================================================
 
+
     @abstractmethod
-    def ids(self) -> list[str]:
+    def ids(
+        self,
+    ) -> list[str]:
         """
         Return stored IDs.
         """
         raise NotImplementedError
 
+
+
     @abstractmethod
-    def values(self) -> list[VectorRecord]:
+    def values(
+        self,
+    ) -> list[VectorRecord]:
         """
         Return all records.
         """
         raise NotImplementedError
 
+
+
     @abstractmethod
-    def clear(self) -> None:
+    def clear(
+        self,
+    ) -> None:
         """
-        Remove all vectors.
+        Remove all records.
         """
         raise NotImplementedError
+
+
 
     # ======================================================
     # Statistics
     # ======================================================
 
+
     @property
     @abstractmethod
-    def size(self) -> int:
+    def size(
+        self,
+    ) -> int:
         """
         Number of stored vectors.
         """
         raise NotImplementedError
 
+
+
     @property
     @abstractmethod
-    def backend(self) -> str:
+    def backend(
+        self,
+    ) -> str:
         """
-        Backend name.
+        Backend identifier.
         """
         raise NotImplementedError
 
+
+
     # ======================================================
-    # Python
+    # Python Protocol
     # ======================================================
 
-    def __len__(self) -> int:
+
+    def __len__(
+        self,
+    ) -> int:
 
         return self.size
+
+
 
     def __contains__(
         self,
         record_id: str,
     ) -> bool:
 
-        return self.get(record_id) is not None
+        return (
+            self.get(record_id)
+            is not None
+        )
 
-    def __repr__(self) -> str:
+
+
+    def __repr__(
+        self,
+    ) -> str:
 
         return (
-
             f"{self.__class__.__name__}("
-
             f"backend='{self.backend}', "
-
             f"size={self.size})"
-
         )
+
+
+
+# ==========================================================
+# Public VectorStore API
+# ==========================================================
+
+
+class VectorStore(VectorStorage):
+    """
+    Public VectorStore interface.
+
+    Compatibility layer for SciOS modules.
+
+    VectorStore represents the user-facing
+    vector database abstraction.
+
+    It extends VectorStorage so existing
+    backend implementations remain compatible.
+    """
+
+    pass

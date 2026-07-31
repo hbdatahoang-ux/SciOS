@@ -26,7 +26,7 @@ from typing import Any
 
 from .attributes import MetricAttributes
 from .descriptor import MetricDescriptor
-from .hooks import MetricHooks
+from ..metric_hooks import MetricHooks
 from .labels import MetricLabels
 from .metadata import MetricMetadata
 from .metric_state import MetricState
