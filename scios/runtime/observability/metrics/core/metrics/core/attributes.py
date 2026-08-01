@@ -13,137 +13,362 @@ Design goals
 - Mapping compatible
 """
 
+# ==========================================================
+# Part 1. Imports
+# ==========================================================
+
 from __future__ import annotations
 
+import copy
+import json
+
+from dataclasses import dataclass, field
+from typing import Any, TypeAlias
 from collections.abc import Iterator, Mapping
-from typing import Any
 
 from .validation import MetricValidator
 
-__all__ = [
-    "MetricAttributes",
-]
+
+# ==========================================================
+# Part 2. Constants & Type Aliases
+# ==========================================================
+
+AttributeKey: TypeAlias = str
+AttributeValue: TypeAlias = Any
+AttributeDict: TypeAlias = dict[AttributeKey, AttributeValue]
+
+DEFAULT_ATTRIBUTES: AttributeDict = {}
 
 
+# ==========================================================
+# Part 3. Dataclass / Core Container
+# ==========================================================
+
+
+@dataclass(slots=True)
 class MetricAttributes:
     """
-    Mutable attribute container.
+    Mutable metric attribute container.
+
+    Behaves similarly to a standard mapping while providing
+    validation, serialization and snapshot capabilities.
     """
 
-    __slots__ = ("_attributes",)
+    attributes: AttributeDict = field(
+        default_factory=dict,
+    )
+# ==========================================================
+# Part 4. Validation
+# ==========================================================
 
-    def __init__(
+    def __post_init__(self) -> None:
+        """
+        Normalize and validate attributes.
+        """
+
+        if self.attributes is None:
+            self.attributes = {}
+
+        if not isinstance(self.attributes, dict):
+            self.attributes = dict(self.attributes)
+
+    def validate(self) -> None:
+        """
+        Validate attributes.
+        """
+
+        if not isinstance(self.attributes, dict):
+            raise TypeError(
+                "attributes must be dict."
+            )
+
+        for key, value in self.attributes.items():
+
+            if not isinstance(key, str):
+                raise TypeError(
+                    "attribute key must be str."
+                )
+
+            if not key.strip():
+                raise ValueError(
+                    "attribute key cannot be empty."
+                )
+
+            if not isinstance(
+                value,
+                (
+                    str,
+                    int,
+                    float,
+                    bool,
+                    type(None),
+                ),
+            ):
+                raise TypeError(
+                    f"Invalid attribute value for '{key}': {type(value).__name__}"
+                )
+
+    def is_valid(self) -> bool:
+        """
+        Return True if attributes are valid.
+        """
+
+        try:
+            self.validate()
+            return True
+        except Exception:
+            return False
+
+
+# ==========================================================
+# Part 5. Serialization
+# ==========================================================
+
+    def to_dict(self) -> AttributeDict:
+        """
+        Serialize to dictionary.
+        """
+
+        return dict(self.attributes)
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: AttributeDict,
+    ) -> "MetricAttributes":
+        """
+        Construct from dictionary.
+        """
+
+        return cls(
+            attributes=dict(data),
+        )
+
+    def to_json(
         self,
-        attributes: Mapping[str, Any] | None = None,
-    ) -> None:
+        *,
+        indent: int | None = 2,
+    ) -> str:
+        """
+        Serialize to JSON.
+        """
 
-        self._attributes: dict[str, Any] = {}
+        return json.dumps(
+            self.to_dict(),
+            indent=indent,
+            ensure_ascii=False,
+        )
 
-        if attributes:
-            self.update(attributes)
+    @classmethod
+    def from_json(
+        cls,
+        text: str,
+    ) -> "MetricAttributes":
+        """
+        Construct from JSON.
+        """
 
-    # ---------------------------------------------------------
-    # Basic API
-    # ---------------------------------------------------------
+        return cls.from_dict(
+            json.loads(text),
+        )
 
-    def add(
+
+# ==========================================================
+# Part 6. Copy API
+# ==========================================================
+
+    def copy(self) -> "MetricAttributes":
+        """
+        Return shallow copy.
+        """
+
+        return self.__class__.from_dict(
+            self.to_dict(),
+        )
+
+    def clone(self) -> "MetricAttributes":
+        """
+        Return deep clone.
+        """
+
+        return copy.deepcopy(self)
+
+    def deepcopy(self) -> "MetricAttributes":
+        """
+        Explicit deep copy.
+        """
+
+        return copy.deepcopy(self)
+
+    def replace(
+        self,
+        **updates: Any,
+    ) -> "MetricAttributes":
+        """
+        Return copied instance with updated fields.
+        """
+
+        data = self.to_dict()
+
+        if "attributes" in updates:
+            data = dict(updates["attributes"])
+        else:
+            data.update(updates)
+
+        return self.__class__.from_dict(data)
+# ==========================================================
+# Part 7. Comparison
+# ==========================================================
+
+    def __eq__(
+        self,
+        other: object,
+    ) -> bool:
+        """
+        Equality comparison.
+        """
+
+        if isinstance(other, MetricAttributes):
+            return self.attributes == other.attributes
+
+        if isinstance(other, Mapping):
+            return self.attributes == dict(other)
+
+        return NotImplemented
+
+
+    def __hash__(self) -> int:
+        """
+        Hash support.
+        """
+
+        return hash(
+            tuple(sorted(self.attributes.items()))
+        )
+# ==========================================================
+# Part 8. Python Protocols
+# ==========================================================
+
+    def items(self):
+
+        return self.attributes.items()
+
+
+    def keys(self):
+
+        return self.attributes.keys()
+
+
+    def values(self):
+
+        return self.attributes.values()
+
+
+    def get(
         self,
         key: str,
-        value: Any,
-    ) -> None:
-        """
-        Add or replace an attribute.
-        """
-        key, value = MetricValidator.validate_attribute(key, value)
-        self._attributes[key] = value
+        default: Any = None,
+    ):
+
+        return self.attributes.get(
+            key,
+            default,
+        )
+
 
     def update(
         self,
-        attributes: Mapping[str, Any],
+        other: Mapping[str, Any],
     ) -> None:
         """
-        Update multiple attributes.
+        Update attributes.
         """
-        attributes = MetricValidator.validate_attributes(attributes)
 
-        self._attributes.update(attributes)
+        if not isinstance(other, Mapping):
+            raise TypeError(
+                "attributes must be a mapping."
+            )
+
+        self.attributes.update(other)
+
 
     def remove(
         self,
         key: str,
     ) -> None:
         """
-        Remove an attribute.
+        Remove attribute.
         """
-        self._attributes.pop(key, None)
+
+        self.attributes.pop(
+            key,
+            None,
+        )
+
 
     def clear(self) -> None:
         """
-        Remove all attributes.
+        Clear all attributes.
         """
-        self._attributes.clear()
 
-    # ---------------------------------------------------------
-    # Query
-    # ---------------------------------------------------------
+        self.attributes.clear()
 
-    def get(
+
+    def pop(
         self,
         key: str,
         default: Any = None,
-    ) -> Any:
+    ):
 
-        return self._attributes.get(key, default)
+        return self.attributes.pop(
+            key,
+            default,
+        )
 
-    def contains(
+
+    def __repr__(self) -> str:
+
+        return (
+            f"{self.__class__.__name__}"
+            f"({self.attributes!r})"
+        )
+
+
+    def __str__(self) -> str:
+
+        return str(self.attributes)
+
+
+    def __bool__(self) -> bool:
+
+        return bool(self.attributes)
+
+
+    def __len__(self) -> int:
+
+        return len(self.attributes)
+
+
+    def __iter__(self) -> Iterator[str]:
+
+        return iter(self.attributes)
+
+
+    def __contains__(
         self,
-        key: str,
+        key: object,
     ) -> bool:
 
-        return key in self._attributes
+        return key in self.attributes
 
-    # ---------------------------------------------------------
-    # Views
-    # ---------------------------------------------------------
-
-    def keys(self):
-
-        return self._attributes.keys()
-
-    def values(self):
-
-        return self._attributes.values()
-
-    def items(self):
-
-        return self._attributes.items()
-
-    # ---------------------------------------------------------
-    # Copy
-    # ---------------------------------------------------------
-
-    def copy(self) -> "MetricAttributes":
-        """
-        Shallow copy.
-        """
-        return MetricAttributes(self._attributes)
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Export as dict.
-        """
-        return dict(self._attributes)
-
-    # ---------------------------------------------------------
-    # Rich API
-    # ---------------------------------------------------------
 
     def __getitem__(
         self,
         key: str,
     ) -> Any:
 
-        return self._attributes[key]
+        return self.attributes[key]
+
 
     def __setitem__(
         self,
@@ -151,51 +376,19 @@ class MetricAttributes:
         value: Any,
     ) -> None:
 
-        self.add(key, value)
+        self.attributes[key] = value
+
 
     def __delitem__(
         self,
         key: str,
     ) -> None:
 
-        self.remove(key)
+        del self.attributes[key]
+# ==========================================================
+# Part 9. Public API
+# ==========================================================
 
-    def __contains__(
-        self,
-        key: object,
-    ) -> bool:
-
-        return key in self._attributes
-
-    def __iter__(self) -> Iterator[str]:
-
-        return iter(self._attributes)
-
-    def __len__(self) -> int:
-
-        return len(self._attributes)
-
-    def __bool__(self) -> bool:
-
-        return bool(self._attributes)
-
-    def __repr__(self) -> str:
-
-        return f"MetricAttributes({self._attributes!r})"
-
-    def __str__(self) -> str:
-
-        return str(self._attributes)
-
-    def __eq__(
-        self,
-        other: object,
-    ) -> bool:
-
-        if isinstance(other, MetricAttributes):
-            return self._attributes == other._attributes
-
-        if isinstance(other, Mapping):
-            return self._attributes == dict(other)
-
-        return False
+__all__ = [
+    "MetricAttributes",
+]                    

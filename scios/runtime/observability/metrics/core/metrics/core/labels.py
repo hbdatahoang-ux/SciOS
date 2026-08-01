@@ -1,181 +1,195 @@
-"""
-SciOS-NG Metrics Core - Labels
-==============================
-
-Immutable-like label container with validation.
-
-Design goals
-------------
-- Ordered
-- Type-safe
-- Validation-aware
-- Snapshot-friendly
-- Mapping compatible
-"""
+# ==========================================================
+# Part 1. Imports
+# ==========================================================
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
-from typing import Any
+import copy
+import json
 
-from .validation import MetricValidator
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
+from typing import Any, TypeAlias
 
 __all__ = [
+    "LabelKey",
+    "LabelValue",
+    "LabelMap",
+    "DEFAULT_LABELS",
     "MetricLabels",
 ]
 
 
+# ==========================================================
+# Part 2. Constants & Type Aliases
+# ==========================================================
+
+LabelKey: TypeAlias = str
+LabelValue: TypeAlias = str
+LabelMap: TypeAlias = dict[LabelKey, LabelValue]
+
+DEFAULT_LABELS: LabelMap = {}
+
+
+# ==========================================================
+# Part 3. Dataclass / Core Container
+# ==========================================================
+
+@dataclass(slots=True)
 class MetricLabels:
     """
     Metric label container.
+
+    Labels are mutable mappings of string keys to string values.
     """
 
-    __slots__ = ("_labels",)
+    labels: LabelMap = field(default_factory=dict)
+# ==========================================================
+# Part 4. Validation
+# ==========================================================
 
-    def __init__(
+    
+    def __post_init__(self) -> None:
+        """
+        Normalize container only.
+        """
+
+        self.labels = dict(self.labels)
+
+    def validate(self) -> None:
+        """
+        Validate labels.
+        """
+
+        if not isinstance(self.labels, dict):
+            raise TypeError(
+                "labels must be a dictionary."
+            )
+
+        for key, value in self.labels.items():
+
+            if not isinstance(key, str):
+                raise TypeError(
+                    "label key must be str."
+                )
+
+            if not key.strip():
+                raise ValueError(
+                    "label key cannot be empty."
+                )
+
+            if not isinstance(value, str):
+                raise TypeError(
+                    "label value must be str."
+                )
+
+    def is_valid(self) -> bool:
+        """
+        Return True if labels are valid.
+        """
+
+        try:
+            self.validate()
+            return True
+        except Exception:
+            return False
+
+
+# ==========================================================
+# Part 5. Serialization
+# ==========================================================
+
+    def to_dict(self) -> LabelMap:
+        """
+        Serialize labels.
+        """
+
+        return dict(self.labels)
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, str],
+    ) -> "MetricLabels":
+        """
+        Construct from dictionary.
+        """
+
+        return cls(
+            labels=dict(data),
+        )
+
+    def to_json(
         self,
-        labels: Mapping[str, str] | None = None,
-    ) -> None:
-
-        self._labels: dict[str, str] = {}
-
-        if labels:
-            self.update(labels)
-
-    # ---------------------------------------------------------
-    # Basic API
-    # ---------------------------------------------------------
-
-    def add(self, key: str, value: str) -> None:
+        *,
+        indent: int |None = 2,
+    ) -> str:
         """
-        Add or replace one label.
+        Serialize to JSON.
         """
-        key, value = MetricValidator.validate_label(key, value)
 
-        self._labels[key] = value
+        return json.dumps(
+            self.to_dict(),
+            indent=indent,
+            ensure_ascii=False,
+        )
 
-    def update(
-        self,
-        labels: Mapping[str, str],
-    ) -> None:
+    @classmethod
+    def from_json(
+        cls,
+        text: str,
+    ) -> "MetricLabels":
         """
-        Update labels.
+        Construct from JSON.
         """
-        labels = MetricValidator.validate_labels(labels)
 
-        self._labels.update(labels)
+        return cls.from_dict(
+            json.loads(text),
+        )
 
-    def remove(
-        self,
-        key: str,
-    ) -> None:
-        """
-        Remove a label.
-        """
-        self._labels.pop(key, None)
 
-    def clear(self) -> None:
-        """
-        Remove all labels.
-        """
-        self._labels.clear()
-
-    # ---------------------------------------------------------
-    # Query
-    # ---------------------------------------------------------
-
-    def get(
-        self,
-        key: str,
-        default: str | None = None,
-    ) -> str | None:
-
-        return self._labels.get(key, default)
-
-    def contains(
-        self,
-        key: str,
-    ) -> bool:
-
-        return key in self._labels
-
-    # ---------------------------------------------------------
-    # Views
-    # ---------------------------------------------------------
-
-    def keys(self):
-
-        return self._labels.keys()
-
-    def values(self):
-
-        return self._labels.values()
-
-    def items(self):
-
-        return self._labels.items()
-
-    # ---------------------------------------------------------
-    # Copy
-    # ---------------------------------------------------------
+# ==========================================================
+# Part 6. Copy API
+# ==========================================================
 
     def copy(self) -> "MetricLabels":
+        """
+        Return shallow copy.
+        """
 
-        return MetricLabels(self._labels)
+        return self.__class__.from_dict(
+            self.to_dict(),
+        )
 
-    def to_dict(self) -> dict[str, str]:
+    def clone(self) -> "MetricLabels":
+        """
+        Return deep clone.
+        """
 
-        return dict(self._labels)
+        return copy.deepcopy(self)
 
-    # ---------------------------------------------------------
-    # Rich API
-    # ---------------------------------------------------------
+    def deepcopy(self) -> "MetricLabels":
+        """
+        Explicit deep copy.
+        """
 
-    def __getitem__(self, key: str) -> str:
+        return copy.deepcopy(self)
 
-        return self._labels[key]
-
-    def __setitem__(
+    def replace(
         self,
-        key: str,
-        value: str,
-    ) -> None:
+        **updates: str,
+    ) -> "MetricLabels":
+        """
+        Return copied labels with updates.
+        """
 
-        self.add(key, value)
+        data = self.to_dict()
+        data.update(updates)
 
-    def __delitem__(
-        self,
-        key: str,
-    ) -> None:
-
-        self.remove(key)
-
-    def __contains__(
-        self,
-        key: object,
-    ) -> bool:
-
-        return key in self._labels
-
-    def __iter__(self) -> Iterator[str]:
-
-        return iter(self._labels)
-
-    def __len__(self) -> int:
-
-        return len(self._labels)
-
-    def __bool__(self) -> bool:
-
-        return bool(self._labels)
-
-    def __repr__(self) -> str:
-
-        return f"MetricLabels({self._labels!r})"
-
-    def __str__(self) -> str:
-
-        return str(self._labels)
+        return self.__class__.from_dict(data)
+# ==========================================================
+# Part 7. Comparison
+# ==========================================================
 
     def __eq__(
         self,
@@ -183,9 +197,136 @@ class MetricLabels:
     ) -> bool:
 
         if isinstance(other, MetricLabels):
-            return self._labels == other._labels
+            return self.labels == other.labels
 
         if isinstance(other, Mapping):
-            return self._labels == dict(other)
+            return self.labels == dict(other)
 
         return False
+
+    def __hash__(self) -> int:
+
+        return hash(
+            tuple(
+                sorted(self.labels.items()),
+            )
+        )
+
+
+# ==========================================================
+# Part 8. Python Protocols
+# ==========================================================
+
+    def items(self):
+
+        return self.labels.items()
+
+    def keys(self):
+
+        return self.labels.keys()
+
+    def values(self):
+
+        return self.labels.values()
+
+    def get(
+        self,
+        key: str,
+        default: Any = None,
+    ):
+
+        return self.labels.get(
+            key,
+            default,
+        )
+
+    def update(
+        self,
+        other: Mapping[str, str],
+    ) -> None:
+
+        self.labels.update(
+            {
+                str(k): str(v)
+                for k, v in other.items()
+            }
+        )
+
+    def clear(self) -> None:
+
+        self.labels.clear()
+
+    def pop(
+        self,
+        key: str,
+        default: Any = None,
+    ):
+
+        return self.labels.pop(
+            key,
+            default,
+        )
+
+    def __repr__(self) -> str:
+
+        return (
+            f"{self.__class__.__name__}"
+            f"({self.labels!r})"
+        )
+
+    def __str__(self) -> str:
+
+        return str(self.labels)
+
+    def __bool__(self) -> bool:
+
+        return bool(self.labels)
+
+    def __len__(self) -> int:
+
+        return len(self.labels)
+
+    def __iter__(self) -> Iterator[str]:
+
+        return iter(self.labels)
+
+    def __contains__(
+        self,
+        key: object,
+    ) -> bool:
+
+        return key in self.labels
+
+    def __getitem__(
+        self,
+        key: str,
+    ) -> str:
+
+        return self.labels[key]
+
+    def __setitem__(
+        self,
+        key: str,
+        value: str,
+    ) -> None:
+
+        self.labels[str(key)] = str(value)
+
+    def __delitem__(
+        self,
+        key: str,
+    ) -> None:
+
+        del self.labels[key]
+
+# ==========================================================
+# Part 9. Public API
+# ==========================================================
+
+__all__ = [
+    "LabelKey",
+    "LabelValue",
+    "LabelMap",
+    "DEFAULT_LABELS",
+    "MetricLabels",
+]            
