@@ -1,32 +1,29 @@
 """
-SciOS-NG Metrics Serialization
-==============================
+SciOS Runtime Metrics Serialization
+===================================
 
-Public API for metric serialization subsystem.
+Serialization subsystem for the Metrics runtime.
 
-Exports:
-    - MetricSerializer
+Exports
+-------
+- MetricSerializer
 
-Responsibilities:
-    - Serialize metrics
-    - Deserialize metrics
-    - Snapshot persistence
-    - JSON conversion
-    - File persistence
-    - Validation
+Responsibilities
+----------------
+- Dictionary serialization
+- JSON serialization
+- File persistence
+- Snapshot persistence
+- Object restoration
+- Validation utilities
 """
 
 from __future__ import annotations
 
-
-from .metric_serializer import (
-    MetricSerializer,
-)
-
+from .metric_serializer import MetricSerializer
 
 __all__ = [
     "MetricSerializer",
 ]
 
-
-__version__ = "0.1.0"
+__version__ = "1.0.0"
