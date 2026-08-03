@@ -4,62 +4,80 @@
 
 from __future__ import annotations
 
-import json
+import copy
 from pathlib import Path
 from threading import RLock
 from typing import Any, Final, TypeAlias
 
+import yaml
+
 from ..serialization.metric_serializer import MetricSerializer
 
+
 Serializable: TypeAlias = Any
+
 
 DEFAULT_VERSION: Final[str] = "1.0"
 
 DEFAULT_ENCODING: Final[str] = "utf-8"
 
+DEFAULT_SORT_KEYS: Final[bool] = False
+
 DEFAULT_INDENT: Final[int] = 2
 
-DEFAULT_ENSURE_ASCII: Final[bool] = False
+DEFAULT_ALLOW_UNICODE: Final[bool] = True
+
 
 __all__ = [
     "DEFAULT_VERSION",
     "DEFAULT_ENCODING",
+    "DEFAULT_SORT_KEYS",
     "DEFAULT_INDENT",
-    "DEFAULT_ENSURE_ASCII",
+    "DEFAULT_ALLOW_UNICODE",
     "Serializable",
-    "JSONExporter",
+    "YAMLExporter",
 ]
+
+
+class YAMLExporter:
+    """
+    YAML metric exporter.
+    """
+
+    __slots__ = (
+        "_version",
+        "_encoding",
+        "_sort_keys",
+        "_indent",
+        "_allow_unicode",
+        "_serializer",
+        "_lock",
+    )
 
 
 # ==========================================================
 # Part 2. Constructor
 # ==========================================================
 
-class JSONExporter:
-    """
-    Thread-safe JSON exporter for the SciOS Metrics subsystem.
-    """
-
-    __slots__ = (
-        "_serializer",
-        "_version",
-        "_encoding",
-        "_indent",
-        "_ensure_ascii",
-        "_lock",
-    )
-
-    VERSION: Final[str] = DEFAULT_VERSION
-
     def __init__(
         self,
         *,
-        serializer: MetricSerializer | None = None,
         version: str = DEFAULT_VERSION,
         encoding: str = DEFAULT_ENCODING,
+        sort_keys: bool = DEFAULT_SORT_KEYS,
         indent: int = DEFAULT_INDENT,
-        ensure_ascii: bool = DEFAULT_ENSURE_ASCII,
+        allow_unicode: bool = DEFAULT_ALLOW_UNICODE,
+        serializer: MetricSerializer | None = None,
     ) -> None:
+        """
+        Create YAML exporter.
+        """
+
+        self._version = version
+        self._encoding = encoding
+        self._sort_keys = sort_keys
+        self._indent = indent
+        self._allow_unicode = allow_unicode
 
         self._serializer = (
             serializer
@@ -67,133 +85,120 @@ class JSONExporter:
             else MetricSerializer()
         )
 
-        self._version = version
-        self._encoding = encoding
-        self._indent = indent
-        self._ensure_ascii = ensure_ascii
-
         self._lock = RLock()
+
 
 # ==========================================================
 # Part 3. Properties
 # ==========================================================
 
     @property
-    def serializer(self) -> MetricSerializer:
-        """
-        Underlying serializer.
-        """
-        return self._serializer
-
-    @property
     def version(self) -> str:
-        """
-        Exporter version.
-        """
+        """Exporter version."""
         return self._version
 
     @property
     def encoding(self) -> str:
-        """
-        File encoding.
-        """
+        """Output encoding."""
         return self._encoding
 
     @property
     def indent(self) -> int:
-        """
-        JSON indentation.
-        """
+        """YAML indentation."""
         return self._indent
 
     @property
-    def ensure_ascii(self) -> bool:
-        """
-        JSON ensure_ascii flag.
-        """
-        return self._ensure_ascii
+    def sort_keys(self) -> bool:
+        """Sort YAML keys."""
+        return self._sort_keys
+
+    @property
+    def allow_unicode(self) -> bool:
+        """Allow unicode output."""
+        return self._allow_unicode
+
+    @property
+    def serializer(self) -> MetricSerializer:
+        """Metric serializer."""
+        return self._serializer
 
     @property
     def lock(self) -> RLock:
-        """
-        Internal synchronization lock.
-        """
+        """Internal synchronization lock."""
         return self._lock
 
-
 # ==========================================================
-# Part 4. Export Helpers
+# Part 4. Internal Helpers
 # ==========================================================
 
     def _metadata(self) -> dict[str, Any]:
-        """
-        Export metadata.
-        """
-
         return {
             "exporter": self.__class__.__name__,
             "version": self._version,
+            "encoding": self._encoding,
+            "sort_keys": self._sort_keys,
+            "indent": self._indent,
+            "allow_unicode": self._allow_unicode,
         }
 
     def _normalize(
         self,
-        obj: Serializable,
+        obj: Any,
     ) -> dict[str, Any]:
         """
-        Normalize an object into a plain dictionary.
+        Normalize object into plain dictionary.
         """
 
         if isinstance(obj, dict):
             return dict(obj)
 
         if hasattr(obj, "to_dict"):
-            data = obj.to_dict()
-            if isinstance(data, dict):
-                return dict(data)
+            return dict(obj.to_dict())
 
         if hasattr(obj, "snapshot"):
-            data = obj.snapshot()
-            if isinstance(data, dict):
-                return dict(data)
+            snap = obj.snapshot()
+            if isinstance(snap, dict):
+                return dict(snap)
 
         data = self._serializer.to_dict(obj)
 
         if isinstance(data, dict):
-
-            payload = data.get("data")
-
-            if isinstance(payload, dict):
-                return dict(payload)
-
+            if "data" in data and isinstance(data["data"], dict):
+                return dict(data["data"])
             return dict(data)
 
+        return {"value": data}
+
+    def _yaml_kwargs(self) -> dict[str, Any]:
+        """
+        Keyword arguments passed to yaml.safe_dump().
+        """
+
         return {
-            "value": data,
+            "sort_keys": self._sort_keys,
+            "indent": self._indent,
+            "allow_unicode": self._allow_unicode,
         }
 
     def _export_payload(
         self,
-        obj: Serializable,
+        obj: Any,
     ) -> dict[str, Any]:
-        """
-        Build payload for a single object.
-        """
 
         return {
-            **self._metadata(),
+            "exporter": self.__class__.__name__,
+            "version": self._version,
             "data": self._normalize(obj),
         }
 
     def _export_many_payload(
         self,
-        objects: list[Serializable] | tuple[Serializable, ...],
+        objects: list[Any] | tuple[Any, ...],
     ) -> dict[str, Any]:
-        """
-        Build payload for multiple objects.
-        """
 
         return {
-            **self._metadata(),
+            "exporter": self.__class__.__name__,
+            "version": self._version,
             "count": len(objects),
             "items": [
                 self._normalize(obj)
@@ -201,17 +206,6 @@ class JSONExporter:
             ],
         }
 
-    def _json_kwargs(self) -> dict[str, Any]:
-        """
-        Shared json.dumps() keyword arguments.
-        """
-
-        return {
-            "indent": self._indent,
-            "ensure_ascii": self._ensure_ascii,
-            "sort_keys": True,
-            "default": str,
-        }
 
 # ==========================================================
 # Part 5. Export API
@@ -222,49 +216,49 @@ class JSONExporter:
         obj: Serializable,
     ) -> dict[str, Any]:
         """
-        Export a single object as normalized dictionary.
+        Export one object as structured payload.
         """
 
         with self._lock:
-            return self._normalize(obj)
+            return self._export_payload(obj)
 
     def export_many(
         self,
         objects: list[Serializable] | tuple[Serializable, ...],
     ) -> dict[str, Any]:
         """
-        Export multiple objects as payload.
+        Export multiple objects as structured payload.
         """
 
         with self._lock:
             return self._export_many_payload(objects)
 
-    def export_json(
+    def export_yaml(
         self,
         obj: Serializable,
     ) -> str:
         """
-        Export a single object to JSON.
+        Export one object as YAML.
         """
 
         with self._lock:
-            return json.dumps(
-                self.export(obj),
-                **self._json_kwargs(),
+            return yaml.safe_dump(
+                self._export_payload(obj),
+                **self._yaml_kwargs(),
             )
 
-    def export_many_json(
+    def export_many_yaml(
         self,
         objects: list[Serializable] | tuple[Serializable, ...],
     ) -> str:
         """
-        Export multiple objects to JSON.
+        Export multiple objects as YAML.
         """
 
         with self._lock:
-            return json.dumps(
+            return yaml.safe_dump(
                 self._export_many_payload(objects),
-                **self._json_kwargs(),
+                **self._yaml_kwargs(),
             )
 
 
@@ -278,7 +272,7 @@ class JSONExporter:
         path: str | Path,
     ) -> Path:
         """
-        Export payload to JSON file.
+        Export one object to a YAML file.
         """
 
         with self._lock:
@@ -286,10 +280,7 @@ class JSONExporter:
             file_path = Path(path)
 
             file_path.write_text(
-                json.dumps(
-                    self._export_payload(obj),
-                    **self._json_kwargs(),
-                ),
+                self.export_yaml(obj),
                 encoding=self._encoding,
             )
 
@@ -301,7 +292,7 @@ class JSONExporter:
         path: str | Path,
     ) -> Path:
         """
-        Export multiple payloads to JSON file.
+        Export multiple objects to a YAML file.
         """
 
         with self._lock:
@@ -309,10 +300,7 @@ class JSONExporter:
             file_path = Path(path)
 
             file_path.write_text(
-                json.dumps(
-                    self._export_many_payload(objects),
-                    **self._json_kwargs(),
-                ),
+                self.export_many_yaml(objects),
                 encoding=self._encoding,
             )
 
@@ -323,17 +311,20 @@ class JSONExporter:
         path: str | Path,
     ) -> dict[str, Any]:
         """
-        Load exported JSON payload.
+        Load exported YAML file.
         """
 
         with self._lock:
 
-            return json.loads(
-                Path(path).read_text(
+            file_path = Path(path)
+
+            data = yaml.safe_load(
+                file_path.read_text(
                     encoding=self._encoding,
                 )
             )
 
+            return {} if data is None else dict(data)
 
 # ==========================================================
 # Part 7. Validation
@@ -344,14 +335,15 @@ class JSONExporter:
         obj: Serializable,
     ) -> bool:
         """
-        Validate exportability.
+        Validate whether an object can be exported.
         """
 
         try:
-            self._normalize(obj)
-            return True
+            self._export_payload(obj)
         except Exception:
             return False
+
+        return True
 
     def is_valid(
         self,
@@ -369,83 +361,111 @@ class JSONExporter:
 # ==========================================================
 
     def __repr__(self) -> str:
+
         return (
             f"{self.__class__.__name__}("
-            f"version={self._version!r}, "
-            f"encoding={self._encoding!r})"
+            f"version={self.version!r}, "
+            f"encoding={self.encoding!r}, "
+            f"indent={self.indent!r}, "
+            f"sort_keys={self.sort_keys!r}, "
+            f"allow_unicode={self.allow_unicode!r}"
+            f")"
         )
 
     def __str__(self) -> str:
+
         return (
             f"{self.__class__.__name__}"
-            f"(version={self._version})"
+            f"(v{self.version})"
         )
 
     def __len__(self) -> int:
-        return 1
+
+        return 5
 
     def __bool__(self) -> bool:
+
         return True
 
     def __copy__(self):
+
         return self.__class__(
-            serializer=self._serializer,
-            version=self._version,
-            encoding=self._encoding,
-            indent=self._indent,
-            ensure_ascii=self._ensure_ascii,
+            version=self.version,
+            encoding=self.encoding,
+            indent=self.indent,
+            sort_keys=self.sort_keys,
+            allow_unicode=self.allow_unicode,
+            serializer=self.serializer,
         )
 
-    def __deepcopy__(self, memo):
-        return self.__class__(
-            serializer=MetricSerializer(),
-            version=self._version,
-            encoding=self._encoding,
-            indent=self._indent,
-            ensure_ascii=self._ensure_ascii,
+    def __deepcopy__(
+        self,
+        memo: dict[int, Any],
+    ):
+
+        copied = self.__class__(
+            version=copy.deepcopy(self.version, memo),
+            encoding=copy.deepcopy(self.encoding, memo),
+            indent=copy.deepcopy(self.indent, memo),
+            sort_keys=copy.deepcopy(self.sort_keys, memo),
+            allow_unicode=copy.deepcopy(self.allow_unicode, memo),
+            serializer=copy.deepcopy(self.serializer, memo),
         )
+
+        memo[id(self)] = copied
+
+        return copied
 
     def __eq__(
         self,
         other: object,
     ) -> bool:
+
+        if not isinstance(other, YAMLExporter):
+            return NotImplemented
+
         return (
-            isinstance(other, JSONExporter)
-            and self.version == other.version
+            self.version == other.version
             and self.encoding == other.encoding
             and self.indent == other.indent
-            and self.ensure_ascii == other.ensure_ascii
+            and self.sort_keys == other.sort_keys
+            and self.allow_unicode == other.allow_unicode
         )
 
     def __hash__(self) -> int:
+
         return hash(
             (
-                self.__class__,
                 self.version,
                 self.encoding,
                 self.indent,
-                self.ensure_ascii,
+                self.sort_keys,
+                self.allow_unicode,
             )
         )
 
     def __getstate__(self) -> dict[str, Any]:
+
         return {
-            "_serializer": self._serializer,
-            "_version": self._version,
-            "_encoding": self._encoding,
-            "_indent": self._indent,
-            "_ensure_ascii": self._ensure_ascii,
+            "version": self.version,
+            "encoding": self.encoding,
+            "indent": self.indent,
+            "sort_keys": self.sort_keys,
+            "allow_unicode": self.allow_unicode,
+            "serializer": self.serializer,
         }
 
     def __setstate__(
         self,
         state: dict[str, Any],
     ) -> None:
-        self._serializer = state["_serializer"]
-        self._version = state["_version"]
-        self._encoding = state["_encoding"]
-        self._indent = state["_indent"]
-        self._ensure_ascii = state["_ensure_ascii"]
+
+        self._version = state["version"]
+        self._encoding = state["encoding"]
+        self._indent = state["indent"]
+        self._sort_keys = state["sort_keys"]
+        self._allow_unicode = state["allow_unicode"]
+        self._serializer = state["serializer"]
         self._lock = RLock()
 
 
@@ -456,8 +476,9 @@ class JSONExporter:
 __all__ = [
     "DEFAULT_VERSION",
     "DEFAULT_ENCODING",
+    "DEFAULT_SORT_KEYS",
     "DEFAULT_INDENT",
-    "DEFAULT_ENSURE_ASCII",
+    "DEFAULT_ALLOW_UNICODE",
     "Serializable",
-    "JSONExporter",
-]                    
+    "YAMLExporter",
+]            

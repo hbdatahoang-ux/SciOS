@@ -5,46 +5,48 @@
 from __future__ import annotations
 
 import copy
-import json
+import threading
 
 from pathlib import Path
-from threading import RLock
 from typing import Any, Final, TypeAlias
 
-from scios.runtime.observability.metrics.core.metrics.serialization.metric_serializer import (
-    MetricSerializer,
-)
+import msgpack
+
+from ..serialization.metric_serializer import MetricSerializer
 
 
 Serializable: TypeAlias = Any
 
 
 DEFAULT_VERSION: Final[str] = "1.0"
+
 DEFAULT_ENCODING: Final[str] = "utf-8"
-DEFAULT_SERVICE_NAME: Final[str] = "SciOS"
-DEFAULT_SERVICE_NAMESPACE: Final[str] = "scios.metrics"
+
+DEFAULT_USE_BIN_TYPE: Final[bool] = True
+
+DEFAULT_STRICT_TYPES: Final[bool] = False
 
 
 __all__ = [
     "DEFAULT_VERSION",
     "DEFAULT_ENCODING",
-    "DEFAULT_SERVICE_NAME",
-    "DEFAULT_SERVICE_NAMESPACE",
+    "DEFAULT_USE_BIN_TYPE",
+    "DEFAULT_STRICT_TYPES",
     "Serializable",
-    "OpenTelemetryExporter",
+    "MsgPackExporter",
 ]
 
 
-class OpenTelemetryExporter:
+class MsgPackExporter:
     """
-    OpenTelemetry-compatible exporter.
+    MessagePack metric exporter.
     """
 
     __slots__ = (
         "_version",
         "_encoding",
-        "_service_name",
-        "_service_namespace",
+        "_use_bin_type",
+        "_strict_types",
         "_serializer",
         "_lock",
     )
@@ -58,18 +60,18 @@ class OpenTelemetryExporter:
         *,
         version: str = DEFAULT_VERSION,
         encoding: str = DEFAULT_ENCODING,
-        service_name: str = DEFAULT_SERVICE_NAME,
-        service_namespace: str = DEFAULT_SERVICE_NAMESPACE,
+        use_bin_type: bool = DEFAULT_USE_BIN_TYPE,
+        strict_types: bool = DEFAULT_STRICT_TYPES,
         serializer: MetricSerializer | None = None,
     ) -> None:
         """
-        Create OpenTelemetry exporter.
+        Create MessagePack exporter.
         """
 
         self._version = version
         self._encoding = encoding
-        self._service_name = service_name
-        self._service_namespace = service_namespace
+        self._use_bin_type = use_bin_type
+        self._strict_types = strict_types
 
         self._serializer = (
             serializer
@@ -77,7 +79,7 @@ class OpenTelemetryExporter:
             else MetricSerializer()
         )
 
-        self._lock = RLock()
+        self._lock = threading.RLock()
 
     # ==========================================================
     # Part 3. Properties
@@ -90,26 +92,26 @@ class OpenTelemetryExporter:
 
     @property
     def encoding(self) -> str:
-        """Default encoding."""
+        """String encoding."""
         return self._encoding
 
     @property
-    def service_name(self) -> str:
-        """OpenTelemetry service name."""
-        return self._service_name
+    def use_bin_type(self) -> bool:
+        """Use MessagePack binary type."""
+        return self._use_bin_type
 
     @property
-    def service_namespace(self) -> str:
-        """OpenTelemetry service namespace."""
-        return self._service_namespace
+    def strict_types(self) -> bool:
+        """Strict type serialization."""
+        return self._strict_types
 
     @property
     def serializer(self) -> MetricSerializer:
-        """Underlying metric serializer."""
+        """Metric serializer."""
         return self._serializer
 
     @property
-    def lock(self) -> RLock:
+    def lock(self) -> threading.RLock:
         """Internal synchronization lock."""
         return self._lock
 
@@ -122,8 +124,8 @@ class OpenTelemetryExporter:
             "exporter": self.__class__.__name__,
             "version": self._version,
             "encoding": self._encoding,
-            "service_name": self._service_name,
-            "service_namespace": self._service_namespace,
+            "use_bin_type": self._use_bin_type,
+            "strict_types": self._strict_types,
         }
 
     def _normalize(
@@ -154,14 +156,10 @@ class OpenTelemetryExporter:
 
         return {"value": data}
 
-    def _resource_attributes(self) -> dict[str, Any]:
-        """
-        OpenTelemetry resource attributes.
-        """
-
+    def _packer_kwargs(self) -> dict[str, Any]:
         return {
-            "service.name": self._service_name,
-            "service.namespace": self._service_namespace,
+            "use_bin_type": self._use_bin_type,
+            "strict_types": self._strict_types,
         }
 
     def _export_payload(
@@ -172,15 +170,9 @@ class OpenTelemetryExporter:
         metric = self._normalize(obj)
 
         return {
-            "resource": self._resource_attributes(),
-            "scopeMetrics": [
-                {
-                    "metrics": [
-                        metric,
-                    ]
-                }
-            ],
-            "metadata": self._metadata(),
+            "exporter": self.__class__.__name__,
+            "version": self._version,
+            "data": metric,
         }
 
     def _export_many_payload(
@@ -188,20 +180,16 @@ class OpenTelemetryExporter:
         objects: list[Any] | tuple[Any, ...],
     ) -> dict[str, Any]:
 
-        metrics = [
+        items = [
             self._normalize(obj)
             for obj in objects
         ]
 
         return {
-            "resource": self._resource_attributes(),
-            "scopeMetrics": [
-                {
-                    "metrics": metrics,
-                }
-            ],
-            "metadata": self._metadata(),
-            "count": len(metrics),
+            "exporter": self.__class__.__name__,
+            "version": self._version,
+            "count": len(items),
+            "items": items,
         }
 
     # ==========================================================
@@ -224,41 +212,36 @@ class OpenTelemetryExporter:
         with self._lock:
             return self._export_many_payload(objects)
 
-    def export_otlp(
+    def export_msgpack(
         self,
         obj: Serializable,
     ) -> bytes:
-        """
-        Export one object as OTLP-compatible payload.
-        """
 
         with self._lock:
 
-            payload = self._export_payload(obj)
+            metric = self._normalize(obj)
 
-            return json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-            ).encode(self._encoding)
+            return msgpack.packb(
+                metric,
+                **self._packer_kwargs(),
+            )
 
-    def export_many_otlp(
+    def export_many_msgpack(
         self,
         objects: list[Serializable] | tuple[Serializable, ...],
     ) -> bytes:
-        """
-        Export many objects as OTLP-compatible payload.
-        """
 
         with self._lock:
 
-            payload = self._export_many_payload(objects)
+            metrics = [
+                self._normalize(obj)
+                for obj in objects
+            ]
 
-            return json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-            ).encode(self._encoding)
+            return msgpack.packb(
+                metrics,
+                **self._packer_kwargs(),
+            )
 
     # ==========================================================
     # Part 6. File Export
@@ -275,7 +258,7 @@ class OpenTelemetryExporter:
             file_path = Path(path)
 
             file_path.write_bytes(
-                self.export_otlp(obj),
+                self.export_msgpack(obj)
             )
 
             return file_path
@@ -291,7 +274,7 @@ class OpenTelemetryExporter:
             file_path = Path(path)
 
             file_path.write_bytes(
-                self.export_many_otlp(objects),
+                self.export_many_msgpack(objects)
             )
 
             return file_path
@@ -300,6 +283,9 @@ class OpenTelemetryExporter:
         self,
         path: str | Path,
     ) -> bytes:
+        """
+        Load raw MsgPack bytes.
+        """
 
         with self._lock:
 
@@ -345,8 +331,8 @@ class OpenTelemetryExporter:
             f"{self.__class__.__name__}("
             f"version={self._version!r}, "
             f"encoding={self._encoding!r}, "
-            f"service_name={self._service_name!r}, "
-            f"service_namespace={self._service_namespace!r}"
+            f"use_bin_type={self._use_bin_type!r}, "
+            f"strict_types={self._strict_types!r}"
             f")"
         )
 
@@ -370,8 +356,8 @@ class OpenTelemetryExporter:
         return self.__class__(
             version=self._version,
             encoding=self._encoding,
-            service_name=self._service_name,
-            service_namespace=self._service_namespace,
+            use_bin_type=self._use_bin_type,
+            strict_types=self._strict_types,
             serializer=self._serializer,
         )
 
@@ -381,26 +367,11 @@ class OpenTelemetryExporter:
     ):
 
         copied = self.__class__(
-            version=copy.deepcopy(
-                self._version,
-                memo,
-            ),
-            encoding=copy.deepcopy(
-                self._encoding,
-                memo,
-            ),
-            service_name=copy.deepcopy(
-                self._service_name,
-                memo,
-            ),
-            service_namespace=copy.deepcopy(
-                self._service_namespace,
-                memo,
-            ),
-            serializer=copy.deepcopy(
-                self._serializer,
-                memo,
-            ),
+            version=copy.deepcopy(self._version, memo),
+            encoding=copy.deepcopy(self._encoding, memo),
+            use_bin_type=copy.deepcopy(self._use_bin_type, memo),
+            strict_types=copy.deepcopy(self._strict_types, memo),
+            serializer=copy.deepcopy(self._serializer, memo),
         )
 
         memo[id(self)] = copied
@@ -414,16 +385,15 @@ class OpenTelemetryExporter:
 
         if not isinstance(
             other,
-            OpenTelemetryExporter,
+            MsgPackExporter,
         ):
             return NotImplemented
 
         return (
             self._version == other._version
             and self._encoding == other._encoding
-            and self._service_name == other._service_name
-            and self._service_namespace
-            == other._service_namespace
+            and self._use_bin_type == other._use_bin_type
+            and self._strict_types == other._strict_types
         )
 
     def __hash__(self) -> int:
@@ -432,8 +402,8 @@ class OpenTelemetryExporter:
             (
                 self._version,
                 self._encoding,
-                self._service_name,
-                self._service_namespace,
+                self._use_bin_type,
+                self._strict_types,
             )
         )
 
@@ -442,8 +412,8 @@ class OpenTelemetryExporter:
         return {
             "version": self._version,
             "encoding": self._encoding,
-            "service_name": self._service_name,
-            "service_namespace": self._service_namespace,
+            "use_bin_type": self._use_bin_type,
+            "strict_types": self._strict_types,
             "serializer": self._serializer,
         }
 
@@ -454,10 +424,10 @@ class OpenTelemetryExporter:
 
         self._version = state["version"]
         self._encoding = state["encoding"]
-        self._service_name = state["service_name"]
-        self._service_namespace = state["service_namespace"]
+        self._use_bin_type = state["use_bin_type"]
+        self._strict_types = state["strict_types"]
         self._serializer = state["serializer"]
-        self._lock = RLock()
+        self._lock = threading.RLock()
 
 
 # ==========================================================
@@ -467,8 +437,8 @@ class OpenTelemetryExporter:
 __all__ = [
     "DEFAULT_VERSION",
     "DEFAULT_ENCODING",
-    "DEFAULT_SERVICE_NAME",
-    "DEFAULT_SERVICE_NAMESPACE",
+    "DEFAULT_USE_BIN_TYPE",
+    "DEFAULT_STRICT_TYPES",
     "Serializable",
-    "OpenTelemetryExporter",
+    "MsgPackExporter",
 ]                    

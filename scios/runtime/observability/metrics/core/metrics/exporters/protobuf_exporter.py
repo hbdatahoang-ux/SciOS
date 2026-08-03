@@ -21,30 +21,30 @@ Serializable: TypeAlias = Any
 
 DEFAULT_VERSION: Final[str] = "1.0"
 DEFAULT_ENCODING: Final[str] = "utf-8"
-DEFAULT_SERVICE_NAME: Final[str] = "SciOS"
-DEFAULT_SERVICE_NAMESPACE: Final[str] = "scios.metrics"
+DEFAULT_DETERMINISTIC: Final[bool] = True
+DEFAULT_PRESERVE_PROTO_FIELD_NAME: Final[bool] = True
 
 
 __all__ = [
     "DEFAULT_VERSION",
     "DEFAULT_ENCODING",
-    "DEFAULT_SERVICE_NAME",
-    "DEFAULT_SERVICE_NAMESPACE",
+    "DEFAULT_DETERMINISTIC",
+    "DEFAULT_PRESERVE_PROTO_FIELD_NAME",
     "Serializable",
-    "OpenTelemetryExporter",
+    "ProtobufExporter",
 ]
 
 
-class OpenTelemetryExporter:
+class ProtobufExporter:
     """
-    OpenTelemetry-compatible exporter.
+    Google Protocol Buffers exporter.
     """
 
     __slots__ = (
         "_version",
         "_encoding",
-        "_service_name",
-        "_service_namespace",
+        "_deterministic",
+        "_preserve_proto_field_name",
         "_serializer",
         "_lock",
     )
@@ -58,18 +58,18 @@ class OpenTelemetryExporter:
         *,
         version: str = DEFAULT_VERSION,
         encoding: str = DEFAULT_ENCODING,
-        service_name: str = DEFAULT_SERVICE_NAME,
-        service_namespace: str = DEFAULT_SERVICE_NAMESPACE,
+        deterministic: bool = DEFAULT_DETERMINISTIC,
+        preserve_proto_field_name: bool = DEFAULT_PRESERVE_PROTO_FIELD_NAME,
         serializer: MetricSerializer | None = None,
     ) -> None:
         """
-        Create OpenTelemetry exporter.
+        Create protobuf exporter.
         """
 
         self._version = version
         self._encoding = encoding
-        self._service_name = service_name
-        self._service_namespace = service_namespace
+        self._deterministic = deterministic
+        self._preserve_proto_field_name = preserve_proto_field_name
 
         self._serializer = (
             serializer
@@ -90,18 +90,18 @@ class OpenTelemetryExporter:
 
     @property
     def encoding(self) -> str:
-        """Default encoding."""
+        """Default text encoding."""
         return self._encoding
 
     @property
-    def service_name(self) -> str:
-        """OpenTelemetry service name."""
-        return self._service_name
+    def deterministic(self) -> bool:
+        """Deterministic serialization flag."""
+        return self._deterministic
 
     @property
-    def service_namespace(self) -> str:
-        """OpenTelemetry service namespace."""
-        return self._service_namespace
+    def preserve_proto_field_name(self) -> bool:
+        """Preserve original protobuf field names."""
+        return self._preserve_proto_field_name
 
     @property
     def serializer(self) -> MetricSerializer:
@@ -113,22 +113,26 @@ class OpenTelemetryExporter:
         """Internal synchronization lock."""
         return self._lock
 
-    # ==========================================================
-    # Part 4. Internal Helpers
-    # ==========================================================
+# ==========================================================
+# Part 4. Internal Helpers
+# ==========================================================
 
     def _metadata(self) -> dict[str, Any]:
+        """
+        Exporter metadata.
+        """
+
         return {
             "exporter": self.__class__.__name__,
             "version": self._version,
             "encoding": self._encoding,
-            "service_name": self._service_name,
-            "service_namespace": self._service_namespace,
+            "deterministic": self._deterministic,
+            "preserve_proto_field_name": self._preserve_proto_field_name,
         }
 
     def _normalize(
         self,
-        obj: Any,
+        obj: Serializable,
     ) -> dict[str, Any]:
         """
         Normalize object into plain dictionary.
@@ -141,9 +145,9 @@ class OpenTelemetryExporter:
             return dict(obj.to_dict())
 
         if hasattr(obj, "snapshot"):
-            snap = obj.snapshot()
-            if isinstance(snap, dict):
-                return dict(snap)
+            snapshot = obj.snapshot()
+            if isinstance(snapshot, dict):
+                return dict(snapshot)
 
         data = self._serializer.to_dict(obj)
 
@@ -152,146 +156,163 @@ class OpenTelemetryExporter:
                 return dict(data["data"])
             return dict(data)
 
-        return {"value": data}
+        return {
+            "value": data,
+        }
 
-    def _resource_attributes(self) -> dict[str, Any]:
+    def _dumps_kwargs(self) -> dict[str, Any]:
         """
-        OpenTelemetry resource attributes.
+        Serialization options.
         """
 
         return {
-            "service.name": self._service_name,
-            "service.namespace": self._service_namespace,
+            "deterministic": self._deterministic,
+            "preserve_proto_field_name": self._preserve_proto_field_name,
         }
 
     def _export_payload(
         self,
-        obj: Any,
+        obj: Serializable,
     ) -> dict[str, Any]:
-
-        metric = self._normalize(obj)
+        """
+        Export single payload.
+        """
 
         return {
-            "resource": self._resource_attributes(),
-            "scopeMetrics": [
-                {
-                    "metrics": [
-                        metric,
-                    ]
-                }
-            ],
-            "metadata": self._metadata(),
+            "exporter": self.__class__.__name__,
+            "version": self._version,
+            "data": self._normalize(obj),
         }
 
     def _export_many_payload(
         self,
-        objects: list[Any] | tuple[Any, ...],
+        objects: list[Serializable]
+        | tuple[Serializable, ...],
     ) -> dict[str, Any]:
+        """
+        Export multiple payloads.
+        """
 
-        metrics = [
+        items = [
             self._normalize(obj)
             for obj in objects
         ]
 
         return {
-            "resource": self._resource_attributes(),
-            "scopeMetrics": [
-                {
-                    "metrics": metrics,
-                }
-            ],
-            "metadata": self._metadata(),
-            "count": len(metrics),
+            "exporter": self.__class__.__name__,
+            "version": self._version,
+            "count": len(items),
+            "items": items,
         }
 
-    # ==========================================================
-    # Part 5. Export API
-    # ==========================================================
+
+# ==========================================================
+# Part 5. Export API
+# ==========================================================
 
     def export(
         self,
         obj: Serializable,
     ) -> dict[str, Any]:
+        """
+        Export single object.
+        """
 
         with self._lock:
             return self._export_payload(obj)
 
     def export_many(
         self,
-        objects: list[Serializable] | tuple[Serializable, ...],
+        objects: list[Serializable]
+        | tuple[Serializable, ...],
     ) -> dict[str, Any]:
+        """
+        Export multiple objects.
+        """
 
         with self._lock:
             return self._export_many_payload(objects)
 
-    def export_otlp(
+    def export_protobuf(
         self,
         obj: Serializable,
     ) -> bytes:
         """
-        Export one object as OTLP-compatible payload.
+        Export one object as protobuf-like binary.
         """
 
         with self._lock:
 
-            payload = self._export_payload(obj)
+            payload = self._normalize(obj)
 
             return json.dumps(
                 payload,
                 ensure_ascii=False,
-                sort_keys=True,
+                sort_keys=self._deterministic,
             ).encode(self._encoding)
 
-    def export_many_otlp(
+    def export_many_protobuf(
         self,
-        objects: list[Serializable] | tuple[Serializable, ...],
+        objects: list[Serializable]
+        | tuple[Serializable, ...],
     ) -> bytes:
         """
-        Export many objects as OTLP-compatible payload.
+        Export multiple objects as protobuf-like binary.
         """
 
         with self._lock:
 
-            payload = self._export_many_payload(objects)
+            payload = [
+                self._normalize(obj)
+                for obj in objects
+            ]
 
             return json.dumps(
                 payload,
                 ensure_ascii=False,
-                sort_keys=True,
+                sort_keys=self._deterministic,
             ).encode(self._encoding)
 
-    # ==========================================================
-    # Part 6. File Export
-    # ==========================================================
+
+# ==========================================================
+# Part 6. File Export
+# ==========================================================
 
     def export_file(
         self,
         obj: Serializable,
         path: str | Path,
     ) -> Path:
+        """
+        Export one object to file.
+        """
 
         with self._lock:
 
             file_path = Path(path)
 
             file_path.write_bytes(
-                self.export_otlp(obj),
+                self.export_protobuf(obj)
             )
 
             return file_path
 
     def export_many_file(
         self,
-        objects: list[Serializable] | tuple[Serializable, ...],
+        objects: list[Serializable]
+        | tuple[Serializable, ...],
         path: str | Path,
     ) -> Path:
+        """
+        Export many objects to file.
+        """
 
         with self._lock:
 
             file_path = Path(path)
 
             file_path.write_bytes(
-                self.export_many_otlp(objects),
+                self.export_many_protobuf(objects)
             )
 
             return file_path
@@ -300,23 +321,24 @@ class OpenTelemetryExporter:
         self,
         path: str | Path,
     ) -> bytes:
+        """
+        Load raw protobuf bytes.
+        """
 
         with self._lock:
 
-            file_path = Path(path)
+            return Path(path).read_bytes()
 
-            return file_path.read_bytes()
-
-    # ==========================================================
-    # Part 7. Validation
-    # ==========================================================
+# ==========================================================
+# Part 7. Validation
+# ==========================================================
 
     def validate(
         self,
         obj: Serializable,
     ) -> bool:
         """
-        Validate whether an object can be exported.
+        Validate exportability.
         """
 
         try:
@@ -335,9 +357,10 @@ class OpenTelemetryExporter:
 
         return self.validate(obj)
 
-    # ==========================================================
-    # Part 8. Python Protocols
-    # ==========================================================
+
+# ==========================================================
+# Part 8. Python Protocols
+# ==========================================================
 
     def __repr__(self) -> str:
 
@@ -345,8 +368,9 @@ class OpenTelemetryExporter:
             f"{self.__class__.__name__}("
             f"version={self._version!r}, "
             f"encoding={self._encoding!r}, "
-            f"service_name={self._service_name!r}, "
-            f"service_namespace={self._service_namespace!r}"
+            f"deterministic={self._deterministic!r}, "
+            f"preserve_proto_field_name="
+            f"{self._preserve_proto_field_name!r}"
             f")"
         )
 
@@ -370,8 +394,10 @@ class OpenTelemetryExporter:
         return self.__class__(
             version=self._version,
             encoding=self._encoding,
-            service_name=self._service_name,
-            service_namespace=self._service_namespace,
+            deterministic=self._deterministic,
+            preserve_proto_field_name=(
+                self._preserve_proto_field_name
+            ),
             serializer=self._serializer,
         )
 
@@ -389,12 +415,12 @@ class OpenTelemetryExporter:
                 self._encoding,
                 memo,
             ),
-            service_name=copy.deepcopy(
-                self._service_name,
+            deterministic=copy.deepcopy(
+                self._deterministic,
                 memo,
             ),
-            service_namespace=copy.deepcopy(
-                self._service_namespace,
+            preserve_proto_field_name=copy.deepcopy(
+                self._preserve_proto_field_name,
                 memo,
             ),
             serializer=copy.deepcopy(
@@ -414,16 +440,17 @@ class OpenTelemetryExporter:
 
         if not isinstance(
             other,
-            OpenTelemetryExporter,
+            ProtobufExporter,
         ):
             return NotImplemented
 
         return (
             self._version == other._version
             and self._encoding == other._encoding
-            and self._service_name == other._service_name
-            and self._service_namespace
-            == other._service_namespace
+            and self._deterministic
+            == other._deterministic
+            and self._preserve_proto_field_name
+            == other._preserve_proto_field_name
         )
 
     def __hash__(self) -> int:
@@ -432,8 +459,8 @@ class OpenTelemetryExporter:
             (
                 self._version,
                 self._encoding,
-                self._service_name,
-                self._service_namespace,
+                self._deterministic,
+                self._preserve_proto_field_name,
             )
         )
 
@@ -442,20 +469,18 @@ class OpenTelemetryExporter:
         return {
             "version": self._version,
             "encoding": self._encoding,
-            "service_name": self._service_name,
-            "service_namespace": self._service_namespace,
+            "deterministic": self._deterministic,
+            "preserve_proto_field_name": (
+                self._preserve_proto_field_name
+            ),
             "serializer": self._serializer,
         }
 
-    def __setstate__(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
+    def __setstate__(self, state: dict[str, Any]) -> None:
         self._version = state["version"]
         self._encoding = state["encoding"]
-        self._service_name = state["service_name"]
-        self._service_namespace = state["service_namespace"]
+        self._deterministic = state["deterministic"]
+        self._preserve_proto_field_name = state["preserve_proto_field_name"]
         self._serializer = state["serializer"]
         self._lock = RLock()
 
@@ -467,8 +492,8 @@ class OpenTelemetryExporter:
 __all__ = [
     "DEFAULT_VERSION",
     "DEFAULT_ENCODING",
-    "DEFAULT_SERVICE_NAME",
-    "DEFAULT_SERVICE_NAMESPACE",
+    "DEFAULT_DETERMINISTIC",
+    "DEFAULT_PRESERVE_PROTO_FIELD_NAME",
     "Serializable",
-    "OpenTelemetryExporter",
+    "ProtobufExporter",
 ]                    
