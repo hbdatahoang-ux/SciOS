@@ -932,24 +932,6 @@ class Metric:
         """
         return self.clone()    
     
-    # ------------------------------------------------------
-    # UUID Compatibility
-    # ------------------------------------------------------
-
-    @property
-    def uuid(self) -> MetricID | None:
-        """
-        Backward-compatible alias for metric_id.
-        """
-        return self.metric_id
-
-
-    @uuid.setter
-    def uuid(self, value: MetricID | None) -> None:
-        """
-        Backward-compatible alias for metric_id.
-        """
-        self.metric_id = value
     # ==========================================================
     # Part 7. Hook API
     # ==========================================================

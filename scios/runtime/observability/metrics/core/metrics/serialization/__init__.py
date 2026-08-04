@@ -1,29 +1,7 @@
-"""
-SciOS Runtime Metrics Serialization
-===================================
+# serialization/__init__.py
 
-Serialization subsystem for the Metrics runtime.
-
-Exports
--------
-- MetricSerializer
-
-Responsibilities
-----------------
-- Dictionary serialization
-- JSON serialization
-- File persistence
-- Snapshot persistence
-- Object restoration
-- Validation utilities
-"""
-
-from __future__ import annotations
-
-from .metric_serializer import MetricSerializer
+from .encoder import *
 
 __all__ = [
-    "MetricSerializer",
+    "MetricEncoder",
 ]
-
-__version__ = "1.0.0"
