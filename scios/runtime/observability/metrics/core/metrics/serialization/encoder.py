@@ -459,15 +459,26 @@ class MetricEncoder:
     def overall_status(self) -> str:
         return "healthy"
 
+# ==============================================================================
+# Backward / Public API Alias
+# ==============================================================================
+
+Encoder = MetricEncoder
 
 # ==========================================================
 # Part 13. Public API
 # ==========================================================
 
 __all__ = [
+    "DEFAULT_INDENT",
+    "DEFAULT_SORT_KEYS",
+    "DEFAULT_ASCII",
+    "DEFAULT_ENCODING",
+    "DEFAULT_COMPACT",
     "Serializable",
     "EncodedValue",
     "EncoderOptions",
     "MetadataType",
-    "MetricEncoder",
-]                
+    "Encoder",
+    "MetricEncoder",   # alias tương thích ngược
+]               
