@@ -1,22 +1,68 @@
 """
-SciOS-NG Metrics Monitor
-========================
+SciOS Metrics Monitoring Subsystem.
 
-Public API for metric monitoring subsystem.
+Lightweight public package interface.
 
-Exports:
-- MetricMonitor
+Modules
+-------
+- status
+- health
+- alert
+- threshold
+- snapshot
+- manager
 """
 
 from __future__ import annotations
 
+from .status import (
+    MetricStatus,
+    MetricStatusInfo,
+)
 
-from .metric_monitor import MetricMonitor
-
+__version__ = "0.1.0"
 
 __all__ = [
-    "MetricMonitor",
+    "MetricStatus",
+    "MetricStatusInfo",
+    "MetricHealth",
+    "MetricAlert",
+    "MetricThreshold",
+    "MetricSnapshot",
+    "MetricManager",
 ]
 
 
-__version__ = "0.1.0"
+def __getattr__(name: str):
+    """
+    Lazy imports to avoid circular dependencies during test collection.
+    """
+
+    if name == "MetricHealth":
+        from .health import MetricHealth
+
+        return MetricHealth
+
+    if name == "MetricAlert":
+        from .alert import MetricAlert
+
+        return MetricAlert
+
+    if name == "MetricThreshold":
+        from .threshold import MetricThreshold
+
+        return MetricThreshold
+
+    if name == "MetricSnapshot":
+        from .snapshot import MetricSnapshot
+
+        return MetricSnapshot
+
+    if name == "MetricManager":
+        from .manager import MetricManager
+
+        return MetricManager
+
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}"
+    )
