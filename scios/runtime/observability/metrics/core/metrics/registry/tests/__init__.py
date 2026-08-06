@@ -1,0 +1,3 @@
+"""
+Metric registry tests package.
+"""
