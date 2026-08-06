@@ -1,2925 +1,769 @@
 """
-SciOS-NG Runtime Metrics Dispatcher Engine
+SciOS Runtime Dispatcher
+========================
 
-File:
-    scios/runtime/observability/metrics/runtime/dispatcher.py
+Runtime metric dispatcher.
 
-Description
------------
-Runtime dispatcher engine responsible for routing, handling,
-and coordinating Runtime Metrics events.
-
-SciOS-NG v0.2
+Python 3.11+
 """
+
+# ==============================================================================
+# Part 1. Header
+# ==============================================================================
 
 from __future__ import annotations
 
-from datetime import datetime
-from threading import RLock
+import copy
+import json
+import time
+
 from typing import Any
-from uuid import uuid4
+from typing import TypeAlias
+
+from .collector import RuntimeCollector
+from .aggregator import RuntimeAggregator
+
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
+
+DEFAULT_NAME: str = "dispatcher"
+
+DEFAULT_ENABLED: bool = True
+
+DEFAULT_QUEUE_LIMIT: int = 1024
+
+DEFAULT_DISPATCHED: int = 0
+
+DEFAULT_FAILED: int = 0
+
+DEFAULT_RETRIES: int = 3
+
+DEFAULT_BATCH_SIZE: int = 100
+
+DEFAULT_TIMEOUT: float = 5.0
 
 
-# ==================================================================
-# Part 1. Foundation
-# ==================================================================
+__all__ = [
+    "DEFAULT_NAME",
+    "DEFAULT_ENABLED",
+    "DEFAULT_QUEUE_LIMIT",
+    "DEFAULT_DISPATCHED",
+    "DEFAULT_FAILED",
+    "DEFAULT_RETRIES",
+    "DEFAULT_BATCH_SIZE",
+    "DEFAULT_TIMEOUT",
+    "DispatchItem",
+    "DispatchQueue",
+    "DispatchResult",
+    "DispatcherState",
+    "DispatcherStats",
+    "RuntimeDispatcher",
+]
 
 
-class MetricDispatcher:
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+DispatchItem: TypeAlias = dict[str, Any]
+
+DispatchQueue: TypeAlias = list[DispatchItem]
+
+DispatchResult: TypeAlias = dict[str, Any]
+
+DispatcherState: TypeAlias = dict[str, Any]
+
+DispatcherStats: TypeAlias = dict[str, Any]
+
+
+# ==============================================================================
+# Part 4. RuntimeDispatcher
+# ==============================================================================
+
+
+class RuntimeDispatcher:
     """
-    Runtime Metrics Dispatcher Engine.
+    Runtime dispatcher.
 
-    Responsibilities
-    ----------------
-    - Metric routing
-    - Event dispatching
-    - Handler orchestration
-    - Subscriber notification
-    - Runtime coordination
+    Maintains an in-memory dispatch queue between
+    RuntimeCollector -> RuntimeAggregator -> exporters.
     """
 
-    VERSION = "0.2.0"
+    __slots__ = (
+        "_name",
+        "_enabled",
+        "_collector",
+        "_aggregator",
+        "_queue",
+        "_dispatched",
+        "_failed",
+        "_created_at",
+        "_last_dispatch",
+        "_queue_limit",
+        "_batch_size",
+        "_timeout",
+        "_retries",
+    )
 
-
-    # ==============================================================
+    # ------------------------------------------------------------------
     # Constructor
-    # ==============================================================
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
-        name: str = "MetricDispatcher",
-        description: str = "",
+        *,
+        name: str = DEFAULT_NAME,
+        enabled: bool = DEFAULT_ENABLED,
+        collector: RuntimeCollector | None = None,
+        aggregator: RuntimeAggregator | None = None,
+        queue_limit: int = DEFAULT_QUEUE_LIMIT,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        timeout: float = DEFAULT_TIMEOUT,
+        retries: int = DEFAULT_RETRIES,
     ) -> None:
-        """
-        Initialize Runtime Metrics Dispatcher.
-        """
 
-        # ----------------------------------------------------------
-        # Identity
-        # ----------------------------------------------------------
+        self._name = str(name)
+        self._enabled = bool(enabled)
 
-        self._id: str = str(uuid4())
-
-        self._name: str = name
-
-        self._description: str = description
-
-
-        # ----------------------------------------------------------
-        # Routing
-        # ----------------------------------------------------------
-
-        # Ordered routing rules
-        self._routes: list[Any] = []
-
-        # Named route registry
-        self._route_registry: dict[str, Any] = {}
-
-        # Runtime handlers
-        self._handlers: dict[str, Any] = {}
-
-        # Event subscribers
-        self._subscribers: dict[str, list[Any]] = {}
-
-
-        # ----------------------------------------------------------
-        # Runtime State
-        # ----------------------------------------------------------
-
-        self._enabled: bool = True
-
-        self._frozen: bool = False
-
-        self._closed: bool = False
-
-
-        # ----------------------------------------------------------
-        # Synchronization
-        # ----------------------------------------------------------
-
-        self._lock = RLock()
-
-
-        # ----------------------------------------------------------
-        # Metadata
-        # ----------------------------------------------------------
-
-        now = datetime.utcnow()
-
-        self._created_at: datetime = now
-
-        self._updated_at: datetime = now
-
-        self._version: str = self.VERSION
-
-
-        # ----------------------------------------------------------
-        # Internal Components
-        # ----------------------------------------------------------
-
-        self._statistics: dict[str, Any] = {
-            "dispatch_count": 0,
-            "success_count": 0,
-            "failure_count": 0,
-            "route_count": 0,
-            "handler_count": 0,
-        }
-
-        self._hooks: dict[str, list[Any]] = {}
-
-        self._events: list[dict[str, Any]] = []
-
-        self._snapshot: dict[str, Any] | None = None
-
-        self._context: dict[str, Any] = {}
-
-
-    # ==============================================================
-    # Internal Utilities
-    # ==============================================================
-
-    def _touch(self) -> None:
-        """
-        Update runtime timestamp.
-        """
-        self._updated_at = datetime.utcnow()
-
-
-    def _ensure_writable(self) -> None:
-        """
-        Validate dispatcher state.
-        """
-
-        if self._closed:
-            raise RuntimeError(
-                "MetricDispatcher is closed."
-            )
-
-        if self._frozen:
-            raise RuntimeError(
-                "MetricDispatcher is frozen."
-            )
-
-        if not self._enabled:
-            raise RuntimeError(
-                "MetricDispatcher is disabled."
-            )
-# ==================================================================
-# Part 2. Dispatch API
-# ==================================================================
-
-
-# ------------------------------------------------------------------
-# Dispatch
-# ------------------------------------------------------------------
-
-def dispatch(
-    self,
-    payload: Any = None,
-    target: str | None = None,
-) -> Any:
-    """
-    Main Runtime Metrics dispatch entry.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-        self.before_dispatch(
-            payload
+        self._collector = (
+            collector
+            if collector is not None
+            else RuntimeCollector()
         )
 
-        try:
-
-            if target:
-                result = self.route(
-                    target,
-                    payload,
-                )
-
-            else:
-                result = self.broadcast(
-                    payload
-                )
-
-            self._statistics[
-                "dispatch_count"
-            ] += 1
-
-            self._statistics[
-                "success_count"
-            ] += 1
-
-            self._touch()
-
-            self.after_dispatch(
-                result
+        self._aggregator = (
+            aggregator
+            if aggregator is not None
+            else RuntimeAggregator(
+                collector=self._collector,
             )
+        )
 
-            return result
+        self._queue: DispatchQueue = []
+
+        self._dispatched = DEFAULT_DISPATCHED
+        self._failed = DEFAULT_FAILED
+
+        self._created_at = time.time()
+        self._last_dispatch: float | None = None
+
+        self._queue_limit = max(
+            1,
+            int(queue_limit),
+        )
+
+        self._batch_size = max(
+            1,
+            int(batch_size),
+        )
+
+        self._timeout = max(
+            0.0,
+            float(timeout),
+        )
+
+        self._retries = max(
+            0,
+            int(retries),
+        )
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @name.setter
+    def name(
+        self,
+        value: str,
+    ) -> None:
+        self._name = str(value)
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(
+        self,
+        value: bool,
+    ) -> None:
+        self._enabled = bool(value)
+
+    @property
+    def collector(self) -> RuntimeCollector:
+        return self._collector
+
+    @collector.setter
+    def collector(
+        self,
+        value: RuntimeCollector,
+    ) -> None:
+        self._collector = value
+
+    @property
+    def aggregator(self) -> RuntimeAggregator:
+        return self._aggregator
+
+    @aggregator.setter
+    def aggregator(
+        self,
+        value: RuntimeAggregator,
+    ) -> None:
+        self._aggregator = value
+
+    @property
+    def queue(self) -> DispatchQueue:
+        return self._queue
+
+    @property
+    def dispatched(self) -> int:
+        return self._dispatched
+
+    @property
+    def failed(self) -> int:
+        return self._failed
+
+    @property
+    def created_at(self) -> float:
+        return self._created_at
+
+    @property
+    def last_dispatch(self) -> float | None:
+        return self._last_dispatch
+
+    @property
+    def queue_limit(self) -> int:
+        return self._queue_limit
+
+    @queue_limit.setter
+    def queue_limit(
+        self,
+        value: int,
+    ) -> None:
+        self._queue_limit = max(
+            1,
+            int(value),
+        )
+
+    @property
+    def batch_size(self) -> int:
+        return self._batch_size
+
+    @batch_size.setter
+    def batch_size(
+        self,
+        value: int,
+    ) -> None:
+        self._batch_size = max(
+            1,
+            int(value),
+        )
+
+    @property
+    def timeout(self) -> float:
+        return self._timeout
+
+    @timeout.setter
+    def timeout(
+        self,
+        value: float,
+    ) -> None:
+        self._timeout = max(
+            0.0,
+            float(value),
+        )
+
+    @property
+    def retries(self) -> int:
+        return self._retries
+
+    @retries.setter
+    def retries(
+        self,
+        value: int,
+    ) -> None:
+        self._retries = max(
+            0,
+            int(value),
+        )
+
+# ==============================================================================
+# Part 5. Lifecycle
+# ==============================================================================
+
+    def enable(self) -> "RuntimeDispatcher":
+        self._enabled = True
+        return self
+
+    def disable(self) -> "RuntimeDispatcher":
+        self._enabled = False
+        return self
+
+    def clear(self) -> "RuntimeDispatcher":
+        self._queue.clear()
+        return self
+
+    def reset(self) -> "RuntimeDispatcher":
+        self.clear()
+
+        self._dispatched = DEFAULT_DISPATCHED
+        self._failed = DEFAULT_FAILED
+        self._last_dispatch = None
+
+        return self
+
+    def dispatch(self) -> bool:
+        if not self._enabled:
+            return False
+
+        if not self._queue:
+            return True
+
+        self.dispatch_batch()
+
+        self._last_dispatch = time.time()
+
+        return True
+
+
+# ==============================================================================
+# Part 6. Dispatch API
+# ==============================================================================
+
+    def enqueue(
+        self,
+        item: DispatchItem,
+    ) -> bool:
+
+        if len(self._queue) >= self._queue_limit:
+            self._failed += 1
+            return False
+
+        self._queue.append(dict(item))
+
+        return True
+
+    def enqueue_many(
+        self,
+        items: DispatchQueue,
+    ) -> int:
+
+        added = 0
+
+        for item in items:
+            if self.enqueue(item):
+                added += 1
+
+        return added
+
+    def dequeue(self) -> DispatchItem | None:
+
+        if not self._queue:
+            return None
+
+        return self._queue.pop(0)
+
+    def peek(self) -> DispatchItem | None:
+
+        if not self._queue:
+            return None
+
+        return self._queue[0]
+
+    def dispatch_item(
+        self,
+        item: DispatchItem,
+    ) -> bool:
+
+        try:
+            self._aggregator.aggregate_sample(item)
+
+            self._dispatched += 1
+
+            return True
 
         except Exception:
 
-            self._statistics[
-                "failure_count"
-            ] += 1
+            self._failed += 1
 
-            raise
+            return False
 
+    def dispatch_batch(self) -> int:
 
+        processed = 0
 
-def dispatch_metric(
-    self,
-    metric: Any,
-    target: str | None = None,
-) -> Any:
-    """
-    Dispatch a Runtime Metric.
-    """
+        while self._queue and processed < self._batch_size:
 
-    return self.dispatch(
-        {
-            "type": "metric",
-            "data": metric,
-        },
-        target,
-    )
+            item = self.dequeue()
 
+            if item is None:
+                break
 
+            self.dispatch_item(item)
 
-def dispatch_event(
-    self,
-    event: Any,
-    target: str | None = None,
-) -> Any:
-    """
-    Dispatch a Runtime Event.
-    """
+            processed += 1
 
-    return self.dispatch(
-        {
-            "type": "event",
-            "data": event,
-        },
-        target,
-    )
+        self._last_dispatch = time.time()
 
+        return processed
 
+    def flush(self) -> int:
 
-def dispatch_batch(
-    self,
-    payloads: list[Any],
-) -> list[Any]:
-    """
-    Dispatch multiple payloads.
-    """
+        total = 0
 
-    results = []
+        while self._queue:
+            total += self.dispatch_batch()
 
-    for payload in payloads:
+        return total
 
-        results.append(
-            self.dispatch(
-                payload
-            )
-        )
+    def pending(self) -> DispatchQueue:
+        return list(self._queue)
 
-    return results
+    def has_pending(self) -> bool:
+        return bool(self._queue)
 
+    def queue_size(self) -> int:
+        return len(self._queue)
 
 
-# ------------------------------------------------------------------
-# Routing
-# ------------------------------------------------------------------
+# ==============================================================================
+# Part 7. Statistics
+# ==============================================================================
 
-def route(
-    self,
-    name: str,
-    payload: Any = None,
-) -> Any:
-    """
-    Route payload to registered handler.
-    """
+    def success_rate(self) -> float:
 
-    self.before_route(
-        name,
-        payload,
-    )
+        total = self.total_processed()
 
-    handler = self._handlers.get(
-        name
-    )
+        if total == 0:
+            return 0.0
 
-    if handler is None:
+        return self._dispatched / total
 
-        route = self._route_registry.get(
-            name
-        )
+    def failure_rate(self) -> float:
 
-        if route is not None:
-            handler = route
+        total = self.total_processed()
 
+        if total == 0:
+            return 0.0
 
-    if handler is None:
-        raise KeyError(
-            f"Unknown route: {name}"
-        )
+        return self._failed / total
 
+    def total_processed(self) -> int:
+        return self._dispatched + self._failed
 
-    result = self.handle(
-        handler,
-        payload,
-    )
+    def statistics(self) -> DispatcherStats:
 
-    self.after_route(
-        name,
-        result,
-    )
+        return {
+            "dispatched": self._dispatched,
+            "failed": self._failed,
+            "pending": len(self._queue),
+            "total": self.total_processed(),
+            "success_rate": self.success_rate(),
+            "failure_rate": self.failure_rate(),
+        }
 
-    return result
+    def reset_statistics(self) -> "RuntimeDispatcher":
 
+        self._dispatched = DEFAULT_DISPATCHED
+        self._failed = DEFAULT_FAILED
 
+        return self
 
-def forward(
-    self,
-    target: str,
-    payload: Any = None,
-) -> Any:
-    """
-    Forward payload to another route.
-    """
 
-    return self.route(
-        target,
-        payload,
-    )
+# ==============================================================================
+# Part 8. Operations
+# ==============================================================================
 
+    def clone(self) -> "RuntimeDispatcher":
+        return copy.deepcopy(self)
 
+    def copy(self) -> "RuntimeDispatcher":
+        return self.clone()
 
-def broadcast(
-    self,
-    payload: Any = None,
-) -> list[Any]:
-    """
-    Broadcast payload to all handlers.
-    """
-
-    results = []
-
-    for name in self._handlers:
-
-        results.append(
-            self.route(
-                name,
-                payload,
-            )
-        )
-
-    return results
-
-
-
-# ------------------------------------------------------------------
-# Processing
-# ------------------------------------------------------------------
-
-def handle(
-    self,
-    handler: Any,
-    payload: Any = None,
-) -> Any:
-    """
-    Execute handler.
-    """
-
-    self.before_handle(
-        handler,
-        payload,
-    )
-
-    try:
-
-        if hasattr(
-            handler,
-            "handle",
-        ):
-
-            result = handler.handle(
-                payload
-            )
-
-        elif callable(handler):
-
-            result = handler(
-                payload
-            )
-
-        else:
-
-            raise TypeError(
-                "Handler is not executable."
-            )
-
-
-        self.after_handle(
-            handler,
-            result,
-        )
-
-        return result
-
-
-    except Exception:
-
-        self._statistics[
-            "failure_count"
-        ] += 1
-
-        raise
-
-
-
-def process(
-    self,
-    payload: Any = None,
-) -> Any:
-    """
-    Process runtime payload.
-    """
-
-    return self.dispatch(
-        payload
-    )
-
-
-
-def execute(
-    self,
-    payload: Any = None,
-) -> Any:
-    """
-    Execute dispatcher.
-    """
-
-    return self.dispatch(
-        payload
-    )
-
-
-
-# ------------------------------------------------------------------
-# Runtime
-# ------------------------------------------------------------------
-
-def update(
-    self,
-    context: dict[str, Any] | None = None,
-) -> "MetricDispatcher":
-    """
-    Update dispatcher runtime context.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-        if context:
-            self._context.update(
-                context
-            )
-
-        self._touch()
-
-    return self
-
-
-
-def flush(
-    self,
-) -> "MetricDispatcher":
-    """
-    Flush runtime context.
-    """
-
-    with self._lock:
-
-        self._context.clear()
-
-        self._touch()
-
-    return self
-
-
-
-def reset(
-    self,
-) -> "MetricDispatcher":
-    """
-    Reset dispatcher runtime state.
-    """
-
-    with self._lock:
-
-        self._context.clear()
-
-        self._statistics.update(
-            {
-                "dispatch_count": 0,
-                "success_count": 0,
-                "failure_count": 0,
-            }
-        )
-
-        self._touch()
-
-    return self
-# ==================================================================
-# Part 3. Route Registry API
-# ==================================================================
-
-# ------------------------------------------------------------------
-# Registration
-# ------------------------------------------------------------------
-
-def register_route(
-    self,
-    name: str,
-    route: Any,
-) -> Any:
-    """
-    Register a Runtime Metric route.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-        self._route_registry[name] = route
-
-        if route not in self._routes:
-            self._routes.append(route)
-
-        self._statistics[
-            "route_count"
-        ] = len(
-            self._route_registry
-        )
-
-        self._touch()
-
-        return route
-
-
-
-def unregister_route(
-    self,
-    name: str,
-) -> Any:
-    """
-    Remove a registered route.
-    """
-
-    with self._lock:
-
-        route = self._route_registry.pop(
-            name,
-            None,
-        )
-
-        if route in self._routes:
-            self._routes.remove(
-                route
-            )
-
-        self._statistics[
-            "route_count"
-        ] = len(
-            self._route_registry
-        )
-
-        self._touch()
-
-        return route
-
-
-
-# ------------------------------------------------------------------
-# Lookup
-# ------------------------------------------------------------------
-
-def contains_route(
-    self,
-    name: str,
-) -> bool:
-    """
-    Check route existence.
-    """
-
-    return name in self._route_registry
-
-
-
-def exists_route(
-    self,
-    name: str,
-) -> bool:
-    """
-    Alias for contains_route().
-    """
-
-    return self.contains_route(
-        name
-    )
-
-
-
-def get_route(
-    self,
-    name: str,
-    default=None,
-):
-    """
-    Get route by name.
-    """
-
-    return self._route_registry.get(
-        name,
-        default,
-    )
-
-
-
-def find_route(
-    self,
-    name: str,
-):
-    """
-    Find route or raise error.
-    """
-
-    route = self.get_route(
-        name
-    )
-
-    if route is None:
-
-        raise KeyError(
-            f"Unknown route: {name}"
-        )
-
-    return route
-
-
-
-# ------------------------------------------------------------------
-# Enumeration
-# ------------------------------------------------------------------
-
-def routes(
-    self,
-) -> list[Any]:
-    """
-    Return ordered routes.
-    """
-
-    return list(
-        self._routes
-    )
-
-
-
-def keys(
-    self,
-):
-    """
-    Return route names.
-    """
-
-    return self._route_registry.keys()
-
-
-
-def values(
-    self,
-):
-    """
-    Return route objects.
-    """
-
-    return self._route_registry.values()
-
-
-
-def items(
-    self,
-):
-    """
-    Return route registry items.
-    """
-
-    return self._route_registry.items()
-
-
-
-# ------------------------------------------------------------------
-# Information
-# ------------------------------------------------------------------
-
-def route_count(
-    self,
-) -> int:
-    """
-    Return number of routes.
-    """
-
-    return len(
-        self._route_registry
-    )
-
-
-
-def route_names(
-    self,
-) -> list[str]:
-    """
-    Return route names.
-    """
-
-    return list(
-        self._route_registry.keys()
-    )
-
-
-
-# ------------------------------------------------------------------
-# Maintenance
-# ------------------------------------------------------------------
-
-def clear_routes(
-    self,
-) -> "MetricDispatcher":
-    """
-    Clear all registered routes.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-        self._route_registry.clear()
-
-        self._routes.clear()
-
-        self._statistics[
-            "route_count"
-        ] = 0
-
-        self._touch()
-
-    return self
-# ==================================================================
-# Part 4. Handler Management
-# ==================================================================
-
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-
-
-# ------------------------------------------------------------------
-# Registration
-# ------------------------------------------------------------------
-
-def register_handler(
-    self,
-    name: str,
-    handler: Any,
-) -> Any:
-    """
-    Register Runtime Metric handler.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-        self._handlers[name] = handler
-
-        self._statistics[
-            "handler_count"
-        ] = len(
-            self._handlers
-        )
-
-        self._touch()
-
-        return handler
-
-
-
-def remove_handler(
-    self,
-    name: str,
-) -> Any:
-    """
-    Remove Runtime Metric handler.
-    """
-
-    with self._lock:
-
-        handler = self._handlers.pop(
-            name,
-            None,
-        )
-
-        self._statistics[
-            "handler_count"
-        ] = len(
-            self._handlers
-        )
-
-        self._touch()
-
-        return handler
-
-
-
-# ------------------------------------------------------------------
-# Lookup
-# ------------------------------------------------------------------
-
-def handler(
-    self,
-    name: str,
-    default=None,
-):
-    """
-    Get handler by name.
-    """
-
-    return self._handlers.get(
-        name,
-        default,
-    )
-
-
-
-def handlers(
-    self,
-) -> dict[str, Any]:
-    """
-    Return all handlers.
-    """
-
-    return dict(
-        self._handlers
-    )
-
-
-
-# ------------------------------------------------------------------
-# Execution
-# ------------------------------------------------------------------
-
-def call_handler(
-    self,
-    name: str,
-    payload: Any = None,
-) -> Any:
-    """
-    Call handler by name.
-    """
-
-    handler = self.handler(
-        name
-    )
-
-    if handler is None:
-
-        raise KeyError(
-            f"Unknown handler: {name}"
-        )
-
-    return self.invoke_handler(
-        handler,
-        payload,
-    )
-
-
-
-def invoke_handler(
-    self,
-    handler: Any,
-    payload: Any = None,
-) -> Any:
-    """
-    Invoke handler object.
-    """
-
-    self.before_handle(
-        handler,
-        payload,
-    )
-
-    try:
-
-        if hasattr(
-            handler,
-            "handle",
-        ):
-
-            result = handler.handle(
-                payload
-            )
-
-        elif callable(handler):
-
-            result = handler(
-                payload
-            )
-
-        else:
-
-            raise TypeError(
-                "Handler is not executable."
-            )
-
-
-        self.after_handle(
-            handler,
-            result,
-        )
-
-        return result
-
-
-    except Exception:
-
-        self._statistics[
-            "failure_count"
-        ] += 1
-
-        raise
-
-
-
-# ------------------------------------------------------------------
-# Handler Strategies
-# ------------------------------------------------------------------
-
-def sync(
-    self,
-    handler: Any,
-    payload: Any = None,
-) -> Any:
-    """
-    Execute handler synchronously.
-    """
-
-    return self.invoke_handler(
-        handler,
-        payload,
-    )
-
-
-
-async def async_execute(
-    self,
-    handler: Any,
-    payload: Any = None,
-) -> Any:
-    """
-    Execute handler asynchronously.
-    """
-
-    loop = asyncio.get_running_loop()
-
-    return await loop.run_in_executor(
-        None,
-        self.invoke_handler,
-        handler,
-        payload,
-    )
-
-
-
-def parallel(
-    self,
-    handlers: list[Any],
-    payload: Any = None,
-) -> list[Any]:
-    """
-    Execute multiple handlers in parallel.
-    """
-
-    with ThreadPoolExecutor() as executor:
-
-        futures = [
-            executor.submit(
-                self.invoke_handler,
-                handler,
-                payload,
-            )
-            for handler in handlers
-        ]
-
-        return [
-            future.result()
-            for future in futures
-        ]
-
-
-
-# ------------------------------------------------------------------
-# Strategy Management
-# ------------------------------------------------------------------
-
-def register_strategy(
-    self,
-    name: str,
-    strategy: Any,
-) -> "MetricDispatcher":
-    """
-    Register handler execution strategy.
-    """
-
-    if not hasattr(
+    def merge(
         self,
-        "_strategy_registry",
-    ):
+        other: "RuntimeDispatcher",
+    ) -> "RuntimeDispatcher":
 
-        self._strategy_registry = {}
+        self.enqueue_many(other.pending())
 
+        self._dispatched += other.dispatched
+        self._failed += other.failed
 
-    self._strategy_registry[name] = strategy
+        return self
 
-    return self
-
-
-
-def remove_strategy(
-    self,
-    name: str,
-) -> "MetricDispatcher":
-    """
-    Remove execution strategy.
-    """
-
-    registry = getattr(
+    def update(
         self,
-        "_strategy_registry",
-        {},
-    )
+        state: DispatcherState,
+    ) -> "RuntimeDispatcher":
 
-    registry.pop(
-        name,
-        None,
-    )
+        for key, value in state.items():
 
-    return self
+            attribute = f"_{key}"
 
+            if hasattr(self, attribute):
+                setattr(self, attribute, value)
 
+        return self
 
-def strategy(
-    self,
-    name: str | None = None,
-):
-    """
-    Get handler strategy.
-    """
+    def snapshot(self) -> DispatcherState:
 
-    builtin = {
-        "sync": self.sync,
-        "async": self.async_execute,
-        "parallel": self.parallel,
-    }
-
-
-    if name is None:
-
-        return getattr(
-            self,
-            "_strategy",
-            "sync",
-        )
-
-
-    if name in builtin:
-
-        self._strategy = name
-
-        return builtin[name]
-
-
-    registry = getattr(
-        self,
-        "_strategy_registry",
-        {},
-    )
-
-
-    if name not in registry:
-
-        raise KeyError(
-            f"Unknown strategy: {name}"
-        )
-
-
-    self._strategy = name
-
-    return registry[name]
-# ==================================================================
-# Part 5. Lifecycle Management
-# ==================================================================
-
-# ------------------------------------------------------------------
-# Lifecycle
-# ------------------------------------------------------------------
-
-def enable(
-    self,
-) -> "MetricDispatcher":
-    """
-    Enable dispatcher.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise RuntimeError(
-                "MetricDispatcher is closed."
-            )
-
-        self._enabled = True
-
-        self._touch()
-
-    return self
-
-
-
-def disable(
-    self,
-) -> "MetricDispatcher":
-    """
-    Disable dispatcher.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise RuntimeError(
-                "MetricDispatcher is closed."
-            )
-
-        self._enabled = False
-
-        self._touch()
-
-    return self
-
-
-
-def freeze(
-    self,
-) -> "MetricDispatcher":
-    """
-    Freeze dispatcher modifications.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise RuntimeError(
-                "MetricDispatcher is closed."
-            )
-
-        self._frozen = True
-
-        self._touch()
-
-    return self
-
-
-
-def unfreeze(
-    self,
-) -> "MetricDispatcher":
-    """
-    Unfreeze dispatcher.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise RuntimeError(
-                "MetricDispatcher is closed."
-            )
-
-        self._frozen = False
-
-        self._touch()
-
-    return self
-
-
-
-def close(
-    self,
-) -> "MetricDispatcher":
-    """
-    Close dispatcher.
-    """
-
-    with self._lock:
-
-        self.before_close()
-
-        self._enabled = False
-
-        self._frozen = False
-
-        self._closed = True
-
-        self._touch()
-
-        self.after_close()
-
-    return self
-
-
-
-def reopen(
-    self,
-) -> "MetricDispatcher":
-    """
-    Reopen closed dispatcher.
-    """
-
-    with self._lock:
-
-        self._closed = False
-
-        self._enabled = True
-
-        self._frozen = False
-
-        self._touch()
-
-    return self
-
-
-
-# ------------------------------------------------------------------
-# Properties
-# ------------------------------------------------------------------
-
-@property
-def enabled(
-    self,
-) -> bool:
-    """
-    Dispatcher enabled state.
-    """
-
-    return self._enabled
-
-
-
-@property
-def disabled(
-    self,
-) -> bool:
-    """
-    Dispatcher disabled state.
-    """
-
-    return not self._enabled
-
-
-
-@property
-def frozen(
-    self,
-) -> bool:
-    """
-    Dispatcher frozen state.
-    """
-
-    return self._frozen
-
-
-
-@property
-def closed(
-    self,
-) -> bool:
-    """
-    Dispatcher closed state.
-    """
-
-    return self._closed
-
-
-
-@property
-def active(
-    self,
-) -> bool:
-    """
-    Dispatcher active state.
-    """
-
-    return (
-        self._enabled
-        and not self._frozen
-        and not self._closed
-    )
-# ==================================================================
-# Part 6. Runtime Operations
-# ==================================================================
-
-from copy import copy as _copy
-from copy import deepcopy
-
-
-# ------------------------------------------------------------------
-# Snapshot
-# ------------------------------------------------------------------
-
-def snapshot(
-    self,
-) -> dict[str, Any]:
-    """
-    Create Runtime Dispatcher snapshot.
-    """
-
-    with self._lock:
-
-        snapshot = {
-            "id": self._id,
+        return {
             "name": self._name,
-            "description": self._description,
-
-            "routes": deepcopy(
-                self._routes
-            ),
-
-            "route_registry": deepcopy(
-                self._route_registry
-            ),
-
-            "handlers": deepcopy(
-                self._handlers
-            ),
-
-            "subscribers": deepcopy(
-                self._subscribers
-            ),
-
-            "context": deepcopy(
-                self._context
-            ),
-
-            "statistics": deepcopy(
-                self._statistics
-            ),
-
             "enabled": self._enabled,
-            "frozen": self._frozen,
-            "closed": self._closed,
-
+            "queue": copy.deepcopy(self._queue),
+            "dispatched": self._dispatched,
+            "failed": self._failed,
             "created_at": self._created_at,
-            "updated_at": self._updated_at,
-
-            "version": self._version,
+            "last_dispatch": self._last_dispatch,
+            "queue_limit": self._queue_limit,
+            "batch_size": self._batch_size,
+            "timeout": self._timeout,
+            "retries": self._retries,
         }
 
-        self._snapshot = deepcopy(
-            snapshot
+    def restore(
+        self,
+        state: DispatcherState,
+    ) -> "RuntimeDispatcher":
+
+        self._name = state["name"]
+        self._enabled = state["enabled"]
+        self._queue = copy.deepcopy(state["queue"])
+        self._dispatched = state["dispatched"]
+        self._failed = state["failed"]
+        self._created_at = state["created_at"]
+        self._last_dispatch = state["last_dispatch"]
+        self._queue_limit = state["queue_limit"]
+        self._batch_size = state["batch_size"]
+        self._timeout = state["timeout"]
+        self._retries = state["retries"]
+
+        return self
+
+# ==============================================================================
+# Part 9. Validation
+# ==============================================================================
+
+    def validate(self) -> bool:
+
+        if self._queue_limit <= 0:
+            return False
+
+        if self._batch_size <= 0:
+            return False
+
+        if self._timeout < 0:
+            return False
+
+        if self._retries < 0:
+            return False
+
+        return True
+
+    def normalize(
+        self,
+        value: Any,
+    ) -> Any:
+
+        if isinstance(value, float):
+
+            if value != value:  # NaN
+                return 0.0
+
+            if value == float("inf"):
+                return 0.0
+
+            if value == float("-inf"):
+                return 0.0
+
+        return value
+
+
+# ==============================================================================
+# Part 10. Serialization
+# ==============================================================================
+
+    def to_dict(self) -> DispatcherState:
+        return self.snapshot()
+
+    @classmethod
+    def from_dict(
+        cls,
+        state: DispatcherState,
+    ) -> "RuntimeDispatcher":
+
+        dispatcher = cls()
+
+        dispatcher.restore(state)
+
+        return dispatcher
+
+    def to_tuple(self) -> tuple[Any, ...]:
+
+        return (
+            self._name,
+            self._enabled,
+            copy.deepcopy(self._queue),
+            self._dispatched,
+            self._failed,
+            self._created_at,
+            self._last_dispatch,
+            self._queue_limit,
+            self._batch_size,
+            self._timeout,
+            self._retries,
         )
 
-        return snapshot
+    @classmethod
+    def from_tuple(
+        cls,
+        value: tuple[Any, ...],
+    ) -> "RuntimeDispatcher":
 
+        (
+            name,
+            enabled,
+            queue,
+            dispatched,
+            failed,
+            created_at,
+            last_dispatch,
+            queue_limit,
+            batch_size,
+            timeout,
+            retries,
+        ) = value
 
-
-def restore(
-    self,
-    snapshot: dict[str, Any] | None = None,
-) -> "MetricDispatcher":
-    """
-    Restore dispatcher state.
-    """
-
-    with self._lock:
-
-        data = (
-            snapshot
-            or self._snapshot
+        dispatcher = cls(
+            name=name,
+            enabled=enabled,
+            queue_limit=queue_limit,
+            batch_size=batch_size,
+            timeout=timeout,
+            retries=retries,
         )
 
-        if data is None:
-
-            raise RuntimeError(
-                "No snapshot available."
-            )
-
-
-        self._id = data["id"]
-
-        self._name = data["name"]
-
-        self._description = data[
-            "description"
-        ]
-
-
-        self._routes = deepcopy(
-            data["routes"]
-        )
-
-        self._route_registry = deepcopy(
-            data["route_registry"]
-        )
-
-        self._handlers = deepcopy(
-            data["handlers"]
-        )
-
-        self._subscribers = deepcopy(
-            data["subscribers"]
-        )
-
-
-        self._context = deepcopy(
-            data["context"]
-        )
-
-        self._statistics = deepcopy(
-            data["statistics"]
-        )
-
-
-        self._enabled = data[
-            "enabled"
-        ]
-
-        self._frozen = data[
-            "frozen"
-        ]
-
-        self._closed = data[
-            "closed"
-        ]
-
-
-        self._created_at = data[
-            "created_at"
-        ]
-
-        self._updated_at = data[
-            "updated_at"
-        ]
-
-        self._version = data[
-            "version"
-        ]
-
-
-        self._touch()
-
-
-    return self
-
-
-
-# ------------------------------------------------------------------
-# Object Management
-# ------------------------------------------------------------------
-
-def clone(
-    self,
-) -> "MetricDispatcher":
-    """
-    Deep clone dispatcher.
-    """
-
-    return deepcopy(
-        self
-    )
-
-
-
-def copy(
-    self,
-) -> "MetricDispatcher":
-    """
-    Shallow copy dispatcher.
-    """
-
-    return _copy(
-        self
-    )
-
-
-
-# ------------------------------------------------------------------
-# Cleanup
-# ------------------------------------------------------------------
-
-def clear(
-    self,
-) -> "MetricDispatcher":
-    """
-    Clear runtime data.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-        self._context.clear()
-
-        self._events.clear()
-
-        self._touch()
-
-
-    return self
-
-
-
-def compact(
-    self,
-) -> "MetricDispatcher":
-    """
-    Compact runtime registries.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-
-        self._routes = [
-            route
-            for route in self._routes
-            if route is not None
-        ]
-
-
-        self._route_registry = {
-            name: route
-            for name, route
-            in self._route_registry.items()
-            if route is not None
-        }
-
-
-        self._handlers = {
-            name: handler
-            for name, handler
-            in self._handlers.items()
-            if handler is not None
-        }
-
-
-        self._statistics[
-            "route_count"
-        ] = len(
-            self._route_registry
-        )
-
-
-        self._statistics[
-            "handler_count"
-        ] = len(
-            self._handlers
-        )
-
-
-        self._touch()
-
-
-    return self
-
-
-
-def cleanup(
-    self,
-) -> "MetricDispatcher":
-    """
-    Cleanup dispatcher runtime.
-    """
-
-    with self._lock:
-
-        self.compact()
-
-        self.clear()
-
-        self._touch()
-
-
-    return self
-# ==================================================================
-# Part 7. Statistics & Diagnostics
-# ==================================================================
-
-from datetime import datetime
-
-
-# ------------------------------------------------------------------
-# Runtime Metrics
-# ------------------------------------------------------------------
-
-@property
-def dispatch_count(
-    self,
-) -> int:
-    """
-    Total dispatch operations.
-    """
-
-    return self._statistics.get(
-        "dispatch_count",
-        0,
-    )
-
-
-
-@property
-def success_count(
-    self,
-) -> int:
-    """
-    Successful dispatch operations.
-    """
-
-    return self._statistics.get(
-        "success_count",
-        0,
-    )
-
-
-
-@property
-def failure_count(
-    self,
-) -> int:
-    """
-    Failed dispatch operations.
-    """
-
-    return self._statistics.get(
-        "failure_count",
-        0,
-    )
-
-
-
-@property
-def route_count(
-    self,
-) -> int:
-    """
-    Number of registered routes.
-    """
-
-    return len(
-        self._route_registry
-    )
-
-
-
-@property
-def handler_count(
-    self,
-) -> int:
-    """
-    Number of registered handlers.
-    """
-
-    return len(
-        self._handlers
-    )
-
-
-
-@property
-def latency(
-    self,
-) -> float:
-    """
-    Average dispatch latency.
-
-    Unit:
-        seconds
-    """
-
-    total = self._statistics.get(
-        "total_latency",
-        0.0,
-    )
-
-    count = self.dispatch_count
-
-    if count == 0:
-        return 0.0
-
-    return total / count
-
-
-
-@property
-def throughput(
-    self,
-) -> float:
-    """
-    Dispatch throughput.
-
-    Unit:
-        events / second
-    """
-
-    uptime = self.uptime
-
-    if uptime <= 0:
-        return 0.0
-
-    return (
-        self.dispatch_count
-        /
-        uptime
-    )
-
-
-
-@property
-def uptime(
-    self,
-) -> float:
-    """
-    Dispatcher uptime.
-
-    Unit:
-        seconds
-    """
-
-    return (
-        datetime.utcnow()
-        -
-        self._created_at
-    ).total_seconds()
-
-
-
-# ------------------------------------------------------------------
-# Statistics
-# ------------------------------------------------------------------
-
-def summary(
-    self,
-) -> dict[str, Any]:
-    """
-    Return dispatcher summary.
-    """
-
-    return {
-        "id": self._id,
-        "name": self._name,
-
-        "routes": self.route_count,
-
-        "handlers": self.handler_count,
-
-        "dispatch_count": self.dispatch_count,
-
-        "success_count": self.success_count,
-
-        "failure_count": self.failure_count,
-
-        "active": self.active,
-
-        "uptime": self.uptime,
-    }
-
-
-
-def statistics(
-    self,
-) -> dict[str, Any]:
-    """
-    Return detailed runtime statistics.
-    """
-
-    return {
-
-        **self.summary(),
-
-        "latency": self.latency,
-
-        "throughput": self.throughput,
-
-        "runtime": dict(
-            self._statistics
-        ),
-
-    }
-
-
-
-def report(
-    self,
-) -> dict[str, Any]:
-    """
-    Generate dispatcher report.
-    """
-
-    return {
-
-        "summary": self.summary(),
-
-        "statistics": self.statistics(),
-
-        "status": self.status(),
-
-        "performance": self.performance(),
-
-    }
-
-
-
-# ------------------------------------------------------------------
-# Diagnostics
-# ------------------------------------------------------------------
-
-def health(
-    self,
-) -> str:
-    """
-    Return dispatcher health state.
-    """
-
-    if self.closed:
-        return "closed"
-
-
-    if self.frozen:
-        return "frozen"
-
-
-    if self.disabled:
-        return "disabled"
-
-
-    if self.failure_count > 0:
-
-        return "degraded"
-
-
-    return "healthy"
-
-
-
-def status(
-    self,
-) -> dict[str, Any]:
-    """
-    Runtime status.
-    """
-
-    return {
-
-        "health": self.health(),
-
-        "enabled": self.enabled,
-
-        "disabled": self.disabled,
-
-        "frozen": self.frozen,
-
-        "closed": self.closed,
-
-        "active": self.active,
-
-    }
-
-
-
-def performance(
-    self,
-) -> dict[str, Any]:
-    """
-    Performance metrics.
-    """
-
-    return {
-
-        "dispatch_count": self.dispatch_count,
-
-        "success_count": self.success_count,
-
-        "failure_count": self.failure_count,
-
-        "latency": self.latency,
-
-        "throughput": self.throughput,
-
-        "uptime": self.uptime,
-
-    }
-# ==================================================================
-# Part 8. Serialization
-# ==================================================================
-
-import json
-import pickle
-from copy import deepcopy
-from datetime import datetime
-
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
-
-
-try:
-    import msgpack
-except ImportError:
-    msgpack = None
-
-
-
-# ------------------------------------------------------------------
-# Serialization
-# ------------------------------------------------------------------
-
-def to_dict(
-    self,
-) -> dict[str, Any]:
-    """
-    Serialize dispatcher state to dictionary.
-    """
-
-    return {
-
-        "id": self._id,
-
-        "name": self._name,
-
-        "description": self._description,
-
-
-        "routes": deepcopy(
-            self._routes
-        ),
-
-        "route_registry": deepcopy(
-            self._route_registry
-        ),
-
-        "handlers": deepcopy(
-            self._handlers
-        ),
-
-        "subscribers": deepcopy(
-            self._subscribers
-        ),
-
-
-        "context": deepcopy(
-            self._context
-        ),
-
-
-        "statistics": deepcopy(
-            self._statistics
-        ),
-
-
-        "enabled": self._enabled,
-
-        "frozen": self._frozen,
-
-        "closed": self._closed,
-
-
-        "created_at":
-            self._created_at.isoformat(),
-
-        "updated_at":
-            self._updated_at.isoformat(),
-
-
-        "version": self._version,
-
-    }
-
-
-
-@classmethod
-def from_dict(
-    cls,
-    data: dict[str, Any],
-) -> "MetricDispatcher":
-    """
-    Restore dispatcher from dictionary.
-    """
-
-    obj = cls(
-        name=data.get(
-            "name",
-            "MetricDispatcher",
-        ),
-        description=data.get(
-            "description",
-            "",
-        ),
-    )
-
-
-    obj._id = data.get(
-        "id",
-        obj._id,
-    )
-
-
-    obj._routes = deepcopy(
-        data.get(
-            "routes",
-            [],
-        )
-    )
-
-
-    obj._route_registry = deepcopy(
-        data.get(
-            "route_registry",
-            {},
-        )
-    )
-
-
-    obj._handlers = deepcopy(
-        data.get(
-            "handlers",
-            {},
-        )
-    )
-
-
-    obj._subscribers = deepcopy(
-        data.get(
-            "subscribers",
-            {},
-        )
-    )
-
-
-    obj._context = deepcopy(
-        data.get(
-            "context",
-            {},
-        )
-    )
-
-
-    obj._statistics = deepcopy(
-        data.get(
-            "statistics",
-            {},
-        )
-    )
-
-
-    obj._enabled = data.get(
-        "enabled",
-        True,
-    )
-
-
-    obj._frozen = data.get(
-        "frozen",
-        False,
-    )
-
-
-    obj._closed = data.get(
-        "closed",
-        False,
-    )
-
-
-    if "created_at" in data:
-
-        obj._created_at = datetime.fromisoformat(
-            data["created_at"]
-        )
-
-
-    if "updated_at" in data:
-
-        obj._updated_at = datetime.fromisoformat(
-            data["updated_at"]
-        )
-
-
-    obj._version = data.get(
-        "version",
-        cls.VERSION,
-    )
-
-
-    return obj
-
-
-
-def to_json(
-    self,
-    **kwargs,
-) -> str:
-    """
-    Serialize dispatcher to JSON.
-    """
-
-    return json.dumps(
-        self.to_dict(),
-        default=str,
-        **kwargs,
-    )
-
-
-
-@classmethod
-def from_json(
-    cls,
-    data: str,
-) -> "MetricDispatcher":
-    """
-    Restore dispatcher from JSON.
-    """
-
-    return cls.from_dict(
-        json.loads(data)
-    )
-
-
-
-def serialize(
-    self,
-    fmt: str = "json",
-):
-    """
-    Generic serialization.
-
-    Supported:
-        json
-        yaml
-        pickle
-        msgpack
-    """
-
-    fmt = fmt.lower()
-
-
-    if fmt == "json":
-
-        return self.to_json(
-            indent=2
-        )
-
-
-
-    if fmt == "yaml":
-
-        if yaml is None:
-
-            raise RuntimeError(
-                "PyYAML is not installed."
-            )
-
-
-        return yaml.safe_dump(
+        dispatcher._queue = copy.deepcopy(queue)
+        dispatcher._dispatched = dispatched
+        dispatcher._failed = failed
+        dispatcher._created_at = created_at
+        dispatcher._last_dispatch = last_dispatch
+
+        return dispatcher
+
+    def to_json(self) -> str:
+        return json.dumps(
             self.to_dict(),
-            sort_keys=False,
+            ensure_ascii=False,
+            indent=2,
         )
 
-
-
-    if fmt == "pickle":
-
-        return pickle.dumps(
-            self.to_dict()
-        )
-
-
-
-    if fmt == "msgpack":
-
-        if msgpack is None:
-
-            raise RuntimeError(
-                "msgpack is not installed."
-            )
-
-
-        return msgpack.packb(
-            self.to_dict(),
-            use_bin_type=True,
-        )
-
-
-    raise ValueError(
-        f"Unsupported format: {fmt}"
-    )
-
-
-
-@classmethod
-def deserialize(
-    cls,
-    data,
-    fmt: str = "json",
-) -> "MetricDispatcher":
-    """
-    Deserialize dispatcher.
-    """
-
-    fmt = fmt.lower()
-
-
-    if fmt == "json":
-
-        return cls.from_json(
-            data
-        )
-
-
-
-    if fmt == "yaml":
-
-        if yaml is None:
-
-            raise RuntimeError(
-                "PyYAML is not installed."
-            )
-
+    @classmethod
+    def from_json(
+        cls,
+        payload: str,
+    ) -> "RuntimeDispatcher":
 
         return cls.from_dict(
-            yaml.safe_load(data)
+            json.loads(payload),
         )
 
 
+# ==============================================================================
+# Part 11. Diagnostics
+# ==============================================================================
 
-    if fmt == "pickle":
+    def summary(self) -> dict[str, Any]:
 
-        return cls.from_dict(
-            pickle.loads(data)
+        return {
+            "name": self._name,
+            "enabled": self._enabled,
+            "queue_size": len(self._queue),
+            "processed": self.total_processed(),
+        }
+
+    def diagnostics(self) -> DispatcherStats:
+
+        diagnostics = self.statistics()
+
+        diagnostics["valid"] = self.validate()
+
+        diagnostics["created_at"] = self._created_at
+        diagnostics["last_dispatch"] = self._last_dispatch
+
+        return diagnostics
+
+    def report(self) -> str:
+
+        return json.dumps(
+            self.diagnostics(),
+            ensure_ascii=False,
+            indent=2,
         )
 
+    def status(self) -> dict[str, Any]:
+
+        return {
+            "enabled": self._enabled,
+            "pending": len(self._queue),
+            "healthy": self.validate(),
+        }
 
 
-    if fmt == "msgpack":
+# ==============================================================================
+# Part 12. Protocols
+# ==============================================================================
 
-        if msgpack is None:
+    def __len__(self) -> int:
+        return len(self._queue)
 
-            raise RuntimeError(
-                "msgpack is not installed."
+    def __contains__(
+        self,
+        item: Any,
+    ) -> bool:
+        return item in self._queue
+
+    def __iter__(self):
+        return iter(self._queue)
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self._name,
+                self._created_at,
             )
-
-
-        return cls.from_dict(
-            msgpack.unpackb(
-                data,
-                raw=False,
-            )
         )
 
+    def __eq__(
+        self,
+        other: object,
+    ) -> bool:
 
-    raise ValueError(
-        f"Unsupported format: {fmt}"
-    )
+        if not isinstance(
+            other,
+            RuntimeDispatcher,
+        ):
+            return False
 
+        return self.snapshot() == other.snapshot()
 
+    def __repr__(self) -> str:
 
-# ------------------------------------------------------------------
-# Import / Export
-# ------------------------------------------------------------------
-
-def export(
-    self,
-    path: str,
-    fmt: str = "json",
-) -> None:
-    """
-    Export dispatcher state to file.
-    """
-
-    data = self.serialize(
-        fmt
-    )
-
-
-    mode = (
-        "wb"
-        if isinstance(data, bytes)
-        else "w"
-    )
-
-
-    with open(
-        path,
-        mode,
-    ) as file:
-
-        file.write(
-            data
+        return (
+            f"{self.__class__.__name__}("
+            f"name={self._name!r}, "
+            f"queue={len(self._queue)}, "
+            f"enabled={self._enabled})"
         )
 
-
-
-@classmethod
-def import_data(
-    cls,
-    path: str,
-    fmt: str = "json",
-) -> "MetricDispatcher":
-    """
-    Import dispatcher from file.
-    """
-
-    binary_formats = {
-        "pickle",
-        "msgpack",
-    }
-
-
-    mode = (
-        "rb"
-        if fmt.lower()
-        in binary_formats
-        else "r"
-    )
-
-
-    with open(
-        path,
-        mode,
-    ) as file:
-
-        data = file.read()
-
-
-    return cls.deserialize(
-        data,
-        fmt,
-    )
-# ==================================================================
-# Part 9. Events & Hooks
-# ==================================================================
-
-from datetime import datetime
-from uuid import uuid4
-from typing import Callable, Any
-
-
-
-# ------------------------------------------------------------------
-# Events
-# ------------------------------------------------------------------
-
-def before_dispatch(
-    self,
-    payload: Any = None,
-) -> None:
-    """
-    Trigger before_dispatch event.
-    """
-
-    self.emit(
-        "before_dispatch",
-        payload=payload,
-    )
-
-
-
-def after_dispatch(
-    self,
-    result: Any = None,
-) -> None:
-    """
-    Trigger after_dispatch event.
-    """
-
-    self.emit(
-        "after_dispatch",
-        result=result,
-    )
-
-
-
-def before_route(
-    self,
-    route: str,
-    payload: Any = None,
-) -> None:
-    """
-    Trigger before_route event.
-    """
-
-    self.emit(
-        "before_route",
-        route=route,
-        payload=payload,
-    )
-
-
-
-def after_route(
-    self,
-    route: str,
-    result: Any = None,
-) -> None:
-    """
-    Trigger after_route event.
-    """
-
-    self.emit(
-        "after_route",
-        route=route,
-        result=result,
-    )
-
-
-
-def before_handle(
-    self,
-    handler: Any,
-    payload: Any = None,
-) -> None:
-    """
-    Trigger before_handle event.
-    """
-
-    self.emit(
-        "before_handle",
-        handler=handler,
-        payload=payload,
-    )
-
-
-
-def after_handle(
-    self,
-    handler: Any,
-    result: Any = None,
-) -> None:
-    """
-    Trigger after_handle event.
-    """
-
-    self.emit(
-        "after_handle",
-        handler=handler,
-        result=result,
-    )
-
-
-
-def before_flush(
-    self,
-) -> None:
-    """
-    Trigger before_flush event.
-    """
-
-    self.emit(
-        "before_flush"
-    )
-
-
-
-def after_flush(
-    self,
-) -> None:
-    """
-    Trigger after_flush event.
-    """
-
-    self.emit(
-        "after_flush"
-    )
-
-
-
-def before_close(
-    self,
-) -> None:
-    """
-    Trigger before_close event.
-    """
-
-    self.emit(
-        "before_close"
-    )
-
-
-
-def after_close(
-    self,
-) -> None:
-    """
-    Trigger after_close event.
-    """
-
-    self.emit(
-        "after_close"
-    )
-
-
-
-# ------------------------------------------------------------------
-# Hook Management
-# ------------------------------------------------------------------
-
-def add_hook(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricDispatcher":
-    """
-    Add runtime event hook.
-    """
-
-    if event not in self._hooks:
-
-        self._hooks[event] = []
-
-
-    self._hooks[event].append(
-        callback
-    )
-
-
-    return self
-
-
-
-def remove_hook(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricDispatcher":
-    """
-    Remove runtime event hook.
-    """
-
-    hooks = self._hooks.get(
-        event,
-        [],
-    )
-
-
-    if callback in hooks:
-
-        hooks.remove(
-            callback
-        )
-
-
-    return self
-
-
-
-def clear_hooks(
-    self,
-    event: str | None = None,
-) -> "MetricDispatcher":
-    """
-    Clear event hooks.
-    """
-
-    if event is None:
-
-        self._hooks.clear()
-
-    else:
-
-        self._hooks.pop(
-            event,
-            None,
-        )
-
-
-    return self
-
-
-
-# ------------------------------------------------------------------
-# Dispatcher Events
-# ------------------------------------------------------------------
-
-def emit(
-    self,
-    event: str,
-    **payload,
-) -> None:
-    """
-    Emit dispatcher event.
-    """
-
-    event_record = {
-
-        "id": str(
-            uuid4()
-        ),
-
-        "event": event,
-
-        "timestamp":
-            datetime.utcnow(),
-
-        "payload": payload,
-
-    }
-
-
-    self._events.append(
-        event_record
-    )
-
-
-    self.notify(
-        event,
-        **payload,
-    )
-
-
-
-def notify(
-    self,
-    event: str,
-    **payload,
-) -> None:
-    """
-    Notify registered hooks.
-    """
-
-    callbacks = self._hooks.get(
-        event,
-        [],
-    )
-
-
-    for callback in callbacks:
-
-        callback(
-            **payload
-        )
-
-
-
-def subscribe(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricDispatcher":
-    """
-    Subscribe callback to event.
-    """
-
-    return self.add_hook(
-        event,
-        callback,
-    )
-
-
-
-def unsubscribe(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricDispatcher":
-    """
-    Unsubscribe callback from event.
-    """
-
-    return self.remove_hook(
-        event,
-        callback,
-    )
-# ==================================================================
-# Part 10. Python Protocols
-# ==================================================================
-
-from copy import copy as _copy
-from copy import deepcopy
-
-
-# ------------------------------------------------------------------
-# Representation
-# ------------------------------------------------------------------
-
-def __repr__(
-    self,
-) -> str:
-    """
-    Developer representation.
-    """
-
-    return (
-        f"{self.__class__.__name__}("
-        f"id={self._id!r}, "
-        f"name={self._name!r}, "
-        f"routes={self.route_count}, "
-        f"handlers={self.handler_count}, "
-        f"active={self.active}"
-        f")"
-    )
-
-
-
-def __str__(
-    self,
-) -> str:
-    """
-    Human readable representation.
-    """
-
-    return (
-        f"{self._name} "
-        f"[routes={self.route_count}, "
-        f"handlers={self.handler_count}]"
-    )
-
-
-
-# ------------------------------------------------------------------
-# Container
-# ------------------------------------------------------------------
-
-def __len__(
-    self,
-) -> int:
-    """
-    Number of registered routes.
-    """
-
-    return self.route_count
-
-
-
-def __iter__(
-    self,
-):
-    """
-    Iterate through routes.
-    """
-
-    return iter(
-        self._route_registry
-    )
-
-
-
-def __contains__(
-    self,
-    name: str,
-) -> bool:
-    """
-    Route existence check.
-    """
-
-    return self.contains_route(
-        name
-    )
-
-
-
-# ------------------------------------------------------------------
-# Mapping
-# ------------------------------------------------------------------
-
-def __getitem__(
-    self,
-    name: str,
-):
-    """
-    Dictionary style route lookup.
-    """
-
-    return self.get_route(
-        name
-    )
-
-
-
-def __setitem__(
-    self,
-    name: str,
-    route: Any,
-) -> None:
-    """
-    Dictionary style route registration.
-    """
-
-    self.register_route(
-        name,
-        route,
-    )
-
-
-
-def __delitem__(
-    self,
-    name: str,
-) -> None:
-    """
-    Dictionary style route removal.
-    """
-
-    self.unregister_route(
-        name
-    )
-
-
-
-# ------------------------------------------------------------------
-# Context Manager
-# ------------------------------------------------------------------
-
-def __enter__(
-    self,
-) -> "MetricDispatcher":
-    """
-    Enter dispatcher context.
-    """
-
-    self.enable()
-
-    return self
-
-
-
-def __exit__(
-    self,
-    exc_type,
-    exc_value,
-    traceback,
-) -> bool:
-    """
-    Exit dispatcher context.
-    """
-
-    self.close()
-
-    return False
-
-
-
-# ------------------------------------------------------------------
-# Callable
-# ------------------------------------------------------------------
-
-def __call__(
-    self,
-    payload: Any = None,
-    target: str | None = None,
-):
-    """
-    Callable dispatcher interface.
-    """
-
-    return self.dispatch(
-        payload,
-        target,
-    )
-
-
-
-# ------------------------------------------------------------------
-# Copy
-# ------------------------------------------------------------------
-
-def __copy__(
-    self,
-):
-    """
-    Shallow copy protocol.
-    """
-
-    return self.copy()
-
-
-
-def __deepcopy__(
-    self,
-    memo,
-):
-    """
-    Deep copy protocol.
-    """
-
-    return self.clone()                                            
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def __bool__(self) -> bool:
+        return self._enabled                

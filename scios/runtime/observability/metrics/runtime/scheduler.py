@@ -1,3240 +1,1727 @@
-"""
-SciOS-NG Runtime Metrics Scheduler Engine
-
-File:
-    scios/runtime/observability/metrics/runtime/scheduler.py
-
-Description
------------
-Runtime scheduler engine responsible for managing,
-executing and coordinating Metric jobs.
-
-SciOS-NG v0.2
-"""
+# ==============================================================================
+# Part 1. Header
+# ==============================================================================
 
 from __future__ import annotations
 
-from datetime import datetime
-from threading import RLock, Condition
+
+import json
+import time
+import threading
+import copy
+
+
 from typing import Any
-from uuid import uuid4
+from typing import Callable
+from typing import TypeAlias
+from typing import TypedDict
 
 
-# ==================================================================
-# Part 1. Foundation
-# ==================================================================
+from collections import deque
+from collections.abc import Iterator
 
 
-class MetricScheduler:
-    """
-    Runtime Metrics Scheduler Engine.
 
-    Responsibilities
-    ----------------
-    - Metric job scheduling
-    - Runtime execution control
-    - Periodic task management
-    - Job queue orchestration
-    - Scheduler lifecycle management
-    """
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
 
 
-    VERSION = "0.2.0"
+DEFAULT_NAME: str = "runtime"
 
 
-    # ==============================================================
-    # Constructor
-    # ==============================================================
+DEFAULT_ENABLED: bool = True
+
+
+DEFAULT_RUNNING: bool = False
+
+
+DEFAULT_INTERVAL: float = 1.0
+
+
+DEFAULT_MAX_TICKS: int = 1024
+
+
+DEFAULT_TICKS: int = 0
+
+
+DEFAULT_EXECUTED: int = 0
+
+
+DEFAULT_FAILED: int = 0
+
+
+DEFAULT_SUCCESS: int = 0
+
+
+DEFAULT_FAILURE: int = 0
+
+
+
+__all__ = [
+
+    # constants
+
+    "DEFAULT_NAME",
+    "DEFAULT_ENABLED",
+    "DEFAULT_RUNNING",
+    "DEFAULT_INTERVAL",
+    "DEFAULT_MAX_TICKS",
+    "DEFAULT_TICKS",
+    "DEFAULT_EXECUTED",
+    "DEFAULT_FAILED",
+    "DEFAULT_SUCCESS",
+    "DEFAULT_FAILURE",
+
+
+    # types
+
+    "ScheduledTask",
+    "TaskList",
+    "SchedulerState",
+    "SchedulerStats",
+
+
+    # runtime
+
+    "RuntimeScheduler",
+
+]
+
+
+
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+
+ScheduledTask: TypeAlias = dict[str, Any]
+
+
+TaskList: TypeAlias = list[ScheduledTask]
+
+
+
+class SchedulerState(TypedDict):
+
+    name: str
+
+    enabled: bool
+
+    running: bool
+
+    interval: float
+
+    max_ticks: int
+
+    ticks: int
+
+    executed: int
+
+    failed: int
+
+    tasks: TaskList
+
+
+
+class SchedulerStats(TypedDict):
+
+    ticks: int
+
+    executed: int
+
+    failed: int
+
+    success_rate: float
+
+    failure_rate: float
+
+    size: int
+
+
+
+# ==============================================================================
+# Part 4. RuntimeScheduler
+# ==============================================================================
+
+
+class RuntimeScheduler:
+
+
+    __slots__ = (
+
+        "_name",
+
+        "_enabled",
+
+        "_running",
+
+        "_interval",
+
+        "_max_ticks",
+
+        "_tasks",
+
+        "_ticks",
+
+        "_executed",
+
+        "_failed",
+
+        "_successes",
+
+        "_failures",
+
+        "_thread",
+
+        "_created_at",
+
+        "_last_tick",
+
+    )
+
+
 
     def __init__(
         self,
-        name: str = "MetricScheduler",
-        description: str = "",
+        *,
+        name: str = DEFAULT_NAME,
+        enabled: bool = DEFAULT_ENABLED,
+        running: bool = DEFAULT_RUNNING,
+        interval: float = DEFAULT_INTERVAL,
+        max_ticks: int = DEFAULT_MAX_TICKS,
     ) -> None:
-        """
-        Initialize Runtime Metrics Scheduler.
-        """
 
 
-        # ----------------------------------------------------------
-        # Identity
-        # ----------------------------------------------------------
+        # identity
 
-        self._id: str = str(
-            uuid4()
+        self._name = str(name)
+
+
+
+        # lifecycle
+
+        self._enabled = bool(enabled)
+
+        self._running = bool(running)
+
+
+
+        # configuration
+
+        self._interval = float(interval)
+
+        self._max_ticks = int(max_ticks)
+
+
+
+        # tasks
+
+        self._tasks = deque()
+
+
+
+        # counters
+
+        self._ticks = DEFAULT_TICKS
+
+        self._executed = DEFAULT_EXECUTED
+
+        self._failed = DEFAULT_FAILED
+
+
+
+        # statistics
+
+        self._successes = DEFAULT_SUCCESS
+
+        self._failures = DEFAULT_FAILURE
+
+
+
+        # threading
+
+        self._thread = None
+
+
+
+        # timestamps
+
+        self._created_at = time.time()
+
+        self._last_tick = None
+
+
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+
+    @property
+    def name(self) -> str:
+
+        return self._name
+
+
+
+    @property
+    def enabled(self) -> bool:
+
+        return self._enabled
+
+
+
+    @property
+    def running(self) -> bool:
+
+        return self._running
+
+
+
+    @property
+    def interval(self) -> float:
+
+        return self._interval
+
+
+
+    @property
+    def max_ticks(self) -> int:
+
+        return self._max_ticks
+
+
+
+    @property
+    def tasks(self) -> TaskList:
+
+        return list(self._tasks)
+
+
+
+    @property
+    def ticks(self) -> int:
+
+        return self._ticks
+
+
+
+    @property
+    def executed(self) -> int:
+
+        return self._executed
+
+
+
+    @property
+    def failed(self) -> int:
+
+        return self._failed
+
+
+
+    @property
+    def successes(self) -> int:
+
+        return self._successes
+
+
+
+    @property
+    def failures(self) -> int:
+
+        return self._failures
+
+
+
+    @property
+    def created_at(self) -> float:
+
+        return self._created_at
+
+
+
+    @property
+    def last_tick(self) -> float | None:
+
+        return self._last_tick
+
+
+
+    @property
+    def size(self) -> int:
+
+        return len(self._tasks)
+
+
+
+    @property
+    def utilization(self) -> float:
+
+
+        if self._max_ticks <= 0:
+
+            return 0.0
+
+
+        return min(
+            1.0,
+            self._ticks / self._max_ticks,
         )
 
-        self._name: str = name
-
-        self._description: str = description
-
-
-
-        # ----------------------------------------------------------
-        # Scheduling
-        # ----------------------------------------------------------
-
-        # Ordered scheduled jobs
-
-        self._jobs: list[Any] = []
+# ==============================================================================
+# Part 5. Lifecycle
+# ==============================================================================
 
 
-        # Named job registry
+    def start(self):
 
-        self._job_registry: dict[str, Any] = {}
+        self._running = True
 
-
-        # Runtime execution queue
-
-        self._queue: list[Any] = []
-
-
-        # Schedule definitions
-
-        self._schedule_registry: dict[str, Any] = {}
+        return self
 
 
 
-        # ----------------------------------------------------------
-        # Runtime State
-        # ----------------------------------------------------------
+    def stop(self):
 
-        self._enabled: bool = True
-
-        self._frozen: bool = False
-
-        self._closed: bool = False
-
-        self._running: bool = False
+        self._running = False
 
 
+        if self._thread is not None:
 
-        # ----------------------------------------------------------
-        # Synchronization
-        # ----------------------------------------------------------
+            if self._thread.is_alive():
 
-        self._lock = RLock()
+                self._thread.join(
+                    timeout=self._interval * 2
+                )
 
-        self._condition = Condition(
-            self._lock
-        )
+
+            self._thread = None
+
+
+        return self
 
 
 
-        # ----------------------------------------------------------
-        # Metadata
-        # ----------------------------------------------------------
+    def enable(self):
 
-        now = datetime.utcnow()
+        self._enabled = True
 
-        self._created_at: datetime = now
-
-        self._updated_at: datetime = now
-
-        self._version: str = self.VERSION
+        return self
 
 
 
-        # ----------------------------------------------------------
-        # Internal Components
-        # ----------------------------------------------------------
+    def disable(self):
 
-        self._statistics: dict[str, Any] = {
+        self._enabled = False
 
-            "scheduled_count": 0,
-
-            "executed_count": 0,
-
-            "success_count": 0,
-
-            "failure_count": 0,
-
-            "cancelled_count": 0,
-
-            "total_latency": 0.0,
-
-        }
-
-
-        self._hooks: dict[str, list[Any]] = {}
-
-
-        self._events: list[dict[str, Any]] = []
-
-
-        self._snapshot: dict[str, Any] | None = None
-
-
-        self._context: dict[str, Any] = {}
+        return self
 
 
 
-    # ==============================================================
-    # Internal Utilities
-    # ==============================================================
+    def clear(self):
 
-    def _touch(
-        self,
-    ) -> None:
+        self._tasks.clear()
+
+        self.reset_statistics()
+
+        self._ticks = DEFAULT_TICKS
+
+        self._last_tick = None
+
+        return self
+
+
+
+    def reset(self):
+
+        self.stop()
+
+
+        self._enabled = DEFAULT_ENABLED
+
+        self._running = DEFAULT_RUNNING
+
+        self._interval = DEFAULT_INTERVAL
+
+        self._max_ticks = DEFAULT_MAX_TICKS
+
+
+        return self.clear()
+
+
+
+    def tick(self):
+
+        if not self._enabled:
+
+            self.record_failure()
+
+            return False
+
+
+        if self._max_ticks > 0 and self._ticks >= self._max_ticks:
+
+            return False
+
+
+        self._ticks += 1
+
+        self._last_tick = time.time()
+
+
+        success = True
+
+
+        for task in list(self._tasks):
+
+            try:
+
+                callback = task.get(
+                    "callback"
+                )
+
+
+                if callable(callback):
+
+                    callback()
+
+
+                self._executed += 1
+
+                self.record_success()
+
+
+            except Exception:
+
+                success = False
+
+                self.record_failure()
+
+
+        return success
+
+
+    def run_once(self):
         """
-        Update runtime timestamp.
+        Execute one scheduler cycle.
         """
-
-        self._updated_at = datetime.utcnow()
-
-
-
-    def _ensure_writable(
-        self,
-    ) -> None:
-        """
-        Validate scheduler state.
-        """
-
-        if self._closed:
-
-            raise RuntimeError(
-                "MetricScheduler is closed."
-            )
-
-
-        if self._frozen:
-
-            raise RuntimeError(
-                "MetricScheduler is frozen."
-            )
 
 
         if not self._enabled:
 
-            raise RuntimeError(
-                "MetricScheduler is disabled."
-            )
+            return False
 
 
 
-    def _ensure_active(
+        if self._max_ticks > 0 and self._ticks >= self._max_ticks:
+
+            return False
+
+
+
+        self._ticks += 1
+
+        self._last_tick = time.time()
+
+
+
+        success = True
+
+
+
+        for task in list(self._tasks):
+
+            try:
+
+                callback = task.get(
+                    "callback"
+                )
+
+
+                if callable(callback):
+
+                    callback()
+
+
+                self._executed += 1
+
+                self.record_success()
+
+
+
+            except Exception:
+
+                success = False
+
+                self.record_failure()
+
+
+
+        return success
+
+
+    def run_forever(self):
+        """
+        Start scheduler loop in background thread.
+        """
+
+        if self._running:
+
+            return self
+
+
+
+        self._running = True
+
+
+
+        def loop():
+
+            while self._running:
+
+                self.tick()
+
+
+                time.sleep(
+                    self._interval
+                )
+
+
+
+        self._thread = threading.Thread(
+
+            target=loop,
+
+            daemon=True,
+
+            name=f"{self._name}-scheduler",
+
+        )
+
+
+        self._thread.start()
+
+
+        return self
+
+
+
+# ==============================================================================
+# Part 6. Task API
+# ==============================================================================
+
+
+    def add(
         self,
-    ) -> None:
-        """
-        Validate scheduler execution state.
-        """
-
-        self._ensure_writable()
+        task: ScheduledTask,
+    ) -> bool:
 
 
-        if not self._running:
+        if len(self._tasks) >= self._max_ticks:
 
-            raise RuntimeError(
-                "MetricScheduler is not running."
-            )
-# ==================================================================
-# Part 2. Scheduling API
-# ==================================================================
-
-import time
-from datetime import timedelta
-
-
-# ------------------------------------------------------------------
-# Job Scheduling
-# ------------------------------------------------------------------
-
-def schedule(
-    self,
-    name: str,
-    job: Any,
-    schedule: Any = None,
-) -> Any:
-    """
-    Register a Runtime Metric Job.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-        self._job_registry[name] = {
-            "job": job,
-            "schedule": schedule,
-            "created_at": datetime.utcnow(),
-            "last_run": None,
-            "status": "scheduled",
-        }
-
-        self._jobs.append(
-            name
-        )
-
-        self._schedule_registry[name] = schedule
-
-
-        self._statistics[
-            "scheduled_count"
-        ] += 1
-
-
-        self._touch()
-
-
-        return job
+            return False
 
 
 
-def schedule_once(
-    self,
-    name: str,
-    job: Any,
-    delay: float = 0,
-) -> Any:
-    """
-    Schedule one-time execution.
-    """
-
-    return self.schedule(
-        name,
-        job,
-        {
-            "type": "once",
-            "delay": delay,
-        },
-    )
-
-
-
-def schedule_periodic(
-    self,
-    name: str,
-    job: Any,
-    interval: float,
-) -> Any:
-    """
-    Schedule periodic execution.
-    """
-
-    return self.schedule(
-        name,
-        job,
-        {
-            "type": "periodic",
-            "interval": interval,
-        },
-    )
-
-
-
-def schedule_interval(
-    self,
-    name: str,
-    job: Any,
-    seconds: float,
-) -> Any:
-    """
-    Schedule interval execution.
-    """
-
-    return self.schedule_periodic(
-        name,
-        job,
-        seconds,
-    )
-
-
-
-def schedule_cron(
-    self,
-    name: str,
-    job: Any,
-    expression: str,
-) -> Any:
-    """
-    Schedule cron-like execution.
-    """
-
-    return self.schedule(
-        name,
-        job,
-        {
-            "type": "cron",
-            "expression": expression,
-        },
-    )
-
-
-
-# ------------------------------------------------------------------
-# Job Execution
-# ------------------------------------------------------------------
-
-def run(
-    self,
-    name: str,
-    *args,
-    **kwargs,
-) -> Any:
-    """
-    Run scheduled job immediately.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-
-        if name not in self._job_registry:
-
-            raise KeyError(
-                f"Unknown job: {name}"
-            )
-
-
-        entry = self._job_registry[name]
-
-        job = entry["job"]
-
-
-    start = time.perf_counter()
-
-
-    try:
-
-        self.before_execute(
-            name
+        self._tasks.append(
+            self.normalize(task)
         )
 
 
-        result = self.execute(
-            job,
-            *args,
-            **kwargs,
-        )
+        return True
 
 
-        elapsed = (
-            time.perf_counter()
-            -
-            start
-        )
+
+    def add_many(
+        self,
+        tasks: TaskList,
+    ) -> bool:
 
 
-        with self._lock:
-
-            entry["last_run"] = datetime.utcnow()
-
-            entry["status"] = "completed"
+        result = True
 
 
-            self._statistics[
-                "executed_count"
-            ] += 1
+        for task in tasks:
 
+            if not self.add(task):
 
-            self._statistics[
-                "success_count"
-            ] += 1
-
-
-            self._statistics[
-                "total_latency"
-            ] += elapsed
-
-
-            self._touch()
-
-
-        self.after_execute(
-            name,
-            result,
-        )
+                result = False
 
 
         return result
 
 
-    except Exception:
 
-        with self._lock:
-
-            self._statistics[
-                "failure_count"
-            ] += 1
+    def append(
+        self,
+        task: ScheduledTask,
+    ) -> bool:
 
 
-            entry["status"] = "failed"
-
-
-        raise
+        return self.add(task)
 
 
 
-def execute(
-    self,
-    job: Any,
-    *args,
-    **kwargs,
-) -> Any:
-    """
-    Execute job callable.
-    """
+    def extend(
+        self,
+        tasks: TaskList,
+    ) -> bool:
 
-    if hasattr(
-        job,
-        "execute",
+
+        return self.add_many(tasks)
+
+
+
+    def remove(
+        self,
+        task: ScheduledTask,
+    ) -> bool:
+
+
+        try:
+
+            self._tasks.remove(task)
+
+            return True
+
+
+        except ValueError:
+
+            return False
+
+
+
+    def pop(
+        self,
+        index: int = -1,
     ):
 
-        return job.execute(
-            *args,
-            **kwargs,
-        )
 
-
-    if callable(job):
-
-        return job(
-            *args,
-            **kwargs,
-        )
-
-
-    raise TypeError(
-        "Job is not executable."
-    )
-
-
-
-def trigger(
-    self,
-    name: str,
-) -> Any:
-    """
-    Trigger job execution.
-    """
-
-    return self.run(
-        name
-    )
-
-
-
-def cancel(
-    self,
-    name: str,
-) -> Any:
-    """
-    Cancel scheduled job.
-    """
-
-    with self._lock:
-
-        job = self._job_registry.get(
-            name
-        )
-
-
-        if job is None:
+        if not self._tasks:
 
             return None
 
 
-        job["status"] = "cancelled"
 
+        tasks = list(self._tasks)
 
-        self._statistics[
-            "cancelled_count"
-        ] += 1
 
+        value = tasks.pop(index)
 
-        self._touch()
 
+        self._tasks = deque(tasks)
 
-        return job
 
+        return value
 
 
-# ------------------------------------------------------------------
-# Batch
-# ------------------------------------------------------------------
 
-def schedule_many(
-    self,
-    jobs: dict[str, Any],
-) -> list[Any]:
-    """
-    Register multiple jobs.
-    """
+    def latest(self):
 
-    results = []
 
-    for name, job in jobs.items():
+        if not self._tasks:
 
-        results.append(
-            self.schedule(
-                name,
-                job,
-            )
-        )
+            return None
 
-    return results
 
+        return self._tasks[-1]
 
 
-def cancel_many(
-    self,
-    names: list[str],
-) -> list[Any]:
-    """
-    Cancel multiple jobs.
-    """
 
-    results = []
+    def first(self):
 
-    for name in names:
 
-        results.append(
-            self.cancel(
-                name
-            )
-        )
+        if not self._tasks:
 
-    return results
+            return None
 
 
+        return self._tasks[0]
 
-# ------------------------------------------------------------------
-# Runtime
-# ------------------------------------------------------------------
 
-def update(
-    self,
-    context: dict[str, Any] | None = None,
-) -> "MetricScheduler":
-    """
-    Update scheduler context.
-    """
 
-    with self._lock:
-
-        self._ensure_writable()
-
-
-        if context:
-
-            self._context.update(
-                context
-            )
-
-
-        self._touch()
-
-
-    return self
-
-
-
-def flush(
-    self,
-) -> "MetricScheduler":
-    """
-    Flush runtime queue.
-    """
-
-    with self._lock:
-
-        self._queue.clear()
-
-        self._touch()
-
-
-    return self
-
-
-
-def reset(
-    self,
-) -> "MetricScheduler":
-    """
-    Reset scheduler runtime state.
-    """
-
-    with self._lock:
-
-        self._queue.clear()
-
-        self._statistics.update(
-            {
-                "executed_count": 0,
-                "success_count": 0,
-                "failure_count": 0,
-                "cancelled_count": 0,
-            }
-        )
-
-
-        self._touch()
-
-
-    return self
-# ==================================================================
-# Part 3. Job Registry API
-# ==================================================================
-
-
-# ------------------------------------------------------------------
-# Registration
-# ------------------------------------------------------------------
-
-def register_job(
-    self,
-    name: str,
-    job: Any,
-    schedule: Any = None,
-) -> Any:
-    """
-    Register Runtime Metric Job.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-
-        self._job_registry[name] = {
-
-            "job": job,
-
-            "schedule": schedule,
-
-            "created_at": datetime.utcnow(),
-
-            "last_run": None,
-
-            "status": "registered",
-
-        }
-
-
-        if name not in self._jobs:
-
-            self._jobs.append(
-                name
-            )
-
-
-        if schedule is not None:
-
-            self._schedule_registry[name] = schedule
-
-
-        self._statistics[
-            "scheduled_count"
-        ] = len(
-            self._job_registry
-        )
-
-
-        self._touch()
-
-
-        return job
-
-
-
-def unregister_job(
-    self,
-    name: str,
-) -> Any:
-    """
-    Remove Runtime Metric Job.
-    """
-
-    with self._lock:
-
-        job = self._job_registry.pop(
-            name,
-            None,
-        )
-
-
-        self._schedule_registry.pop(
-            name,
-            None,
-        )
-
-
-        if name in self._jobs:
-
-            self._jobs.remove(
-                name
-            )
-
-
-        self._touch()
-
-
-        return job
-
-
-
-# ------------------------------------------------------------------
-# Lookup
-# ------------------------------------------------------------------
-
-def contains_job(
-    self,
-    name: str,
-) -> bool:
-    """
-    Check job existence.
-    """
-
-    return name in self._job_registry
-
-
-
-def exists_job(
-    self,
-    name: str,
-) -> bool:
-    """
-    Alias for contains_job().
-    """
-
-    return self.contains_job(
-        name
-    )
-
-
-
-def get_job(
-    self,
-    name: str,
-    default=None,
-):
-    """
-    Get registered job.
-    """
-
-    return self._job_registry.get(
-        name,
-        default,
-    )
-
-
-
-def find_job(
-    self,
-    name: str,
-):
-    """
-    Find job or raise error.
-    """
-
-    job = self.get_job(
-        name
-    )
-
-
-    if job is None:
-
-        raise KeyError(
-            f"Unknown job: {name}"
-        )
-
-
-    return job
-
-
-
-# ------------------------------------------------------------------
-# Enumeration
-# ------------------------------------------------------------------
-
-def jobs(
-    self,
-) -> list[Any]:
-    """
-    Return registered jobs.
-    """
-
-    return list(
-        self._job_registry.values()
-    )
-
-
-
-def keys(
-    self,
-):
-    """
-    Return job names.
-    """
-
-    return self._job_registry.keys()
-
-
-
-def values(
-    self,
-):
-    """
-    Return job entries.
-    """
-
-    return self._job_registry.values()
-
-
-
-def items(
-    self,
-):
-    """
-    Return job registry items.
-    """
-
-    return self._job_registry.items()
-
-
-
-# ------------------------------------------------------------------
-# Information
-# ------------------------------------------------------------------
-
-def job_count(
-    self,
-) -> int:
-    """
-    Number of registered jobs.
-    """
-
-    return len(
-        self._job_registry
-    )
-
-
-
-def job_names(
-    self,
-) -> list[str]:
-    """
-    Return job names.
-    """
-
-    return list(
-        self._job_registry.keys()
-    )
-
-
-
-# ------------------------------------------------------------------
-# Maintenance
-# ------------------------------------------------------------------
-
-def clear_jobs(
-    self,
-) -> "MetricScheduler":
-    """
-    Clear all registered jobs.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-
-        self._job_registry.clear()
-
-        self._schedule_registry.clear()
-
-        self._jobs.clear()
-
-
-        self._statistics[
-            "scheduled_count"
-        ] = 0
-
-
-        self._touch()
-
-
-    return self
-# ==================================================================
-# Part 4. Scheduling Strategy API
-# ==================================================================
-
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-
-
-# ------------------------------------------------------------------
-# Built-in Strategies
-# ------------------------------------------------------------------
-
-def fifo(
-    self,
-) -> list[str]:
-    """
-    First-In First-Out scheduling.
-    """
-
-    return list(
-        self._jobs
-    )
-
-
-
-def priority(
-    self,
-) -> list[str]:
-    """
-    Priority based scheduling.
-
-    Job priority is read from:
-        job["priority"]
-    """
-
-    jobs = list(
-        self._job_registry.items()
-    )
-
-
-    jobs.sort(
-        key=lambda item:
-            item[1].get(
-                "priority",
-                0,
-            ),
-        reverse=True,
-    )
-
-
-    return [
-        name
-        for name, _
-        in jobs
-    ]
-
-
-
-def round_robin(
-    self,
-) -> list[str]:
-    """
-    Round robin scheduling.
-    """
-
-    if not self._jobs:
-
-        return []
-
-
-    queue = list(
-        self._jobs
-    )
-
-
-    first = queue.pop(
-        0
-    )
-
-
-    queue.append(
-        first
-    )
-
-
-    self._jobs = queue
-
-
-    return queue
-
-
-
-def fair(
-    self,
-) -> list[str]:
-    """
-    Fair scheduling based on execution count.
-    """
-
-    jobs = list(
-        self._job_registry.items()
-    )
-
-
-    jobs.sort(
-        key=lambda item:
-            item[1].get(
-                "executed",
-                0,
-            )
-    )
-
-
-    return [
-        name
-        for name, _
-        in jobs
-    ]
-
-
-
-# ------------------------------------------------------------------
-# Timing Strategies
-# ------------------------------------------------------------------
-
-def delay(
-    self,
-    seconds: float,
-) -> None:
-    """
-    Delay scheduler execution.
-    """
-
-    import time
-
-    time.sleep(
-        seconds
-    )
-
-
-
-def interval(
-    self,
-    seconds: float,
-) -> dict[str, Any]:
-    """
-    Interval timing strategy.
-    """
-
-    return {
-        "type": "interval",
-        "seconds": seconds,
-    }
-
-
-
-def periodic(
-    self,
-    interval: float,
-) -> dict[str, Any]:
-    """
-    Periodic execution strategy.
-    """
-
-    return {
-
-        "type": "periodic",
-
-        "interval": interval,
-
-        "enabled": True,
-
-    }
-
-
-
-def cron(
-    self,
-    expression: str,
-) -> dict[str, Any]:
-    """
-    Cron timing strategy.
-    """
-
-    return {
-
-        "type": "cron",
-
-        "expression": expression,
-
-    }
-
-
-
-# ------------------------------------------------------------------
-# Execution Strategies
-# ------------------------------------------------------------------
-
-def sync(
-    self,
-    job: Any,
-    *args,
-    **kwargs,
-):
-    """
-    Synchronous execution.
-    """
-
-    return self.execute(
-        job,
-        *args,
-        **kwargs,
-    )
-
-
-
-async def async_execute(
-    self,
-    job: Any,
-    *args,
-    **kwargs,
-):
-    """
-    Async execution strategy.
-    """
-
-    loop = asyncio.get_running_loop()
-
-
-    return await loop.run_in_executor(
-        None,
-        lambda:
-            self.execute(
-                job,
-                *args,
-                **kwargs,
-            )
-    )
-
-
-
-def parallel(
-    self,
-    jobs: list[Any],
-):
-    """
-    Parallel execution strategy.
-    """
-
-    results = []
-
-
-    with ThreadPoolExecutor() as executor:
-
-        futures = [
-
-            executor.submit(
-                self.execute,
-                job,
-            )
-
-            for job in jobs
-
-        ]
-
-
-        for future in futures:
-
-            results.append(
-                future.result()
-            )
-
-
-    return results
-
-
-
-# ------------------------------------------------------------------
-# Strategy Management
-# ------------------------------------------------------------------
-
-def register_strategy(
-    self,
-    name: str,
-    strategy: Any,
-) -> "MetricScheduler":
-    """
-    Register custom scheduling strategy.
-    """
-
-    if not hasattr(
+    def get(
         self,
-        "_strategy_registry",
+        index: int,
     ):
 
-        self._strategy_registry = {}
+
+        try:
+
+            return self.tasks[index]
 
 
-    self._strategy_registry[name] = strategy
+        except IndexError:
 
-
-    self._touch()
-
-
-    return self
-
-
-
-def remove_strategy(
-    self,
-    name: str,
-) -> Any:
-    """
-    Remove strategy.
-    """
-
-    if not hasattr(
-        self,
-        "_strategy_registry",
-    ):
-
-        return None
-
-
-    strategy = self._strategy_registry.pop(
-        name,
-        None,
-    )
-
-
-    self._touch()
-
-
-    return strategy
+            return None
 
 
 
-def strategy(
-    self,
-    name: str,
-):
-    """
-    Retrieve strategy.
-    """
+    def task_list(self):
 
-    builtin = {
-
-        "fifo": self.fifo,
-
-        "priority": self.priority,
-
-        "round_robin": self.round_robin,
-
-        "fair": self.fair,
-
-        "sync": self.sync,
-
-        "parallel": self.parallel,
-
-        "interval": self.interval,
-
-        "periodic": self.periodic,
-
-        "cron": self.cron,
-
-    }
+        return list(self._tasks)
 
 
-    if name in builtin:
 
-        return builtin[name]
+    def clear_tasks(self):
 
+        self._tasks.clear()
 
-    registry = getattr(
-        self,
-        "_strategy_registry",
-        {},
-    )
+        return self
 
 
-    if name not in registry:
 
-        raise KeyError(
-            f"Unknown strategy: {name}"
+    def has_tasks(self):
+
+        return bool(self._tasks)
+
+
+
+    def task_count(self):
+
+        return len(self._tasks)
+
+
+
+# ==============================================================================
+# Part 7. Statistics
+# ==============================================================================
+
+
+    def record_success(self):
+
+        self._executed += 1
+
+        self._successes += 1
+
+        return self
+
+
+
+    def record_failure(self):
+
+        self._failed += 1
+
+        self._failures += 1
+
+        return self
+
+
+
+    def success_rate(self):
+
+
+        total = (
+            self._successes
+            +
+            self._failures
         )
 
 
-    return registry[name]
-# ==================================================================
-# Part 5. Lifecycle Management
-# ==================================================================
+        if total == 0:
 
+            return 0.0
 
-# ------------------------------------------------------------------
-# Lifecycle
-# ------------------------------------------------------------------
 
-def enable(
-    self,
-) -> "MetricScheduler":
-    """
-    Enable scheduler.
-    """
+        return self._successes / total
 
-    with self._lock:
 
-        if self._closed:
 
-            raise RuntimeError(
-                "Cannot enable closed scheduler."
-            )
+    def failure_rate(self):
 
 
-        self._enabled = True
+        total = (
+            self._successes
+            +
+            self._failures
+        )
 
-        self._touch()
 
+        if total == 0:
 
-    return self
+            return 0.0
 
 
+        return self._failures / total
 
-def disable(
-    self,
-) -> "MetricScheduler":
-    """
-    Disable scheduler.
-    """
 
-    with self._lock:
 
-        self._enabled = False
+    def total_processed(self):
 
-        self._running = False
+        return (
+            self._successes
+            +
+            self._failures
+        )
 
-        self._touch()
 
 
-    return self
+    def statistics(self):
 
+        return {
 
+            "ticks": self._ticks,
 
-def freeze(
-    self,
-) -> "MetricScheduler":
-    """
-    Freeze scheduler mutations.
-    """
+            "executed": self._executed,
 
-    with self._lock:
+            "failed": self._failed,
 
-        self._frozen = True
+            "success_rate": self.success_rate(),
 
-        self._running = False
+            "failure_rate": self.failure_rate(),
 
-        self._touch()
-
-
-    return self
-
-
-
-def unfreeze(
-    self,
-) -> "MetricScheduler":
-    """
-    Unfreeze scheduler.
-    """
-
-    with self._lock:
-
-        if self._closed:
-
-            raise RuntimeError(
-                "Cannot unfreeze closed scheduler."
-            )
-
-
-        self._frozen = False
-
-        self._touch()
-
-
-    return self
-
-
-
-def close(
-    self,
-) -> "MetricScheduler":
-    """
-    Close scheduler permanently.
-    """
-
-    with self._lock:
-
-        if self._closed:
-
-            return self
-
-
-        self._running = False
-
-        self._enabled = False
-
-        self._closed = True
-
-
-        self._queue.clear()
-
-
-        self._touch()
-
-
-    self.after_close()
-
-
-    return self
-
-
-
-def reopen(
-    self,
-) -> "MetricScheduler":
-    """
-    Reopen closed scheduler.
-    """
-
-    with self._lock:
-
-        self._closed = False
-
-        self._enabled = True
-
-        self._frozen = False
-
-        self._running = False
-
-
-        self._touch()
-
-
-    return self
-
-
-
-# ------------------------------------------------------------------
-# Properties
-# ------------------------------------------------------------------
-
-@property
-def enabled(
-    self,
-) -> bool:
-    """
-    Scheduler enabled state.
-    """
-
-    return self._enabled
-
-
-
-@property
-def disabled(
-    self,
-) -> bool:
-    """
-    Scheduler disabled state.
-    """
-
-    return not self._enabled
-
-
-
-@property
-def frozen(
-    self,
-) -> bool:
-    """
-    Scheduler frozen state.
-    """
-
-    return self._frozen
-
-
-
-@property
-def closed(
-    self,
-) -> bool:
-    """
-    Scheduler closed state.
-    """
-
-    return self._closed
-
-
-
-@property
-def running(
-    self,
-) -> bool:
-    """
-    Scheduler running state.
-    """
-
-    return self._running
-
-
-
-@property
-def active(
-    self,
-) -> bool:
-    """
-    Scheduler active state.
-
-    Active means:
-        enabled
-        not frozen
-        not closed
-        running
-    """
-
-    return (
-        self._enabled
-        and
-        not self._frozen
-        and
-        not self._closed
-        and
-        self._running
-    )
-# ==================================================================
-# Part 6. Runtime Operations
-# ==================================================================
-
-from copy import copy as _copy
-from copy import deepcopy
-
-
-# ------------------------------------------------------------------
-# Snapshot
-# ------------------------------------------------------------------
-
-def snapshot(
-    self,
-) -> dict[str, Any]:
-    """
-    Create scheduler runtime snapshot.
-    """
-
-    with self._lock:
-
-        snapshot = {
-
-            "id": self._id,
-
-            "name": self._name,
-
-            "description": self._description,
-
-
-            "jobs": deepcopy(
-                self._jobs
-            ),
-
-            "job_registry": deepcopy(
-                self._job_registry
-            ),
-
-            "queue": deepcopy(
-                self._queue
-            ),
-
-            "schedule_registry": deepcopy(
-                self._schedule_registry
-            ),
-
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "running": self._running,
-
-
-            "statistics": deepcopy(
-                self._statistics
-            ),
-
-            "context": deepcopy(
-                self._context
-            ),
-
-
-            "created_at": self._created_at,
-
-            "updated_at": self._updated_at,
-
-            "version": self._version,
+            "size": self.size,
 
         }
 
 
-        self._snapshot = deepcopy(
-            snapshot
-        )
 
+    def reset_statistics(self):
 
-        return snapshot
+        self._executed = DEFAULT_EXECUTED
 
+        self._failed = DEFAULT_FAILED
 
+        self._successes = DEFAULT_SUCCESS
 
-def restore(
-    self,
-    snapshot: dict[str, Any] | None = None,
-) -> "MetricScheduler":
-    """
-    Restore scheduler state.
-    """
+        self._failures = DEFAULT_FAILURE
 
-    with self._lock:
 
-        data = (
-            snapshot
-            or self._snapshot
-        )
+        return self
 
 
-        if data is None:
 
-            raise RuntimeError(
-                "No scheduler snapshot available."
-            )
+# ==============================================================================
+# Part 8. Operations
+# ==============================================================================
 
 
-        self._id = data["id"]
+    def clone(self):
 
-        self._name = data["name"]
-
-        self._description = data[
-            "description"
-        ]
-
-
-        self._jobs = deepcopy(
-            data["jobs"]
-        )
-
-
-        self._job_registry = deepcopy(
-            data["job_registry"]
-        )
-
-
-        self._queue = deepcopy(
-            data["queue"]
-        )
-
-
-        self._schedule_registry = deepcopy(
-            data["schedule_registry"]
-        )
-
-
-        self._enabled = data[
-            "enabled"
-        ]
-
-        self._frozen = data[
-            "frozen"
-        ]
-
-        self._closed = data[
-            "closed"
-        ]
-
-        self._running = data[
-            "running"
-        ]
-
-
-        self._statistics = deepcopy(
-            data["statistics"]
-        )
-
-
-        self._context = deepcopy(
-            data["context"]
-        )
-
-
-        self._created_at = data[
-            "created_at"
-        ]
-
-        self._updated_at = data[
-            "updated_at"
-        ]
-
-        self._version = data[
-            "version"
-        ]
-
-
-        self._touch()
-
-
-    return self
-
-
-
-# ------------------------------------------------------------------
-# Object Management
-# ------------------------------------------------------------------
-
-def clone(
-    self,
-) -> "MetricScheduler":
-    """
-    Deep clone scheduler.
-    """
-
-    return deepcopy(
-        self
-    )
-
-
-
-def copy(
-    self,
-) -> "MetricScheduler":
-    """
-    Shallow copy scheduler.
-    """
-
-    return _copy(
-        self
-    )
-
-
-
-# ------------------------------------------------------------------
-# Cleanup
-# ------------------------------------------------------------------
-
-def clear(
-    self,
-) -> "MetricScheduler":
-    """
-    Clear runtime execution state.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-
-        self._queue.clear()
-
-
-        self._context.clear()
-
-
-        self._events.clear()
-
-
-        self._touch()
-
-
-    return self
-
-
-
-def compact(
-    self,
-) -> "MetricScheduler":
-    """
-    Compact scheduler registries.
-    """
-
-    with self._lock:
-
-        self._ensure_writable()
-
-
-        self._jobs = [
-
-            name
-
-            for name in self._jobs
-
-            if name in self._job_registry
-
-        ]
-
-
-        self._schedule_registry = {
-
-            name: schedule
-
-            for name, schedule
-            in self._schedule_registry.items()
-
-            if name in self._job_registry
-
-        }
-
-
-        self._touch()
-
-
-    return self
-
-
-
-def cleanup(
-    self,
-) -> "MetricScheduler":
-    """
-    Full scheduler cleanup.
-    """
-
-    with self._lock:
-
-        self.compact()
-
-        self.clear()
-
-
-        self._queue.clear()
-
-
-        self._touch()
-
-
-    return self
-# ==================================================================
-# Part 7. Statistics & Diagnostics
-# ==================================================================
-
-from datetime import datetime
-
-
-# ------------------------------------------------------------------
-# Runtime Metrics
-# ------------------------------------------------------------------
-
-@property
-def job_count(
-    self,
-) -> int:
-    """
-    Number of registered jobs.
-    """
-
-    return len(
-        self._job_registry
-    )
-
-
-
-@property
-def scheduled_count(
-    self,
-) -> int:
-    """
-    Total scheduled jobs.
-    """
-
-    return self._statistics.get(
-        "scheduled_count",
-        0,
-    )
-
-
-
-@property
-def executed_count(
-    self,
-) -> int:
-    """
-    Total executed jobs.
-    """
-
-    return self._statistics.get(
-        "executed_count",
-        0,
-    )
-
-
-
-@property
-def success_count(
-    self,
-) -> int:
-    """
-    Successful executions.
-    """
-
-    return self._statistics.get(
-        "success_count",
-        0,
-    )
-
-
-
-@property
-def failure_count(
-    self,
-) -> int:
-    """
-    Failed executions.
-    """
-
-    return self._statistics.get(
-        "failure_count",
-        0,
-    )
-
-
-
-@property
-def cancelled_count(
-    self,
-) -> int:
-    """
-    Cancelled jobs.
-    """
-
-    return self._statistics.get(
-        "cancelled_count",
-        0,
-    )
-
-
-
-@property
-def latency(
-    self,
-) -> float:
-    """
-    Average execution latency.
-
-    Unit:
-        seconds
-    """
-
-    count = self.executed_count
-
-
-    if count == 0:
-
-        return 0.0
-
-
-    return (
-        self._statistics.get(
-            "total_latency",
-            0.0,
-        )
-        /
-        count
-    )
-
-
-
-@property
-def throughput(
-    self,
-) -> float:
-    """
-    Scheduler throughput.
-
-    Unit:
-        jobs / second
-    """
-
-    uptime = self.uptime
-
-
-    if uptime <= 0:
-
-        return 0.0
-
-
-    return (
-        self.executed_count
-        /
-        uptime
-    )
-
-
-
-@property
-def uptime(
-    self,
-) -> float:
-    """
-    Scheduler uptime.
-
-    Unit:
-        seconds
-    """
-
-    return (
-        datetime.utcnow()
-        -
-        self._created_at
-    ).total_seconds()
-
-
-
-# ------------------------------------------------------------------
-# Statistics
-# ------------------------------------------------------------------
-
-def summary(
-    self,
-) -> dict[str, Any]:
-    """
-    Return scheduler summary.
-    """
-
-    return {
-
-        "id": self._id,
-
-        "name": self._name,
-
-        "jobs": self.job_count,
-
-        "scheduled": self.scheduled_count,
-
-        "executed": self.executed_count,
-
-        "success": self.success_count,
-
-        "failure": self.failure_count,
-
-        "cancelled": self.cancelled_count,
-
-        "running": self.running,
-
-        "active": self.active,
-
-    }
-
-
-
-def statistics(
-    self,
-) -> dict[str, Any]:
-    """
-    Detailed scheduler statistics.
-    """
-
-    return {
-
-        **self.summary(),
-
-        "latency": self.latency,
-
-        "throughput": self.throughput,
-
-        "uptime": self.uptime,
-
-
-        "runtime": dict(
-            self._statistics
-        ),
-
-    }
-
-
-
-def report(
-    self,
-) -> dict[str, Any]:
-    """
-    Generate scheduler report.
-    """
-
-    return {
-
-        "summary": self.summary(),
-
-        "statistics": self.statistics(),
-
-        "status": self.status(),
-
-        "health": self.health(),
-
-        "performance": self.performance(),
-
-    }
-
-
-
-# ------------------------------------------------------------------
-# Diagnostics
-# ------------------------------------------------------------------
-
-def health(
-    self,
-) -> str:
-    """
-    Scheduler health state.
-    """
-
-    if self.closed:
-
-        return "closed"
-
-
-
-    if self.frozen:
-
-        return "frozen"
-
-
-
-    if self.disabled:
-
-        return "disabled"
-
-
-
-    if self.failure_count > 0:
-
-        return "degraded"
-
-
-
-    return "healthy"
-
-
-
-def status(
-    self,
-) -> dict[str, Any]:
-    """
-    Scheduler runtime status.
-    """
-
-    return {
-
-        "health": self.health(),
-
-        "enabled": self.enabled,
-
-        "disabled": self.disabled,
-
-        "frozen": self.frozen,
-
-        "closed": self.closed,
-
-        "running": self.running,
-
-        "active": self.active,
-
-    }
-
-
-
-def performance(
-    self,
-) -> dict[str, Any]:
-    """
-    Performance metrics.
-    """
-
-    return {
-
-        "job_count": self.job_count,
-
-        "executed_count": self.executed_count,
-
-        "success_count": self.success_count,
-
-        "failure_count": self.failure_count,
-
-        "latency": self.latency,
-
-        "throughput": self.throughput,
-
-        "uptime": self.uptime,
-
-    }
-# ==================================================================
-# Part 8. Serialization
-# ==================================================================
-
-import json
-import pickle
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
-
-
-try:
-    import msgpack
-except ImportError:
-    msgpack = None
-
-
-
-# ------------------------------------------------------------------
-# Serialization
-# ------------------------------------------------------------------
-
-def to_dict(
-    self,
-) -> dict[str, Any]:
-    """
-    Serialize scheduler state into dictionary.
-    """
-
-    return {
-
-        "id": self._id,
-
-        "name": self._name,
-
-        "description": self._description,
-
-
-        "jobs": self._jobs,
-
-        "job_registry": self._job_registry,
-
-        "queue": self._queue,
-
-        "schedule_registry":
-            self._schedule_registry,
-
-
-        "enabled": self._enabled,
-
-        "frozen": self._frozen,
-
-        "closed": self._closed,
-
-        "running": self._running,
-
-
-        "statistics":
-            self._statistics,
-
-
-        "context":
-            self._context,
-
-
-        "created_at":
-            self._created_at.isoformat(),
-
-
-        "updated_at":
-            self._updated_at.isoformat(),
-
-
-        "version":
-            self._version,
-
-    }
-
-
-
-@classmethod
-def from_dict(
-    cls,
-    data: dict[str, Any],
-) -> "MetricScheduler":
-    """
-    Restore scheduler from dictionary.
-    """
-
-    scheduler = cls(
-        name=data.get(
-            "name",
-            "MetricScheduler",
-        ),
-        description=data.get(
-            "description",
-            "",
-        ),
-    )
-
-
-    scheduler._id = data.get(
-        "id",
-        scheduler._id,
-    )
-
-
-    scheduler._jobs = data.get(
-        "jobs",
-        [],
-    )
-
-
-    scheduler._job_registry = data.get(
-        "job_registry",
-        {},
-    )
-
-
-    scheduler._queue = data.get(
-        "queue",
-        [],
-    )
-
-
-    scheduler._schedule_registry = data.get(
-        "schedule_registry",
-        {},
-    )
-
-
-    scheduler._enabled = data.get(
-        "enabled",
-        True,
-    )
-
-
-    scheduler._frozen = data.get(
-        "frozen",
-        False,
-    )
-
-
-    scheduler._closed = data.get(
-        "closed",
-        False,
-    )
-
-
-    scheduler._running = data.get(
-        "running",
-        False,
-    )
-
-
-    scheduler._statistics = data.get(
-        "statistics",
-        {},
-    )
-
-
-    scheduler._context = data.get(
-        "context",
-        {},
-    )
-
-
-    scheduler._version = data.get(
-        "version",
-        cls.VERSION,
-    )
-
-
-    if "created_at" in data:
-
-        scheduler._created_at = datetime.fromisoformat(
-            data["created_at"]
-        )
-
-
-    if "updated_at" in data:
-
-        scheduler._updated_at = datetime.fromisoformat(
-            data["updated_at"]
-        )
-
-
-    return scheduler
-
-
-
-def to_json(
-    self,
-    **kwargs,
-) -> str:
-    """
-    Serialize scheduler to JSON.
-    """
-
-    return json.dumps(
-        self.to_dict(),
-        default=str,
-        **kwargs,
-    )
-
-
-
-@classmethod
-def from_json(
-    cls,
-    data: str,
-) -> "MetricScheduler":
-    """
-    Restore scheduler from JSON.
-    """
-
-    return cls.from_dict(
-        json.loads(
-            data
-        )
-    )
-
-
-
-def serialize(
-    self,
-    fmt: str = "json",
-):
-    """
-    Generic serialization.
-
-    Supported:
-        json
-        yaml
-        pickle
-        msgpack
-    """
-
-    fmt = fmt.lower()
-
-
-    if fmt == "json":
-
-        return self.to_json(
-            indent=2
-        )
-
-
-    if fmt == "yaml":
-
-        if yaml is None:
-
-            raise RuntimeError(
-                "PyYAML is not installed."
-            )
-
-
-        return yaml.safe_dump(
-            self.to_dict(),
-            sort_keys=False,
-        )
-
-
-    if fmt == "pickle":
-
-        return pickle.dumps(
+        return self.from_dict(
             self.to_dict()
         )
 
 
-    if fmt == "msgpack":
 
-        if msgpack is None:
+    def copy(self):
 
-            raise RuntimeError(
-                "msgpack is not installed."
-            )
+        return self.clone()
 
 
-        return msgpack.packb(
-            self.to_dict(),
-            use_bin_type=True,
+
+    def merge(
+        self,
+        other,
+    ):
+
+
+        self.extend(
+            other.tasks
         )
 
 
-    raise ValueError(
-        f"Unsupported format: {fmt}"
-    )
+        self._ticks = other.ticks
+
+        self._executed = other.executed
+
+        self._failed = other.failed
+
+
+        return self
 
 
 
-@classmethod
-def deserialize(
-    cls,
-    data,
-    fmt: str = "json",
-) -> "MetricScheduler":
-    """
-    Deserialize scheduler.
-    """
-
-    fmt = fmt.lower()
+    def update(
+        self,
+        values,
+    ):
 
 
-    if fmt == "json":
+        if isinstance(values, dict):
 
-        return cls.from_json(
-            data
+            values = [
+                values
+            ]
+
+
+        for value in values:
+
+            self.add(value)
+
+
+        return self
+
+
+
+    def snapshot(self):
+
+        return self.to_dict()
+
+
+
+    def restore(
+        self,
+        state: dict,
+    ):
+
+
+        restored = self.from_dict(
+            state
         )
 
 
-    if fmt == "yaml":
+        self._name = restored.name
 
-        if yaml is None:
+        self._enabled = restored.enabled
 
-            raise RuntimeError(
-                "PyYAML is not installed."
-            )
+        self._running = restored.running
+
+        self._interval = restored.interval
+
+        self._max_ticks = restored.max_ticks
+
+        self._tasks = restored._tasks
+
+        self._ticks = restored.ticks
+
+        self._executed = restored.executed
+
+        self._failed = restored.failed
 
 
-        return cls.from_dict(
-            yaml.safe_load(
-                data
-            )
+        return self
+
+# ==============================================================================
+# Part 9. Validation
+# ==============================================================================
+
+
+    def validate_name(
+        self,
+        name: str | None = None,
+    ) -> bool:
+        """
+        Validate scheduler name.
+        """
+
+        value = (
+            self._name
+            if name is None
+            else name
         )
 
 
-    if fmt == "pickle":
+        return (
 
-        return cls.from_dict(
-            pickle.loads(
-                data
-            )
-        )
-
-
-    if fmt == "msgpack":
-
-        if msgpack is None:
-
-            raise RuntimeError(
-                "msgpack is not installed."
+            isinstance(
+                value,
+                str,
             )
 
+            and
 
-        return cls.from_dict(
-            msgpack.unpackb(
-                data,
-                raw=False,
-            )
-        )
+            len(
+                value.strip()
+            ) > 0
 
-
-    raise ValueError(
-        f"Unsupported format: {fmt}"
-    )
-
-
-
-# ------------------------------------------------------------------
-# Import / Export
-# ------------------------------------------------------------------
-
-def export(
-    self,
-    path: str,
-    fmt: str = "json",
-) -> None:
-    """
-    Export scheduler state to file.
-    """
-
-    data = self.serialize(
-        fmt
-    )
-
-
-    binary = fmt.lower() in {
-        "pickle",
-        "msgpack",
-    }
-
-
-    mode = (
-        "wb"
-        if binary
-        else "w"
-    )
-
-
-    with open(
-        path,
-        mode,
-    ) as file:
-
-        file.write(
-            data
         )
 
 
 
-@classmethod
-def import_data(
-    cls,
-    path: str,
-    fmt: str = "json",
-) -> "MetricScheduler":
-    """
-    Import scheduler state from file.
-    """
-
-    binary = fmt.lower() in {
-        "pickle",
-        "msgpack",
-    }
 
 
-    mode = (
-        "rb"
-        if binary
-        else "r"
-    )
+    def validate_tasks(
+        self,
+        tasks=None,
+    ) -> bool:
+        """
+        Validate scheduled tasks.
+        """
 
 
-    with open(
-        path,
-        mode,
-    ) as file:
+        values = (
 
-        data = file.read()
+            self._tasks
+
+            if tasks is None
+
+            else tasks
+
+        )
 
 
-    return cls.deserialize(
+        if not isinstance(
+            values,
+            (list, deque),
+        ):
+
+            return False
+
+
+
+        for task in values:
+
+
+            if isinstance(
+                task,
+                dict,
+            ):
+
+                continue
+
+
+
+            if callable(task):
+
+                continue
+
+
+
+            return False
+
+
+
+        return True
+
+
+
+
+
+    def validate_limits(self) -> bool:
+        """
+        Validate scheduler limits.
+        """
+
+
+        return (
+
+            isinstance(
+                self._interval,
+                (int, float),
+            )
+
+            and
+
+            self._interval >= 0
+
+
+            and
+
+
+            isinstance(
+                self._max_ticks,
+                int,
+            )
+
+            and
+
+            self._max_ticks >= 0
+
+        )
+
+
+
+
+
+    def validate(self) -> bool:
+        """
+        Validate scheduler state.
+        """
+
+
+        return (
+
+            self.validate_name()
+
+            and
+
+            self.validate_tasks()
+
+            and
+
+            self.validate_limits()
+
+        )
+
+
+
+
+
+    def normalize(
+        self,
+        task=None,
+    ):
+        """
+        Normalize task format.
+        """
+
+
+        if task is None:
+
+            return {}
+
+
+
+        if isinstance(
+            task,
+            dict,
+        ):
+
+            return dict(task)
+
+
+
+        if callable(task):
+
+            return {
+
+                "callback": task
+
+            }
+
+
+
+        return task
+
+
+
+
+# ==============================================================================
+# Part 10. Serialization
+# ==============================================================================
+
+
+    def to_dict(self):
+        """
+        Convert scheduler state to dictionary.
+        """
+
+        tasks = []
+
+
+        for task in self._tasks:
+
+            if isinstance(task, dict):
+
+                item = {}
+
+                for key, value in task.items():
+
+                    if key == "callback":
+
+                        continue
+
+
+                    item[key] = value
+
+
+                tasks.append(item)
+
+            else:
+
+                tasks.append(task)
+
+
+
+        return {
+
+            "name":
+                self.name,
+
+            "enabled":
+                self.enabled,
+
+            "running":
+                self.running,
+
+            "interval":
+                self.interval,
+
+            "max_ticks":
+                self.max_ticks,
+
+            "tasks":
+                tasks,
+
+            "ticks":
+                self.ticks,
+
+            "executed":
+                self.executed,
+
+            "failed":
+                self.failed,
+
+        }
+
+
+
+    @classmethod
+    def from_dict(
+        cls,
         data,
-        fmt,
-    )
-# ==================================================================
-# Part 9. Events & Hooks
-# ==================================================================
-
-from uuid import uuid4
-from datetime import datetime
-from typing import Callable
+    ):
+        """
+        Restore scheduler from dictionary.
+        """
 
 
+        scheduler = cls(
 
-# ------------------------------------------------------------------
-# Scheduler Events
-# ------------------------------------------------------------------
+            name=data.get(
+                "name",
+                DEFAULT_NAME,
+            ),
 
-def before_schedule(
-    self,
-    name: str,
-    job: Any = None,
-) -> None:
-    """
-    Trigger before_schedule event.
-    """
+            enabled=data.get(
+                "enabled",
+                DEFAULT_ENABLED,
+            ),
 
-    self.emit(
-        "before_schedule",
-        name=name,
-        job=job,
-    )
+            running=data.get(
+                "running",
+                DEFAULT_RUNNING,
+            ),
 
+            interval=data.get(
+                "interval",
+                DEFAULT_INTERVAL,
+            ),
 
+            max_ticks=data.get(
+                "max_ticks",
+                DEFAULT_MAX_TICKS,
+            ),
 
-def after_schedule(
-    self,
-    name: str,
-    job: Any = None,
-) -> None:
-    """
-    Trigger after_schedule event.
-    """
-
-    self.emit(
-        "after_schedule",
-        name=name,
-        job=job,
-    )
-
-
-
-def before_execute(
-    self,
-    name: str,
-) -> None:
-    """
-    Trigger before_execute event.
-    """
-
-    self.emit(
-        "before_execute",
-        name=name,
-    )
-
-
-
-def after_execute(
-    self,
-    name: str,
-    result: Any = None,
-) -> None:
-    """
-    Trigger after_execute event.
-    """
-
-    self.emit(
-        "after_execute",
-        name=name,
-        result=result,
-    )
-
-
-
-def before_cancel(
-    self,
-    name: str,
-) -> None:
-    """
-    Trigger before_cancel event.
-    """
-
-    self.emit(
-        "before_cancel",
-        name=name,
-    )
-
-
-
-def after_cancel(
-    self,
-    name: str,
-) -> None:
-    """
-    Trigger after_cancel event.
-    """
-
-    self.emit(
-        "after_cancel",
-        name=name,
-    )
-
-
-
-def before_flush(
-    self,
-) -> None:
-    """
-    Trigger before_flush event.
-    """
-
-    self.emit(
-        "before_flush"
-    )
-
-
-
-def after_flush(
-    self,
-) -> None:
-    """
-    Trigger after_flush event.
-    """
-
-    self.emit(
-        "after_flush"
-    )
-
-
-
-def before_close(
-    self,
-) -> None:
-    """
-    Trigger before_close event.
-    """
-
-    self.emit(
-        "before_close"
-    )
-
-
-
-def after_close(
-    self,
-) -> None:
-    """
-    Trigger after_close event.
-    """
-
-    self.emit(
-        "after_close"
-    )
-
-
-
-# ------------------------------------------------------------------
-# Hook Management
-# ------------------------------------------------------------------
-
-def add_hook(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricScheduler":
-    """
-    Add scheduler event hook.
-    """
-
-    if event not in self._hooks:
-
-        self._hooks[event] = []
-
-
-    self._hooks[event].append(
-        callback
-    )
-
-
-    return self
-
-
-
-def remove_hook(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricScheduler":
-    """
-    Remove scheduler hook.
-    """
-
-    hooks = self._hooks.get(
-        event,
-        [],
-    )
-
-
-    if callback in hooks:
-
-        hooks.remove(
-            callback
         )
 
 
-    return self
+        scheduler._tasks = deque()
 
 
 
-def clear_hooks(
-    self,
-    event: str | None = None,
-) -> "MetricScheduler":
-    """
-    Clear scheduler hooks.
-    """
+        for task in data.get(
+            "tasks",
+            [],
+        ):
 
-    if event is None:
 
-        self._hooks.clear()
+            if isinstance(task, dict):
 
-    else:
+                item = dict(task)
 
-        self._hooks.pop(
-            event,
-            None,
+                # callback cannot be restored from JSON
+                item.setdefault(
+                    "callback",
+                    None,
+                )
+
+                scheduler._tasks.append(
+                    item
+                )
+
+
+            else:
+
+                scheduler._tasks.append(
+                    task
+                )
+
+
+
+        scheduler._ticks = data.get(
+            "ticks",
+            DEFAULT_TICKS,
         )
 
 
-    return self
+        scheduler._executed = data.get(
+            "executed",
+            DEFAULT_EXECUTED,
+        )
+
+
+        scheduler._failed = data.get(
+            "failed",
+            DEFAULT_FAILED,
+        )
+
+
+        return scheduler
 
 
 
-# ------------------------------------------------------------------
-# Event Dispatcher
-# ------------------------------------------------------------------
-
-def emit(
-    self,
-    event: str,
-    **payload,
-) -> None:
-    """
-    Emit scheduler event.
-    """
-
-    record = {
-
-        "id": str(
-            uuid4()
-        ),
-
-        "event": event,
-
-        "timestamp":
-            datetime.utcnow(),
-
-        "payload": payload,
-
-    }
 
 
-    self._events.append(
-        record
-    )
+    def to_tuple(self):
+        """
+        Convert scheduler state to tuple.
+        """
 
 
-    self.notify(
-        event,
-        **payload,
-    )
+        return (
 
+            self.name,
 
+            self.enabled,
 
-def notify(
-    self,
-    event: str,
-    **payload,
-) -> None:
-    """
-    Notify event subscribers.
-    """
+            self.running,
 
-    callbacks = self._hooks.get(
-        event,
-        [],
-    )
+            self.interval,
 
+            self.max_ticks,
 
-    for callback in callbacks:
+            tuple(
+                self.to_dict()["tasks"]
+            ),
 
-        callback(
-            **payload
+            self.ticks,
+
+            self.executed,
+
+            self.failed,
+
         )
 
 
 
-def subscribe(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricScheduler":
-    """
-    Subscribe callback to scheduler event.
-    """
 
-    return self.add_hook(
-        event,
-        callback,
-    )
-
-
-
-def unsubscribe(
-    self,
-    event: str,
-    callback: Callable,
-) -> "MetricScheduler":
-    """
-    Remove event subscription.
-    """
 
-    return self.remove_hook(
-        event,
-        callback,
-    )
-# ==================================================================
-# Part 10. Python Protocols
-# ==================================================================
+    @classmethod
+    def from_tuple(
+        cls,
+        data,
+    ):
+        """
+        Restore scheduler from tuple.
+        """
 
-from copy import copy as _copy
-from copy import deepcopy
 
+        scheduler = cls(
 
+            name=data[0],
 
-# ------------------------------------------------------------------
-# Representation
-# ------------------------------------------------------------------
+            enabled=data[1],
 
-def __repr__(
-    self,
-) -> str:
-    """
-    Developer representation.
-    """
+            running=data[2],
 
-    return (
-        f"{self.__class__.__name__}("
-        f"id={self._id!r}, "
-        f"name={self._name!r}, "
-        f"jobs={self.job_count}, "
-        f"running={self.running}, "
-        f"active={self.active}"
-        f")"
-    )
+            interval=data[3],
 
+            max_ticks=data[4],
 
+        )
 
-def __str__(
-    self,
-) -> str:
-    """
-    Human readable representation.
-    """
 
-    return (
-        f"{self._name} "
-        f"[jobs={self.job_count}, "
-        f"executed={self.executed_count}, "
-        f"active={self.active}]"
-    )
+        scheduler._tasks = deque()
 
 
 
-# ------------------------------------------------------------------
-# Container
-# ------------------------------------------------------------------
+        for task in data[5]:
 
-def __len__(
-    self,
-) -> int:
-    """
-    Number of scheduled jobs.
-    """
+            if isinstance(task, dict):
 
-    return self.job_count
+                item = dict(task)
 
+                item.setdefault(
+                    "callback",
+                    None,
+                )
 
+                scheduler._tasks.append(
+                    item
+                )
 
-def __iter__(
-    self,
-):
-    """
-    Iterate job registry.
-    """
+            else:
 
-    return iter(
-        self._job_registry
-    )
+                scheduler._tasks.append(
+                    task
+                )
 
 
 
-def __contains__(
-    self,
-    name: str,
-) -> bool:
-    """
-    Job existence check.
-    """
+        scheduler._ticks = data[6]
 
-    return self.contains_job(
-        name
-    )
+        scheduler._executed = data[7]
 
+        scheduler._failed = data[8]
 
 
-# ------------------------------------------------------------------
-# Mapping
-# ------------------------------------------------------------------
+        return scheduler
 
-def __getitem__(
-    self,
-    name: str,
-):
-    """
-    Dictionary style job access.
-    """
 
-    return self.get_job(
-        name
-    )
 
 
 
-def __setitem__(
-    self,
-    name: str,
-    job: Any,
-) -> None:
-    """
-    Dictionary style job registration.
-    """
+    def to_json(self):
+        """
+        Serialize scheduler to JSON.
+        """
 
-    self.register_job(
-        name,
-        job,
-    )
 
+        return json.dumps(
+            self.to_dict()
+        )
 
 
-def __delitem__(
-    self,
-    name: str,
-) -> None:
-    """
-    Dictionary style job removal.
-    """
 
-    self.unregister_job(
-        name
-    )
 
 
+    @classmethod
+    def from_json(
+        cls,
+        data,
+    ):
+        """
+        Deserialize scheduler from JSON.
+        """
 
-# ------------------------------------------------------------------
-# Context Manager
-# ------------------------------------------------------------------
 
-def __enter__(
-    self,
-) -> "MetricScheduler":
-    """
-    Enter scheduler context.
-    """
+        return cls.from_dict(
+            json.loads(data)
+        )
 
-    self.enable()
+# ==============================================================================
+# Part 11. Diagnostics
+# ==============================================================================
 
-    self._running = True
 
-    return self
+    def summary(self):
 
 
+        return {
 
-def __exit__(
-    self,
-    exc_type,
-    exc_value,
-    traceback,
-) -> bool:
-    """
-    Exit scheduler context.
-    """
+            "name":
+                self.name,
 
-    self.close()
+            "tasks":
+                self.size,
 
-    return False
+            "ticks":
+                self.ticks,
 
+            "executed":
+                self.executed,
 
+            "failed":
+                self.failed,
 
-# ------------------------------------------------------------------
-# Callable
-# ------------------------------------------------------------------
+        }
 
-def __call__(
-    self,
-    name: str,
-    *args,
-    **kwargs,
-):
-    """
-    Execute scheduler job by calling instance.
-    """
 
-    return self.run(
-        name,
-        *args,
-        **kwargs,
-    )
 
 
 
-# ------------------------------------------------------------------
-# Copy
-# ------------------------------------------------------------------
+    def diagnostics(self):
 
-def __copy__(
-    self,
-):
-    """
-    Shallow copy protocol.
-    """
 
-    return self.copy()
+        return {
 
 
+            "status":
+                self.status(),
 
-def __deepcopy__(
-    self,
-    memo,
-):
-    """
-    Deep copy protocol.
-    """
 
-    return self.clone()                                            
+            "name":
+                self.name,
+
+
+            "enabled":
+                self.enabled,
+
+
+            "running":
+                self.running,
+
+
+            "size":
+                self.size,
+
+
+            "utilization":
+                self.utilization,
+
+
+        }
+
+
+
+
+
+    def report(self):
+
+
+        return {
+
+
+            "summary":
+                self.summary(),
+
+
+            "diagnostics":
+                self.diagnostics(),
+
+
+            "status":
+                self.status(),
+
+
+        }
+
+
+
+
+
+    def status(self):
+
+
+        if not self.enabled:
+
+            return "disabled"
+
+
+
+        if self.running:
+
+            return "running"
+
+
+
+        return "enabled"
+
+
+
+
+
+# ==============================================================================
+# Part 12. Protocols
+# ==============================================================================
+
+
+    def __len__(self):
+
+        return self.size
+
+
+
+
+    def __contains__(
+        self,
+        item,
+    ):
+
+
+        return item in self._tasks
+
+
+
+
+    def __iter__(self) -> Iterator:
+
+
+        return iter(
+            self._tasks
+        )
+
+
+
+
+    def __hash__(self):
+
+
+        return hash(
+
+            (
+
+                self.name,
+
+                self.interval,
+
+                self.max_ticks,
+
+            )
+
+        )
+
+
+
+
+
+    def __eq__(
+        self,
+        other,
+    ):
+
+
+        if not isinstance(
+            other,
+            RuntimeScheduler,
+        ):
+
+            return False
+
+
+
+        return (
+
+            self.to_dict()
+
+            ==
+
+            other.to_dict()
+
+        )
+
+
+
+
+
+    def __repr__(self):
+
+
+        return (
+
+            "RuntimeScheduler("
+
+            f"name={self.name!r}, "
+
+            f"tasks={self.size}, "
+
+            f"running={self.running}"
+
+            ")"
+
+        )
+
+
+
+
+
+    def __str__(self):
+
+
+        return (
+
+            f"{self.name}"
+
+            f"(tasks={self.size})"
+
+        )
+
+
+
+
+
+    def __bool__(self):
+
+        return (
+
+            self.validate_name()
+
+            and
+
+            self._max_ticks > 0
+
+        )             

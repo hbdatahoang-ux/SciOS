@@ -1,96 +1,107 @@
+# ==============================================================================
+# scios/runtime/observability/metrics/runtime/__init__.py
+# ==============================================================================
+
 """
-SciOS-NG Runtime Observability Package
+SciOS Runtime Metrics Runtime API
+=================================
 
-Provides:
-    - Metrics Runtime Engine
-    - Monitoring Components
-    - Runtime Diagnostics
+Public runtime execution components.
 
-SciOS-NG v0.2
+Exports:
+
+- RuntimeScheduler
+- RuntimePipeline
+- Runtime constants
+- Package version
+
+Python 3.11+
 """
 
-
-# ==================================================================
-# Runtime Observability Version
-# ==================================================================
-
-__version__ = "0.2.0"
+from __future__ import annotations
 
 
+# ==============================================================================
+# Version
+# ==============================================================================
 
-# ==================================================================
-# Metrics Runtime
-# ==================================================================
+__version__ = "0.1.0"
 
-from .metrics.runtime.registry import (
-    MetricRegistry,
-)
 
-from .metrics.runtime.collector import (
-    MetricCollector,
-)
+# ==============================================================================
+# Scheduler
+# ==============================================================================
 
-from .metrics.runtime.recorder import (
-    MetricRecorder,
-)
+from .scheduler import (
+    RuntimeScheduler,
 
-from .metrics.runtime.aggregator import (
-    MetricAggregator,
-)
+    DEFAULT_NAME as SCHEDULER_DEFAULT_NAME,
+    DEFAULT_ENABLED as SCHEDULER_DEFAULT_ENABLED,
+    DEFAULT_RUNNING as SCHEDULER_DEFAULT_RUNNING,
 
-from .metrics.runtime.cache import (
-    MetricCache,
-)
-
-from .metrics.runtime.pipeline import (
-    MetricPipeline,
-)
-
-from .metrics.runtime.dispatcher import (
-    MetricDispatcher,
-)
-
-from .metrics.runtime.scheduler import (
-    MetricScheduler,
-)
-
-from .metrics.runtime.plugin import (
-    MetricPlugin,
+    DEFAULT_INTERVAL,
+    DEFAULT_MAX_TICKS,
 )
 
 
+# ==============================================================================
+# Pipeline
+# ==============================================================================
 
-# ==================================================================
+from .pipeline import (
+    RuntimePipeline,
+
+    DEFAULT_NAME as PIPELINE_DEFAULT_NAME,
+    DEFAULT_ENABLED as PIPELINE_DEFAULT_ENABLED,
+    DEFAULT_RUNNING as PIPELINE_DEFAULT_RUNNING,
+)
+
+
+# ==============================================================================
+# Public Constants
+# ==============================================================================
+
+DEFAULT_NAME = SCHEDULER_DEFAULT_NAME
+
+DEFAULT_ENABLED = SCHEDULER_DEFAULT_ENABLED
+
+DEFAULT_RUNNING = SCHEDULER_DEFAULT_RUNNING
+
+
+# ==============================================================================
 # Public API
-# ==================================================================
+# ==============================================================================
 
 __all__ = [
 
-    # Registry
-    "MetricRegistry",
+    # ------------------------------------------------------------------
+    # Version
+    # ------------------------------------------------------------------
 
-    # Collection
-    "MetricCollector",
+    "__version__",
 
-    # Recording
-    "MetricRecorder",
 
-    # Aggregation
-    "MetricAggregator",
+    # ------------------------------------------------------------------
+    # Runtime Components
+    # ------------------------------------------------------------------
 
-    # Cache
-    "MetricCache",
+    "RuntimeScheduler",
 
-    # Pipeline
-    "MetricPipeline",
+    "RuntimePipeline",
 
-    # Dispatcher
-    "MetricDispatcher",
 
-    # Scheduler
-    "MetricScheduler",
+    # ------------------------------------------------------------------
+    # Constants
+    # ------------------------------------------------------------------
 
-    # Plugin
-    "MetricPlugin",
+    "DEFAULT_NAME",
+
+    "DEFAULT_ENABLED",
+
+    "DEFAULT_RUNNING",
+
+    "DEFAULT_INTERVAL",
+
+    "DEFAULT_MAX_TICKS",
 
 ]
