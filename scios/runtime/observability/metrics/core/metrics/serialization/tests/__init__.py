@@ -1,0 +1,3 @@
+"""
+Serialization tests package.
+"""

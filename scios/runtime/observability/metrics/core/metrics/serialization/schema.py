@@ -198,80 +198,179 @@ class Schema:
 # Part 7. Validation
 # ==============================================================================
 
+
     @staticmethod
     def validate_name(
         name: FieldName,
     ) -> str:
-        if not isinstance(name, str):
-            raise TypeError("Field name must be a string.")
+
+        if not isinstance(
+            name,
+            str,
+        ):
+            raise TypeError(
+                "Field name must be a string."
+            )
 
         if not name.strip():
-            raise ValueError("Field name cannot be empty.")
+
+            raise ValueError(
+                "Field name cannot be empty."
+            )
 
         return name
+
+
 
     @staticmethod
     def validate_field(
         definition: FieldDefinition,
     ) -> FieldDefinition:
-        if definition is None:
-            raise ValueError("Field definition cannot be None.")
+
+        if not isinstance(
+            definition,
+            dict,
+        ):
+            raise TypeError(
+                "Field definition must be dict."
+            )
+
+
+        if "type" not in definition:
+
+            raise ValueError(
+                "Field definition requires 'type'."
+            )
+
+
         return definition
+
+
 
     def validate_data(
         self,
         data: Mapping[str, Any],
-    ) -> ValidationResult:
+    ) -> dict[str, Any]:
+
+        if not isinstance(
+            data,
+            Mapping,
+        ):
+            raise TypeError(
+                "Data must be mapping"
+            )
+
+
         errors: list[str] = []
 
-        if not isinstance(data, Mapping):
-            return False, ["Data must be a mapping."]
 
         for name, definition in self._fields.items():
+
             if name not in data:
-                errors.append(f"Missing field: {name}")
+
+                if definition.get(
+                    "required",
+                    False,
+                ):
+
+                    errors.append(
+                        f"missing field: {name}"
+                    )
+
                 continue
 
-            value = data[name]
 
-            if isinstance(definition, type):
-                if not isinstance(value, definition):
+            expected = definition.get(
+                "type"
+            )
+
+
+            if expected is not None:
+
+                if not isinstance(
+                    data[name],
+                    expected,
+                ):
+
                     errors.append(
-                        f"Field '{name}' must be {definition.__name__}"
+                        f"invalid type: {name}"
                     )
 
-            elif (
-                isinstance(definition, tuple)
-                and definition
-                and all(isinstance(t, type) for t in definition)
-            ):
-                if not isinstance(value, definition):
-                    names = ", ".join(t.__name__ for t in definition)
-                    errors.append(
-                        f"Field '{name}' must be one of ({names})"
-                    )
+
 
         if not self._allow_extra:
-            extras = set(data) - set(self._fields)
-            for name in sorted(extras):
-                errors.append(f"Unexpected field: {name}")
 
-        return len(errors) == 0, errors
+            for key in data:
 
-    def validate(self) -> bool:
-        self.validate_name(self._name)
+                if key not in self._fields:
 
-        if not isinstance(self._version, str):
-            raise TypeError("Version must be a string.")
+                    errors.append(
+                        f"extra field: {key}"
+                    )
+
+
+
+        return {
+
+            "valid": not bool(errors),
+
+            "errors": errors,
+
+        }
+
+
+
+    def validate(
+        self,
+        data: Mapping[str, Any],
+    ) -> bool:
+
+        return self.validate_data(
+            data
+        )["valid"]
+
+
+
+    def validate_schema(
+        self,
+    ) -> bool:
+
+        self.validate_name(
+            self._name
+        )
+
+
+        if not isinstance(
+            self._version,
+            str,
+        ):
+            raise TypeError(
+                "Version must be a string."
+            )
+
 
         for name, definition in self._fields.items():
-            self.validate_name(name)
-            self.validate_field(definition)
+
+            self.validate_name(
+                name
+            )
+
+            self.validate_field(
+                definition
+            )
+
 
         return True
 
-    def is_empty(self) -> bool:
-        return not self._fields
+
+
+    def is_empty(
+        self,
+    ) -> bool:
+
+        return not bool(
+            self._fields
+        )
 
 
 # ==============================================================================
@@ -418,31 +517,90 @@ class Schema:
 # Part 10. Diagnostics
 # ==============================================================================
 
-    def summary(self) -> dict[str, Any]:
+
+    def summary(
+        self,
+    ) -> dict[str, Any]:
+
         return {
+
             "name": self._name,
+
             "version": self._version,
-            "fields": len(self),
+
+            "fields": self.size,
+
             "strict": self._strict,
+
             "allow_extra": self._allow_extra,
+
         }
 
-    def diagnostics(self) -> dict[str, Any]:
-        return {
-            "valid": self.validate(),
-            "empty": self.is_empty(),
-            "size": len(self),
-            "summary": self.summary(),
-        }
 
-    def schema_report(self) -> dict[str, Any]:
+
+    def diagnostics(
+        self,
+    ) -> dict[str, Any]:
+
         return {
-            "schema": self.summary(),
-            "field_names": list(self._fields),
+
             "status": self.overall_status(),
+
+            "valid": self.validate_schema(),
+
+            "empty": self.is_empty(),
+
+            "size": self.size,
+
+            "fields": list(
+                self._fields.keys()
+            ),
+
+            "summary": self.summary(),
+
         }
 
-    def overall_status(self) -> str:
+
+
+    def schema_report(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+
+            "schema": self._name,
+
+            "version": self._version,
+
+            "fields": self.fields,
+
+            "field_names": list(
+                self._fields.keys()
+            ),
+
+            "size": self.size,
+
+            "status": self.overall_status(),
+
+            "summary": self.summary(),
+
+        }
+
+
+
+    def overall_status(
+        self,
+    ) -> str:
+
+        try:
+
+            self.validate_schema()
+
+        except Exception:
+
+            return "invalid"
+
+
         return "ready"
 
 

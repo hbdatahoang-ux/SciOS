@@ -1,5 +1,5 @@
 """
-Schema definition and validation engine.
+Schema tests.
 
 Python 3.11+
 """
@@ -8,583 +8,741 @@ from __future__ import annotations
 
 
 import copy
-import json
-from typing import (
-    Any,
-    Callable,
-    Mapping,
-    MutableMapping,
-    TypeAlias,
+import inspect
+
+
+from ..schema import (
+    Schema,
+    DEFAULT_SCHEMA_NAME,
+    DEFAULT_VERSION,
+    DEFAULT_STRICT,
+    DEFAULT_ALLOW_EXTRA,
 )
 
 
-# ==============================================================================
-# Part 1. Imports & Constants
-# ==============================================================================
-
-
-DEFAULT_SCHEMA_NAME = "default"
-
-DEFAULT_VERSION = "1.0"
-
-DEFAULT_STRICT = True
-
-DEFAULT_ALLOW_EXTRA = False
-
-
-
-__all__ = [
-    "Schema",
-    "DEFAULT_SCHEMA_NAME",
-    "DEFAULT_VERSION",
-    "DEFAULT_STRICT",
-    "DEFAULT_ALLOW_EXTRA",
-]
-
-
 
 # ==============================================================================
-# Part 2. Type Aliases
+# Part 1. Constructor
 # ==============================================================================
 
 
-FieldName: TypeAlias = str
+def test_default_constructor():
 
-FieldType: TypeAlias = type | tuple[type, ...]
+    schema = Schema()
 
-FieldDefinition: TypeAlias = dict[str, Any]
-
-SchemaMapping: TypeAlias = dict[str, FieldDefinition]
-
-ValidationResult: TypeAlias = dict[str, Any]
-
-
-
-# ==============================================================================
-# Part 3. Constructor
-# ==============================================================================
+    assert schema.name == DEFAULT_SCHEMA_NAME
+    assert schema.version == DEFAULT_VERSION
+    assert schema.strict == DEFAULT_STRICT
+    assert schema.allow_extra == DEFAULT_ALLOW_EXTRA
+    assert schema.fields == {}
 
 
-class Schema:
-    """
-    Runtime schema definition.
 
-    Stores field definitions and validates data.
-    """
+def test_custom_constructor():
 
-
-    __slots__ = (
-        "_name",
-        "_version",
-        "_strict",
-        "_allow_extra",
-        "_fields",
+    schema = Schema(
+        name="metric",
+        version="2.0",
+        strict=False,
+        allow_extra=True,
+        fields={
+            "value": {
+                "type": int,
+            }
+        },
     )
 
 
-    __annotations__ = {
+    assert schema.name == "metric"
+    assert schema.version == "2.0"
+    assert schema.strict is False
+    assert schema.allow_extra is True
+    assert "value" in schema.fields
 
-        "_name": str,
 
-        "_version": str,
 
-        "_strict": bool,
+def test_slots():
 
-        "_allow_extra": bool,
+    assert hasattr(
+        Schema,
+        "__slots__",
+    )
 
-        "_fields": SchemaMapping,
 
+
+def test_annotations():
+
+    assert hasattr(
+        Schema,
+        "__annotations__",
+    )
+
+
+
+def test_signature():
+
+    signature = inspect.signature(
+        Schema
+    )
+
+    assert "name" in signature.parameters
+    assert "version" in signature.parameters
+    assert "strict" in signature.parameters
+    assert "allow_extra" in signature.parameters
+    assert "fields" in signature.parameters
+
+
+
+# ==============================================================================
+# Part 2. Properties
+# ==============================================================================
+
+
+def test_name_property():
+
+    schema = Schema(
+        name="test"
+    )
+
+    assert schema.name == "test"
+
+
+
+def test_version_property():
+
+    schema = Schema(
+        version="3.0"
+    )
+
+    assert schema.version == "3.0"
+
+
+
+def test_strict_property():
+
+    schema = Schema(
+        strict=False
+    )
+
+    assert schema.strict is False
+
+
+
+def test_allow_extra_property():
+
+    schema = Schema(
+        allow_extra=True
+    )
+
+    assert schema.allow_extra is True
+
+
+
+def test_fields_property():
+
+    schema = Schema(
+        fields={
+            "x": {
+                "type": int
+            }
+        }
+    )
+
+    fields = schema.fields
+
+    assert "x" in fields
+    assert fields["x"]["type"] is int
+
+
+
+def test_size_property():
+
+    schema = Schema(
+        fields={
+            "a": {
+                "type": int
+            },
+            "b": {
+                "type": str
+            },
+        }
+    )
+
+    assert schema.size == 2
+
+
+
+# ==============================================================================
+# Part 3. Field Management
+# ==============================================================================
+
+
+def test_add_field():
+
+    schema = Schema()
+
+    schema.add_field(
+        "value",
+        {
+            "type": int
+        },
+    )
+
+    assert "value" in schema
+
+
+
+def test_remove_field():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    schema.remove_field(
+        "value"
+    )
+
+    assert "value" not in schema
+
+
+
+def test_replace_field():
+
+    schema = Schema()
+
+    schema["value"] = {
+        "type": int
     }
 
+    schema["value"] = {
+        "type": str
+    }
 
-    def __init__(
-        self,
-        name: str = DEFAULT_SCHEMA_NAME,
-        version: str = DEFAULT_VERSION,
-        strict: bool = DEFAULT_STRICT,
-        allow_extra: bool = DEFAULT_ALLOW_EXTRA,
-        fields: Mapping[str, FieldDefinition] | None = None,
-    ) -> None:
+    assert schema["value"]["type"] is str
 
 
-        self._name = name
 
-        self._version = version
+def test_update():
 
-        self._strict = strict
+    schema = Schema()
 
-        self._allow_extra = allow_extra
+    schema.update(
+        {
+            "a": {
+                "type": int
+            }
+        }
+    )
 
-        self._fields = dict(fields or {})
+    assert "a" in schema
 
 
-        self.validate_name(name)
+
+def test_clear():
+
+    schema = Schema(
+        fields={
+            "a": {
+                "type": int
+            }
+        }
+    )
+
+    schema.clear()
+
+    assert schema.size == 0
 
 
 
 # ==============================================================================
-# Part 4. Properties
+# Part 4. Lookup
 # ==============================================================================
 
 
-    @property
-    def name(self) -> str:
-        return self._name
+def test_get():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    assert schema.get("value") is not None
 
 
 
-    @property
-    def version(self) -> str:
-        return self._version
+def test_require():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    assert schema.require("value")["type"] is int
 
 
 
-    @property
-    def strict(self) -> bool:
-        return self._strict
+def test_contains():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    assert "value" in schema
 
 
 
-    @property
-    def allow_extra(self) -> bool:
-        return self._allow_extra
+def test_exists():
+
+    schema = Schema()
+
+    assert schema.exists("missing") is False
 
 
 
-    @property
-    def fields(self) -> SchemaMapping:
-        return dict(self._fields)
+def test_resolve():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    assert schema.resolve("value")["type"] is int
 
 
-
-    @property
-    def size(self) -> int:
-        return len(self._fields)
 
 # ==============================================================================
 # Part 5. Validation
 # ==============================================================================
 
 
-    def validate_name(
-        self,
-        name: str,
-    ) -> bool:
+def test_validate_name():
 
-        if not isinstance(name, str):
-            raise TypeError("Schema name must be str")
+    schema = Schema()
 
-        if not name:
-            raise ValueError("Schema name cannot be empty")
-
-        return True
+    assert schema.validate_name(
+        "test"
+    )
 
 
 
-    def validate_field(
-        self,
-        field: FieldDefinition,
-    ) -> bool:
+def test_validate_field():
 
-        if not isinstance(field, dict):
-            raise TypeError("Field definition must be dict")
+    schema = Schema()
 
-
-        if "type" not in field:
-            if self._strict:
-                raise ValueError(
-                    "Field definition requires 'type'"
-                )
-
-
-        return True
-
-
-
-    def validate_data(
-        self,
-        data: Mapping[str, Any],
-    ) -> ValidationResult:
-
-
-        if not isinstance(data, Mapping):
-            raise TypeError(
-                "Data must be mapping"
-            )
-
-
-        errors: list[str] = []
-
-
-        for name, definition in self._fields.items():
-
-            if name not in data:
-
-                if definition.get(
-                    "required",
-                    False
-                ):
-                    errors.append(
-                        f"missing field: {name}"
-                    )
-
-                continue
-
-
-            expected = definition.get(
-                "type"
-            )
-
-
-            if expected is not None:
-
-                if not isinstance(
-                    data[name],
-                    expected,
-                ):
-                    errors.append(
-                        f"invalid type: {name}"
-                    )
-
-
-        if not self._allow_extra:
-
-            for key in data:
-
-                if key not in self._fields:
-
-                    errors.append(
-                        f"extra field: {key}"
-                    )
-
-
-        return {
-            "valid": not errors,
-            "errors": errors,
+    assert schema.validate_field(
+        {
+            "type": int
         }
+    )
 
 
 
-    def validate(
-        self,
-        data: Mapping[str, Any],
-    ) -> bool:
+def test_validate_data():
 
-        return bool(
-            self.validate_data(data)["valid"]
-        )
-
-
-
-    def is_empty(self) -> bool:
-
-        return not bool(self._fields)
-
-
-
-# ==============================================================================
-# Part 6. Snapshot / Copy
-# ==============================================================================
-
-
-    def snapshot(self) -> dict[str, Any]:
-
-        return {
-
-            "name": self._name,
-
-            "version": self._version,
-
-            "strict": self._strict,
-
-            "allow_extra": self._allow_extra,
-
-            "fields": copy.deepcopy(
-                self._fields
-            ),
-
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
         }
+    )
+
+
+    result = schema.validate_data(
+        {
+            "value": 10
+        }
+    )
+
+    assert result["valid"] is True
 
 
 
-    def restore(
-        self,
-        state: Mapping[str, Any],
-    ) -> None:
+def test_validate():
 
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
 
-        self._name = state["name"]
-
-        self._version = state["version"]
-
-        self._strict = state["strict"]
-
-        self._allow_extra = state["allow_extra"]
-
-        self._fields = copy.deepcopy(
-            state["fields"]
-        )
-
-
-
-    def copy(self) -> "Schema":
-
-        return Schema(
-            name=self._name,
-            version=self._version,
-            strict=self._strict,
-            allow_extra=self._allow_extra,
-            fields=self._fields,
-        )
+    assert schema.validate(
+        {
+            "value": 10
+        }
+    )
 
 
 
-    def deepcopy(self) -> "Schema":
+def test_is_empty():
 
-        return Schema(
-            name=self._name,
-            version=self._version,
-            strict=self._strict,
-            allow_extra=self._allow_extra,
-            fields=copy.deepcopy(
-                self._fields
-            ),
-        )
-
-
-
-    def clone(self) -> "Schema":
-
-        return self.deepcopy()
+    assert Schema().is_empty()
 
 
 
 # ==============================================================================
-# Part 7. Python Protocols
+# Part 6. Snapshot
 # ==============================================================================
 
 
-    def __contains__(
-        self,
-        name: object,
-    ) -> bool:
+def test_snapshot():
 
-        if not isinstance(name, str):
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
 
-            return False
+    snapshot = schema.snapshot()
 
-        return name in self._fields
-
-
-
-    def __getitem__(
-        self,
-        name: str,
-    ) -> FieldDefinition:
-
-        return self._fields[name]
+    assert snapshot["name"] == DEFAULT_SCHEMA_NAME
 
 
 
-    def __setitem__(
-        self,
-        name: str,
-        field: FieldDefinition,
-    ) -> None:
+def test_restore():
 
-        self.validate_field(field)
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
 
-        self._fields[name] = field
+    snapshot = schema.snapshot()
 
+    restored = Schema()
 
+    restored.restore(
+        snapshot
+    )
 
-    def __delitem__(
-        self,
-        name: str,
-    ) -> None:
-
-        del self._fields[name]
-
-
-
-    def __iter__(self):
-
-        return iter(self._fields)
+    assert restored == schema
 
 
 
-    def __len__(self) -> int:
+def test_copy():
 
-        return len(self._fields)
+    schema = Schema()
 
+    cloned = schema.copy()
 
-
-    def __bool__(self) -> bool:
-
-        return bool(self._fields)
+    assert cloned == schema
 
 
 
-    def __repr__(self) -> str:
+def test_deepcopy():
 
-        return (
-            f"{self.__class__.__name__}("
-            f"name={self._name!r}, "
-            f"version={self._version!r}, "
-            f"size={self.size!r}, "
-            f"strict={self._strict!r}, "
-            f"allow_extra={self._allow_extra!r})"
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    cloned = copy.deepcopy(
+        schema
+    )
+
+    assert cloned == schema
+
+
+
+def test_clone():
+
+    schema = Schema()
+
+    cloned = schema.clone()
+
+    assert cloned == schema
+    assert cloned is not schema
+
+# ==============================================================================
+# Part 7. Protocols
+# ==============================================================================
+
+
+def test_contains_protocol():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    assert "value" in schema
+    assert "missing" not in schema
+
+
+
+def test_getitem():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    assert schema["value"]["type"] is int
+
+
+
+def test_setitem():
+
+    schema = Schema()
+
+    schema["value"] = {
+        "type": int
+    }
+
+    assert schema["value"]["type"] is int
+
+
+
+def test_delitem():
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    del schema["value"]
+
+    assert "value" not in schema
+
+
+
+def test_iter():
+
+    schema = Schema(
+        fields={
+            "a": {
+                "type": int
+            },
+            "b": {
+                "type": str
+            },
+        }
+    )
+
+    keys = list(schema)
+
+    assert "a" in keys
+    assert "b" in keys
+
+
+
+def test_len():
+
+    schema = Schema(
+        fields={
+            "a": {
+                "type": int
+            },
+            "b": {
+                "type": str
+            },
+        }
+    )
+
+    assert len(schema) == 2
+
+
+
+def test_bool():
+
+    assert bool(
+        Schema()
+    ) is False
+
+
+    assert bool(
+        Schema(
+            fields={
+                "a": {
+                    "type": int
+                }
+            }
         )
+    ) is True
 
 
 
-    __str__ = __repr__
+def test_repr():
+
+    schema = Schema()
+
+    value = repr(schema)
+
+    assert "Schema" in value
 
 
 
-    def __eq__(
-        self,
-        other: object,
-    ) -> bool:
+def test_str():
 
-        if not isinstance(
-            other,
-            Schema,
-        ):
-            return NotImplemented
+    schema = Schema()
 
+    value = str(schema)
 
-        return (
-
-            self._name,
-
-            self._version,
-
-            self._strict,
-
-            self._allow_extra,
-
-            self._fields,
-
-        ) == (
-
-            other._name,
-
-            other._version,
-
-            other._strict,
-
-            other._allow_extra,
-
-            other._fields,
-
-        )
+    assert "Schema" in value
 
 
 
-    def __hash__(self) -> int:
+def test_eq():
 
-        return hash(
-            (
-                self._name,
-                self._version,
-                self._strict,
-                self._allow_extra,
-            )
-        )
+    schema1 = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    schema2 = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+    assert schema1 == schema2
 
 
 
-    def __getstate__(self) -> dict[str, Any]:
+def test_hash():
 
-        return self.snapshot()
+    schema = Schema()
+
+    value = hash(schema)
+
+    assert isinstance(
+        value,
+        int,
+    )
 
 
 
-    def __setstate__(
-        self,
-        state: dict[str, Any],
-    ) -> None:
+def test_pickle():
 
-        self.__init__(
-            name=state["name"],
-            version=state["version"],
-            strict=state["strict"],
-            allow_extra=state["allow_extra"],
-            fields=state["fields"],
-        )
+    import pickle
+
+
+    schema = Schema(
+        fields={
+            "value": {
+                "type": int
+            }
+        }
+    )
+
+
+    data = pickle.dumps(
+        schema
+    )
+
+    restored = pickle.loads(
+        data
+    )
+
+
+    assert restored == schema
+
+
 
 # ==============================================================================
 # Part 8. Diagnostics
 # ==============================================================================
 
 
-    def summary(self) -> dict[str, Any]:
+def test_summary():
 
-        return {
-            "name": self._name,
-            "version": self._version,
-            "size": self.size,
-            "strict": self._strict,
-            "allow_extra": self._allow_extra,
-            "empty": self.is_empty(),
-        }
+    schema = Schema()
+
+    result = schema.summary()
 
 
+    assert isinstance(
+        result,
+        dict,
+    )
 
-    def diagnostics(self) -> dict[str, Any]:
-
-        return {
-
-            "schema": self._name,
-
-            "version": self._version,
-
-            "fields": list(
-                self._fields.keys()
-            ),
-
-            "field_count": self.size,
-
-            "validation": {
-
-                "strict": self._strict,
-
-                "allow_extra": self._allow_extra,
-
-            },
-
-            "status": self.overall_status(),
-
-        }
+    assert result["name"] == DEFAULT_SCHEMA_NAME
 
 
 
-    def schema_report(self) -> dict[str, Any]:
+def test_diagnostics():
 
-        return {
+    schema = Schema()
 
-            "schema": self._name,
-
-            "version": self._version,
-
-            "fields": self.fields,
-
-            "summary": self.summary(),
-
-        }
+    result = schema.diagnostics()
 
 
+    assert isinstance(
+        result,
+        dict,
+    )
 
-    def overall_status(self) -> str:
+    assert "status" in result
 
-        if self.validate_name(
-            self._name
-        ):
 
-            return "ready"
 
-        return "invalid"
+def test_schema_report():
+
+    schema = Schema()
+
+    result = schema.schema_report()
+
+
+    assert isinstance(
+        result,
+        dict,
+    )
+
+    assert "schema" in result
+
+
+
+def test_overall_status():
+
+    schema = Schema()
+
+    result = schema.overall_status()
+
+
+    assert isinstance(
+        result,
+        str,
+    )
 
 
 
@@ -593,16 +751,29 @@ class Schema:
 # ==============================================================================
 
 
-__all__ = [
+def test_public_api():
 
-    "Schema",
+    from .. import schema as module
 
-    "DEFAULT_SCHEMA_NAME",
 
-    "DEFAULT_VERSION",
+    assert "Schema" in module.__all__
 
-    "DEFAULT_STRICT",
+    assert (
+        "DEFAULT_SCHEMA_NAME"
+        in module.__all__
+    )
 
-    "DEFAULT_ALLOW_EXTRA",
+    assert (
+        "DEFAULT_VERSION"
+        in module.__all__
+    )
 
-]                
+    assert (
+        "DEFAULT_STRICT"
+        in module.__all__
+    )
+
+    assert (
+        "DEFAULT_ALLOW_EXTRA"
+        in module.__all__
+    )    

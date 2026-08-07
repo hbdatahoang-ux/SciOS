@@ -324,7 +324,7 @@ class Registry:
 
 
     def clone(self) -> "Registry":
-        return self.copy()
+        return self.deepcopy()
 
 
 # ==============================================================================
