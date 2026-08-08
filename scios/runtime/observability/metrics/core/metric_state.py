@@ -1,929 +1,502 @@
-"""
-SciOS-NG Metrics Core - Metric State
-===================================
-
-Runtime state for Metric objects.
-
-This module stores mutable runtime information only.
-
-Design goals
-------------
-- Runtime-only state
-- Thread-safe
-- Snapshot-friendly
-- Extensible
-- Fully typed
-"""
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
 
 from __future__ import annotations
 
-import threading
-import time
-import uuid
-from abc import ABC
-from typing import Any
+import json
 
-__all__ = [
-    "MetricState",
-]
+from copy import deepcopy
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Final, TypeAlias
 
 
-class MetricState(ABC):
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
+
+__version__: Final[str] = "0.1.0"
+
+DEFAULT_ENABLED: Final[bool] = True
+DEFAULT_ACTIVE: Final[bool] = True
+
+
+# ==============================================================================
+# Part 3. Enums
+# ==============================================================================
+
+
+class MetricLifecycle(str, Enum):
     """
-    Runtime state of a Metric.
-
-    Notes
-    -----
-    MetricState intentionally stores only mutable runtime data.
-
-    Static information such as name, description, unit,
-    namespace, etc. belongs to MetricDescriptor.
-
-    Labels and attributes are managed by their own classes.
-    """
-
-    # ==========================================================
-    # Constructor
-    # ==========================================================
-
-    def __init__(
-        self,
-        value: Any = None,
-    ) -> None:
-
-        # ------------------------------------------------------
-        # Identity
-        # ------------------------------------------------------
-
-        self._uuid: uuid.UUID = uuid.uuid4()
-
-        # ------------------------------------------------------
-        # Runtime Value
-        # ------------------------------------------------------
-
-        self._value: Any = value
-
-        self._previous_value: Any = None
-
-        self._update_count: int = 0
-
-        self._timestamp: float = time.time()
-
-        # ------------------------------------------------------
-        # Lifecycle Flags
-        # ------------------------------------------------------
-
-        self._enabled: bool = True
-
-        self._frozen: bool = False
-
-        self._closed: bool = False
-
-        # ------------------------------------------------------
-        # Runtime Metadata
-        # ------------------------------------------------------
-
-        self._metadata: dict[str, Any] = {}
-
-        self._labels: dict[str, str] = {}
-
-        self._attributes: dict[str, Any] = {}
-
-        # ------------------------------------------------------
-        # Synchronization
-        # ------------------------------------------------------
-
-        self._lock = threading.RLock()
-# ==========================================================
-# Part 2. Runtime State
-# ==========================================================
-
-from typing import Any
-
-
-# ----------------------------------------------------------
-# Value
-# ----------------------------------------------------------
-
-@property
-def value(self) -> Any:
-    """
-    Current metric value.
-    """
-    return self._value
-
-
-# ----------------------------------------------------------
-# Previous Value
-# ----------------------------------------------------------
-
-@property
-def previous_value(self) -> Any:
-    """
-    Previous metric value.
-    """
-    return self._previous_value
-
-
-# ----------------------------------------------------------
-# Update Count
-# ----------------------------------------------------------
-
-@property
-def update_count(self) -> int:
-    """
-    Number of successful updates.
-    """
-    return self._update_count
-
-
-# ----------------------------------------------------------
-# Enabled
-# ----------------------------------------------------------
-
-@property
-def enabled(self) -> bool:
-    """
-    Whether the metric is enabled.
-    """
-    return self._enabled
-
-
-# ----------------------------------------------------------
-# Frozen
-# ----------------------------------------------------------
-
-@property
-def frozen(self) -> bool:
-    """
-    Whether the metric is frozen.
-    """
-    return self._frozen
-
-
-# ----------------------------------------------------------
-# Closed
-# ----------------------------------------------------------
-
-@property
-def closed(self) -> bool:
-    """
-    Whether the metric has been closed.
-    """
-    return self._closed
-
-
-# ----------------------------------------------------------
-# Timestamp
-# ----------------------------------------------------------
-
-@property
-def timestamp(self) -> float:
-    """
-    Unix timestamp of the last update.
-    """
-    return self._timestamp
-# ==========================================================
-# Part 3. Value API
-# ==========================================================
-
-
-import time
-from typing import Any
-
-from .exceptions import (
-    MetricClosedError,
-    MetricDisabledError,
-    MetricFrozenError,
-)
-from .validation import MetricValidator
-
-
-# ----------------------------------------------------------
-# Get
-# ----------------------------------------------------------
-
-def get(self) -> Any:
-    """
-    Return the current metric value.
-    """
-    return self._value
-
-
-# ----------------------------------------------------------
-# Set
-# ----------------------------------------------------------
-
-def set(self, value: Any) -> Any:
-    """
-    Set the current metric value.
-
-    Returns
-    -------
-    Any
-        The validated value.
+    Metric lifecycle state.
     """
 
-    with self._lock:
-
-        if self._closed:
-            raise MetricClosedError("Metric is closed.")
-
-        if not self._enabled:
-            raise MetricDisabledError("Metric is disabled.")
-
-        if self._frozen:
-            raise MetricFrozenError("Metric is frozen.")
-
-        value = MetricValidator.validate_value(value)
-
-        self._before_update(value)
-
-        self._previous_value = self._value
-        self._value = value
-        self._update_count += 1
-        self._timestamp = time.time()
-
-        self._after_update(value)
-
-        return self._value
+    CREATED = "created"
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    ARCHIVED = "archived"
 
 
-# ----------------------------------------------------------
-# Update
-# ----------------------------------------------------------
-
-def update(self, value: Any) -> Any:
+class MetricHealth(str, Enum):
     """
-    Alias of set().
-    """
-    return self.set(value)
-
-
-# ----------------------------------------------------------
-# Reset
-# ----------------------------------------------------------
-
-def reset(self) -> None:
-    """
-    Reset the metric value.
+    Metric health state.
     """
 
-    with self._lock:
-
-        self._previous_value = self._value
-        self._value = None
-        self._update_count = 0
-        self._timestamp = time.time()
+    HEALTHY = "healthy"
+    WARNING = "warning"
+    ERROR = "error"
+    STALE = "stale"
 
 
-# ----------------------------------------------------------
-# Clear
-# ----------------------------------------------------------
-
-def clear(self) -> None:
+class MetricStatus(str, Enum):
     """
-    Alias of reset().
-    """
-    self.reset()
-
-
-# ----------------------------------------------------------
-# Delta
-# ----------------------------------------------------------
-
-def delta(self) -> Any:
-    """
-    Compute the difference between the current
-    and previous value.
-
-    Returns
-    -------
-    Any
-        Numeric difference or None.
+    Runtime metric status.
     """
 
-    if self._previous_value is None:
-        return None
-
-    try:
-        return self._value - self._previous_value
-    except Exception:
-        return None
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPED = "stopped"
 
 
-# ----------------------------------------------------------
-# Changed
-# ----------------------------------------------------------
+# ==============================================================================
+# Part 4. Exceptions
+# ==============================================================================
 
-def changed(self) -> bool:
+
+class MetricStateError(RuntimeError):
     """
-    Return True if the current value differs from
-    the previous value.
+    Base metric-state exception.
     """
 
-    return self._value != self._previous_value  
-# ==========================================================
-# Part 4. Snapshot API
-# ==========================================================
 
-
-from .metric_snapshot import MetricSnapshot
-
-
-# ----------------------------------------------------------
-# Snapshot
-# ----------------------------------------------------------
-
-def snapshot(self) -> MetricSnapshot:
+class MetricStateValidationError(
+    MetricStateError,
+    ValueError,
+):
     """
-    Create an immutable snapshot of the current runtime state.
-
-    Returns
-    -------
-    MetricSnapshot
+    Raised when MetricState is invalid.
     """
 
-    with self._lock:
 
-        self._before_snapshot()
+# ==============================================================================
+# Part 5. Type Aliases
+# ==============================================================================
 
-        snap = MetricSnapshot(
+JsonDict: TypeAlias = dict[str, Any]
 
-            uuid=self._uuid,
 
-            value=self._value,
+# ==============================================================================
+# Part 6. Dataclass
+# ==============================================================================
 
-            previous_value=self._previous_value,
 
-            update_count=self._update_count,
+@dataclass(slots=True)
+class MetricState:
+    """
+    Runtime state of a metric.
 
-            enabled=self._enabled,
+    This object stores only mutable execution state.
+    Static information belongs to MetricDescriptor,
+    MetricMetadata, MetricLabels and MetricAttributes.
+    """
 
-            frozen=self._frozen,
+    enabled: bool = DEFAULT_ENABLED
 
-            closed=self._closed,
+    active: bool = DEFAULT_ACTIVE
 
-            timestamp=self._timestamp,
+    lifecycle: MetricLifecycle = MetricLifecycle.CREATED
 
+    health: MetricHealth = MetricHealth.HEALTHY
+
+    status: MetricStatus = MetricStatus.IDLE
+
+# ==============================================================================
+# Part 7. Constructor Validation
+# ==============================================================================
+
+    def __post_init__(self) -> None:
+        """
+        Validate constructor arguments.
+        """
+
+        if not isinstance(self.enabled, bool):
+            raise TypeError("enabled must be bool.")
+
+        if not isinstance(self.active, bool):
+            raise TypeError("active must be bool.")
+
+        if not isinstance(self.lifecycle, MetricLifecycle):
+            try:
+                self.lifecycle = MetricLifecycle(self.lifecycle)
+            except Exception as exc:
+                raise TypeError(
+                    "Invalid MetricLifecycle."
+                ) from exc
+
+        if not isinstance(self.health, MetricHealth):
+            try:
+                self.health = MetricHealth(self.health)
+            except Exception as exc:
+                raise TypeError(
+                    "Invalid MetricHealth."
+                ) from exc
+
+        if not isinstance(self.status, MetricStatus):
+            try:
+                self.status = MetricStatus(self.status)
+            except Exception as exc:
+                raise TypeError(
+                    "Invalid MetricStatus."
+                ) from exc
+
+
+# ==============================================================================
+# Part 8. Properties
+# ==============================================================================
+
+    @property
+    def state(self) -> JsonDict:
+        """
+        Return current state.
+        """
+
+        return self.to_dict()
+
+
+    # ------------------------------------------------------------------------------
+    # Lifecycle state properties
+    # ------------------------------------------------------------------------------
+
+    @property
+    def created(self) -> bool:
+        """
+        Whether the metric is in CREATED lifecycle state.
+        """
+
+        return self.lifecycle is MetricLifecycle.CREATED
+
+
+    @property
+    def active_lifecycle(self) -> bool:
+        """
+        Whether the metric lifecycle is ACTIVE.
+        """
+
+        return self.lifecycle is MetricLifecycle.ACTIVE
+
+
+    @property
+    def disabled(self) -> bool:
+        """
+        Whether the metric is disabled.
+        """
+
+        return self.lifecycle is MetricLifecycle.DISABLED
+
+
+    @property
+    def archived(self) -> bool:
+        """
+        Whether the metric is archived.
+        """
+
+        return self.lifecycle is MetricLifecycle.ARCHIVED
+
+
+    # ------------------------------------------------------------------------------
+    # Health properties
+    # ------------------------------------------------------------------------------
+
+    @property
+    def healthy(self) -> bool:
+        """
+        Whether the metric is healthy.
+        """
+
+        return self.health is MetricHealth.HEALTHY
+
+
+    @property
+    def warning(self) -> bool:
+        """
+        Whether the metric is in warning state.
+        """
+
+        return self.health is MetricHealth.WARNING
+
+
+    @property
+    def error(self) -> bool:
+        """
+        Whether the metric is in error state.
+        """
+
+        return self.health is MetricHealth.ERROR
+
+
+    @property
+    def stale(self) -> bool:
+        """
+        Whether the metric is stale.
+        """
+
+        return self.health is MetricHealth.STALE
+
+
+
+# ==============================================================================
+# Part 9. Lifecycle
+# ==============================================================================
+
+    def enable(self) -> None:
+        self.enabled = True
+
+    def disable(self) -> None:
+        self.enabled = False
+        self.active = False
+        self.lifecycle = MetricLifecycle.DISABLED
+
+    def activate(self) -> None:
+        if self.enabled:
+            self.active = True
+            self.lifecycle = MetricLifecycle.ACTIVE
+
+    def deactivate(self) -> None:
+        self.active = False
+
+    def reset(self) -> None:
+        self.enabled = DEFAULT_ENABLED
+        self.active = DEFAULT_ACTIVE
+        self.lifecycle = MetricLifecycle.CREATED
+        self.health = MetricHealth.HEALTHY
+        self.status = MetricStatus.IDLE
+
+    def archive(self) -> None:
+        self.active = False
+        self.lifecycle = MetricLifecycle.ARCHIVED
+
+    def restore(self) -> None:
+        self.enabled = True
+        self.active = True
+        self.lifecycle = MetricLifecycle.ACTIVE
+
+
+# ==============================================================================
+# Part 10. Status
+# ==============================================================================
+
+    def mark_healthy(self) -> None:
+        self.health = MetricHealth.HEALTHY
+
+    def mark_warning(self) -> None:
+        self.health = MetricHealth.WARNING
+
+    def mark_error(self) -> None:
+        self.health = MetricHealth.ERROR
+
+    def mark_stale(self) -> None:
+        self.health = MetricHealth.STALE
+
+    def is_enabled(self) -> bool:
+        return self.enabled
+
+    def is_active(self) -> bool:
+        return self.active
+
+    def is_healthy(self) -> bool:
+        return self.health is MetricHealth.HEALTHY
+
+    def is_warning(self) -> bool:
+        return self.health is MetricHealth.WARNING
+
+    def is_error(self) -> bool:
+        return self.health is MetricHealth.ERROR
+
+    def is_stale(self) -> bool:
+        return self.health is MetricHealth.STALE
+
+
+# ==============================================================================
+# Part 11. Validation
+# ==============================================================================
+
+    def validate(self) -> bool:
+        """
+        Validate current state.
+        """
+
+        if not isinstance(self.enabled, bool):
+            return False
+
+        if not isinstance(self.active, bool):
+            return False
+
+        if not isinstance(self.lifecycle, MetricLifecycle):
+            return False
+
+        if not isinstance(self.health, MetricHealth):
+            return False
+
+        if not isinstance(self.status, MetricStatus):
+            return False
+
+        return True
+
+# ==============================================================================
+# Part 12. Serialization
+# ==============================================================================
+
+    def to_dict(self) -> JsonDict:
+        """
+        Serialize to dictionary.
+        """
+
+        return {
+            "enabled": self.enabled,
+            "active": self.active,
+            "lifecycle": self.lifecycle.value,
+            "health": self.health.value,
+            "status": self.status.value,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: JsonDict,
+    ) -> "MetricState":
+        """
+        Create from dictionary.
+        """
+
+        return cls(
+            enabled=data.get("enabled", DEFAULT_ENABLED),
+            active=data.get("active", DEFAULT_ACTIVE),
+            lifecycle=data.get(
+                "lifecycle",
+                MetricLifecycle.CREATED,
+            ),
+            health=data.get(
+                "health",
+                MetricHealth.HEALTHY,
+            ),
+            status=data.get(
+                "status",
+                MetricStatus.IDLE,
+            ),
         )
 
-        self._after_snapshot(snap)
-
-        return snap
-
-
-# ----------------------------------------------------------
-# Restore
-# ----------------------------------------------------------
-
-def restore(
-    self,
-    snapshot: MetricSnapshot,
-) -> None:
-    """
-    Restore runtime state from a snapshot.
-    """
-
-    with self._lock:
-
-        self._value = snapshot.value
-
-        self._previous_value = snapshot.previous_value
-
-        self._update_count = snapshot.update_count
-
-        self._enabled = snapshot.enabled
-
-        self._frozen = snapshot.frozen
-
-        self._closed = snapshot.closed
-
-        self._timestamp = snapshot.timestamp
-
-
-# ----------------------------------------------------------
-# Clone
-# ----------------------------------------------------------
-
-def clone(self) -> "MetricState":
-    """
-    Deep clone this MetricState.
-    """
-
-    state = self.__class__()
-
-    state.restore(self.snapshot())
-
-    return state
-
-
-# ----------------------------------------------------------
-# Copy
-# ----------------------------------------------------------
-
-def copy(self) -> "MetricState":
-    """
-    Alias of clone().
-    """
-
-    return self.clone() 
-# ==========================================================
-# Part 5. Lifecycle
-# ==========================================================
-
-
-import time
-
-from .exceptions import (
-    MetricClosedError,
-)
-
-
-# ----------------------------------------------------------
-# Freeze
-# ----------------------------------------------------------
-
-def freeze(self) -> None:
-    """
-    Freeze this metric.
-
-    A frozen metric cannot be updated.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise MetricClosedError("Metric is closed.")
-
-        self._frozen = True
-        self._timestamp = time.time()
-
-
-# ----------------------------------------------------------
-# Unfreeze
-# ----------------------------------------------------------
-
-def unfreeze(self) -> None:
-    """
-    Unfreeze this metric.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise MetricClosedError("Metric is closed.")
-
-        self._frozen = False
-        self._timestamp = time.time()
-
-
-# ----------------------------------------------------------
-# Enable
-# ----------------------------------------------------------
-
-def enable(self) -> None:
-    """
-    Enable this metric.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise MetricClosedError("Metric is closed.")
-
-        self._enabled = True
-        self._timestamp = time.time()
-
-
-# ----------------------------------------------------------
-# Disable
-# ----------------------------------------------------------
-
-def disable(self) -> None:
-    """
-    Disable this metric.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            raise MetricClosedError("Metric is closed.")
-
-        self._enabled = False
-        self._timestamp = time.time()
-
-
-# ----------------------------------------------------------
-# Close
-# ----------------------------------------------------------
-
-def close(self) -> None:
-    """
-    Permanently close the runtime state.
-    """
-
-    with self._lock:
-
-        self._closed = True
-        self._timestamp = time.time()
-
-
-# ----------------------------------------------------------
-# Reopen
-# ----------------------------------------------------------
-
-def reopen(self) -> None:
-    """
-    Reopen a previously closed metric.
-    """
-
-    with self._lock:
-
-        self._closed = False
-        self._timestamp = time.time()     
-# ==========================================================
-# Part 6. Hooks
-# ==========================================================
-
-
-from typing import Any
-
-from .metric_snapshot import MetricSnapshot
-
-
-# ----------------------------------------------------------
-# Before Update
-# ----------------------------------------------------------
-
-def _before_update(
-    self,
-    value: Any,
-) -> None:
-    """
-    Hook called immediately before updating the metric value.
-
-    Parameters
-    ----------
-    value:
-        The validated value that will be assigned.
-
-    Notes
-    -----
-    Override in subclasses if custom behavior is required.
-    """
-    return None
-
-
-# ----------------------------------------------------------
-# After Update
-# ----------------------------------------------------------
-
-def _after_update(
-    self,
-    value: Any,
-) -> None:
-    """
-    Hook called immediately after a successful update.
-
-    Parameters
-    ----------
-    value:
-        The new metric value.
-
-    Notes
-    -----
-    Override in subclasses if custom behavior is required.
-    """
-    return None
-
-
-# ----------------------------------------------------------
-# Before Snapshot
-# ----------------------------------------------------------
-
-def _before_snapshot(self) -> None:
-    """
-    Hook executed before creating a snapshot.
-
-    Override in subclasses if needed.
-    """
-    return None
-
-
-# ----------------------------------------------------------
-# After Snapshot
-# ----------------------------------------------------------
-
-def _after_snapshot(
-    self,
-    snapshot: MetricSnapshot,
-) -> None:
-    """
-    Hook executed after a snapshot has been created.
-
-    Parameters
-    ----------
-    snapshot:
-        Newly created MetricSnapshot.
-
-    Override in subclasses if needed.
-    """
-    return None     
-# ==========================================================
-# Part 7. Context Manager
-# ==========================================================
-
-
-from types import TracebackType
-
-
-# ----------------------------------------------------------
-# Enter
-# ----------------------------------------------------------
-
-def __enter__(self) -> "MetricState":
-    """
-    Enter the runtime context.
-
-    Returns
-    -------
-    MetricState
-        The current MetricState instance.
-    """
-    return self
-
-
-# ----------------------------------------------------------
-# Exit
-# ----------------------------------------------------------
-
-def __exit__(
-    self,
-    exc_type: type[BaseException] | None,
-    exc_value: BaseException | None,
-    traceback: TracebackType | None,
-) -> bool:
-    """
-    Exit the runtime context.
-
-    Parameters
-    ----------
-    exc_type:
-        Exception type.
-
-    exc_value:
-        Exception instance.
-
-    traceback:
-        Traceback object.
-
-    Returns
-    -------
-    bool
-        False to propagate any exception.
-    """
-
-    # Do not suppress exceptions.
-    return False 
-# ==========================================================
-# Part 8. Rich API
-# ==========================================================
-
-
-from collections.abc import Iterator
-from typing import Any
-
-
-# ----------------------------------------------------------
-# repr()
-# ----------------------------------------------------------
-
-def __repr__(self) -> str:
-    """
-    Developer-friendly representation.
-    """
-
-    return (
-        f"{self.__class__.__name__}("
-        f"uuid={self._uuid!s}, "
-        f"value={self._value!r}, "
-        f"updates={self._update_count}, "
-        f"enabled={self._enabled}, "
-        f"frozen={self._frozen}, "
-        f"closed={self._closed})"
-    )
-
-
-# ----------------------------------------------------------
-# str()
-# ----------------------------------------------------------
-
-def __str__(self) -> str:
-    """
-    Human-readable representation.
-    """
-
-    return str(self._value)
-
-
-# ----------------------------------------------------------
-# Equality
-# ----------------------------------------------------------
-
-def __eq__(self, other: object) -> bool:
-
-    if not isinstance(other, MetricState):
-        return NotImplemented
-
-    return self._uuid == other._uuid
-
-
-# ----------------------------------------------------------
-# Hash
-# ----------------------------------------------------------
-
-def __hash__(self) -> int:
-
-    return hash(self._uuid)
-
-
-# ----------------------------------------------------------
-# Bool
-# ----------------------------------------------------------
-
-def __bool__(self) -> bool:
-    """
-    True if the metric is active.
-
-    A metric is considered active when it is:
-
-        enabled
-        not frozen
-        not closed
-    """
-
-    return (
-        self._enabled
-        and not self._frozen
-        and not self._closed
-    )
-
-
-# ----------------------------------------------------------
-# Iterator
-# ----------------------------------------------------------
-
-def __iter__(self) -> Iterator[Any]:
-    """
-    Iterate over the current value.
-
-    - Iterable value -> iterate elements
-    - Scalar value -> iterate single element
-    - None -> empty iterator
-    """
-
-    if self._value is None:
-        return iter(())
-
-    try:
-        return iter(self._value)
-
-    except TypeError:
-        return iter((self._value,))
-
-
-# ----------------------------------------------------------
-# Length
-# ----------------------------------------------------------
-
-def __len__(self) -> int:
-    """
-    Return logical length.
-
-    Rules
-    -----
-    Iterable value -> len(value)
-
-    Scalar value -> 1
-
-    None -> 0
-    """
-
-    if self._value is None:
-        return 0
-
-    try:
-        return len(self._value)
-
-    except TypeError:
-        return 1  
-# ==========================================================
-# Part 9. Debug Helpers
-# ==========================================================
-
-
-import time
-from typing import Any
-
-
-# ----------------------------------------------------------
-# State
-# ----------------------------------------------------------
-
-@property
-def state(self) -> dict[str, Any]:
-    """
-    Return the complete runtime state.
-
-    Useful for debugging and monitoring.
-    """
-
-    return {
-        "uuid": str(self._uuid),
-        "value": self._value,
-        "previous_value": self._previous_value,
-        "update_count": self._update_count,
-        "enabled": self._enabled,
-        "frozen": self._frozen,
-        "closed": self._closed,
-        "timestamp": self._timestamp,
-    }
-
-
-# ----------------------------------------------------------
-# Age
-# ----------------------------------------------------------
-
-@property
-def age(self) -> float:
-    """
-    Seconds since the last update.
-    """
-
-    return max(0.0, time.time() - self._timestamp)
-
-
-# ----------------------------------------------------------
-# Is Empty
-# ----------------------------------------------------------
-
-@property
-def is_empty(self) -> bool:
-    """
-    True if the metric currently has no value.
-    """
-
-    return self._value is None
-
-
-# ----------------------------------------------------------
-# Statistics
-# ----------------------------------------------------------
-
-@property
-def statistics(self) -> dict[str, Any]:
-    """
-    Runtime statistics.
-    """
-
-    return {
-        "updates": self._update_count,
-        "age": self.age,
-        "has_value": not self.is_empty,
-        "active": bool(self),
-    }
-
-
-# ----------------------------------------------------------
-# Health
-# ----------------------------------------------------------
-
-@property
-def health(self) -> str:
-    """
-    Human-readable runtime health.
-
-    Returns
-    -------
-    str
-        "closed"
-        "disabled"
-        "frozen"
-        "empty"
-        "healthy"
-    """
-
-    if self._closed:
-        return "closed"
-
-    if not self._enabled:
-        return "disabled"
-
-    if self._frozen:
-        return "frozen"
-
-    if self.is_empty:
-        return "empty"
-
-    return "healthy"                            
+    def to_json(
+        self,
+        **kwargs: Any,
+    ) -> str:
+        """
+        Serialize to JSON.
+        """
+
+        return json.dumps(
+            self.to_dict(),
+            **kwargs,
+        )
+
+    @classmethod
+    def from_json(
+        cls,
+        value: str,
+    ) -> "MetricState":
+        """
+        Create from JSON.
+        """
+
+        return cls.from_dict(
+            json.loads(value),
+        )
+
+
+# ==============================================================================
+# Part 13. Copy
+# ==============================================================================
+
+    def copy(self) -> "MetricState":
+        """
+        Return a shallow copy.
+        """
+
+        return type(self).from_dict(
+            self.to_dict(),
+        )
+
+    def clone(self) -> "MetricState":
+        """
+        Return a deep copy.
+        """
+
+        return deepcopy(self)
+
+
+# ==============================================================================
+# Part 14. Equality
+# ==============================================================================
+
+    def __eq__(
+        self,
+        other: object,
+    ) -> bool:
+
+        if not isinstance(other, MetricState):
+            return NotImplemented
+
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+
+        return hash(
+            (
+                self.enabled,
+                self.active,
+                self.lifecycle,
+                self.health,
+                self.status,
+            )
+        )
+
+
+# ==============================================================================
+# Part 15. Representation
+# ==============================================================================
+
+    def __repr__(self) -> str:
+
+        return (
+            f"{self.__class__.__name__}("
+            f"enabled={self.enabled!r}, "
+            f"active={self.active!r}, "
+            f"lifecycle={self.lifecycle.value!r}, "
+            f"health={self.health.value!r}, "
+            f"status={self.status.value!r}"
+            f")"
+        )
+
+    def __str__(self) -> str:
+
+        return (
+            f"{self.lifecycle.value}/"
+            f"{self.health.value}/"
+            f"{self.status.value}"
+        )
+
+
+# ==============================================================================
+# Part 16. Public API
+# ==============================================================================
+
+__all__ = [
+    "__version__",
+    "MetricLifecycle",
+    "MetricHealth",
+    "MetricStatus",
+    "MetricStateError",
+    "MetricStateValidationError",
+    "MetricState",
+]            

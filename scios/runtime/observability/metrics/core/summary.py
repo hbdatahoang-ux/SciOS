@@ -1,1645 +1,476 @@
+# ==============================================================================
+
+# Summary
+
+# ==============================================================================
+
 """
-SciOS Observability
-==================
+A Summary represents a metric that aggregates observations into a statistical
+summary.
 
-Summary Metric
-
-Part 1
-------
-
-Foundation
-
-Responsibilities
-----------------
-
-- Summary metric implementation
-- Quantile configuration
-- Runtime statistics
-- Observation storage
-
-A Summary estimates quantiles over recorded observations.
-
-Unlike Histogram, Summary does not expose bucket boundaries.
+Python 3.11+
 """
 
 from __future__ import annotations
 
-# ==========================================================
-# Imports
-# ==========================================================
+# ==============================================================================
 
-from typing import Any
-from typing import Iterable
+# Part 1. Imports
 
-from .metric import Metric
-from .snapshot import MetricSnapshot
+# ==============================================================================
 
+from copy import deepcopy
+import json
+from typing import Any, Final, TypeAlias
 
-__all__ = [
-    "Summary",
-]
+from .metric_state import MetricState
 
 
-# ==========================================================
-# Summary
-# ==========================================================
+
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
+
+DEFAULT_VALUE: Final[float] = 0.0
+
+DEFAULT_NAME: Final[str | None] = None
+
+DEFAULT_DESCRIPTION: Final[str | None] = None
+
+DEFAULT_UNIT: Final[str | None] = None
+
+DEFAULT_METADATA: Final[dict[str, Any]] = {}
+
+DEFAULT_ANNOTATIONS: Final[dict[str, Any]] = {}
+
+DEFAULT_TAGS: Final[dict[str, Any]] = {}
 
 
-class Summary(Metric):
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+SummaryValue: TypeAlias = int | float
+
+SummaryMetadata: TypeAlias = dict[str, Any]
+
+SummaryAnnotations: TypeAlias = dict[str, Any]
+
+SummaryTags: TypeAlias = dict[str, Any]
+
+
+# ==============================================================================
+# Part 4. Exceptions
+# ==============================================================================
+
+class SummaryValidationError(ValueError):
     """
-    Summary metric.
-
-    A Summary records observations and computes:
-
-    - count
-    - sum
-    - min
-    - max
-    - mean
-    - configurable quantiles
-
-    Examples
-    --------
-    >>> latency = Summary(
-    ...     descriptor=descriptor
-    ... )
-    >>> latency.observe(12.3)
-    >>> latency.observe(18.7)
+    Raised when a Summary contains invalid internal state.
     """
 
-    # ======================================================
+    pass
+
+
+# ==============================================================================
+# Part 5. Summary class
+# ==============================================================================
+
+class Summary:
+    """
+    SciOS Runtime Summary.
+
+    Represents a metric value together with descriptive metadata,
+    annotations, tags, and runtime state.
+    """
+
+    # ==========================================================================
     # Constructor
-    # ======================================================
+    # ==========================================================================
 
     def __init__(
         self,
+        value: SummaryValue = DEFAULT_VALUE,
         *,
-        descriptor,
-        quantiles: Iterable[float] | None = None,
-        **kwargs,
+        name: str | None = DEFAULT_NAME,
+        description: str | None = DEFAULT_DESCRIPTION,
+        unit: str | None = DEFAULT_UNIT,
+        metadata: SummaryMetadata | None = None,
+        annotations: SummaryAnnotations | None = None,
+        tags: SummaryTags | None = None,
+        state: Any = None,
     ) -> None:
-        """
-        Initialize Summary.
+        self._name = name
+        self._value = value
+        self._description = description
+        self._unit = unit
 
-        Parameters
-        ----------
-        descriptor
-            Metric descriptor.
-
-        quantiles
-            Requested quantiles.
-
-        kwargs
-            Forwarded to Metric.
-        """
-
-        super().__init__(
-            descriptor=descriptor,
-            **kwargs,
+        self._metadata = (
+            {} if metadata is None else dict(metadata)
         )
 
-        # --------------------------------------------------
-        # Quantiles
-        # --------------------------------------------------
-
-        self._quantiles: list[float] = sorted(
-
-            list(
-                quantiles
-                if quantiles is not None
-                else (
-                    0.50,
-                    0.90,
-                    0.95,
-                    0.99,
-                )
-            )
-
+        self._annotations = (
+            {} if annotations is None else dict(annotations)
         )
 
-        # --------------------------------------------------
-        # Runtime Statistics
-        # --------------------------------------------------
-
-        self._values: list[float] = []
-
-        self._count: int = 0
-
-        self._sum: float = 0.0
-
-        self._min: float | None = None
-
-        self._max: float | None = None
-
-        # --------------------------------------------------
-        # Validation
-        # --------------------------------------------------
-
-        self.validate()
-
-    # ======================================================
-    # Quantiles
-    # ======================================================
-
-    @property
-    def quantiles(
-        self,
-    ) -> tuple[float, ...]:
-        """
-        Configured quantiles.
-
-        Returns
-        -------
-        tuple[float, ...]
-        """
-
-        return tuple(self._quantiles)
-
-    # ======================================================
-    # Default Value
-    # ======================================================
-
-    def _default_value(
-        self,
-    ) -> list[float]:
-        """
-        Default runtime value.
-
-        Returns
-        -------
-        list[float]
-        """
-
-        return []
-
-    # ======================================================
-    # Runtime Validation
-    # ======================================================
-
-    def _validate_runtime(
-        self,
-    ) -> None:
-        """
-        Validate runtime state.
-
-        Raises
-        ------
-        ValueError
-            If runtime state is invalid.
-        """
-
-        if self._count < 0:
-            raise ValueError(
-                "Summary count cannot be negative."
-            )
-
-        if self._sum < 0:
-            raise ValueError(
-                "Summary sum cannot be negative."
-            )
-
-        if (
-            self._min is not None
-            and self._max is not None
-            and self._min > self._max
-        ):
-            raise ValueError(
-                "Minimum cannot exceed maximum."
-            )
-
-        for q in self._quantiles:
-
-            if not 0.0 <= q <= 1.0:
-                raise ValueError(
-                    f"Invalid quantile: {q}"
-                )
-# ======================================================
-# Part 2. Summary API
-# ======================================================
-
-    def observe(
-        self,
-        value: float | int,
-    ) -> None:
-        """
-        Record a new observation.
-
-        Parameters
-        ----------
-        value
-            Numeric observation.
-        """
-
-        self.validate_value(value)
-
-        with self.lock:
-
-            self._ensure_mutable()
-
-            value = float(value)
-
-            self._previous_value = self._value
-
-            self._values.append(value)
-
-            self._count += 1
-
-            self._sum += value
-
-            if (
-                self._min is None
-                or value < self._min
-            ):
-                self._min = value
-
-            if (
-                self._max is None
-                or value > self._max
-            ):
-                self._max = value
-
-            self._value = value
-
-            self._update_count += 1
-
-            self._revision += 1
-
-            self._dirty = True
-
-            self._touch()
-
-
-    def record(
-        self,
-        value: float | int,
-    ) -> None:
-        """
-        Alias of observe().
-        """
-
-        self.observe(value)
-
-
-    def update(
-        self,
-        value: float | int,
-    ) -> None:
-        """
-        Alias of observe().
-
-        Summary metrics accumulate values rather than
-        replacing them.
-        """
-
-        self.observe(value)
-
-
-    def count(
-        self,
-    ) -> int:
-        """
-        Return total number of observations.
-
-        Returns
-        -------
-        int
-        """
-
-        return self._count
-
-
-    def sum(
-        self,
-    ) -> float:
-        """
-        Return accumulated sum.
-
-        Returns
-        -------
-        float
-        """
-
-        return self._sum
-
-
-    def quantile(
-        self,
-        q: float,
-    ) -> float | None:
-        """
-        Estimate a quantile.
-
-        Parameters
-        ----------
-        q
-            Quantile in [0,1].
-
-        Returns
-        -------
-        float | None
-        """
-
-        self.validate_quantile(q)
-
-        if not self._values:
-            return None
-
-        values = sorted(self._values)
-
-        if len(values) == 1:
-            return values[0]
-
-        index = q * (len(values) - 1)
-
-        lower = int(index)
-
-        upper = min(
-            lower + 1,
-            len(values) - 1,
+        self._tags = (
+            {} if tags is None else dict(tags)
         )
 
-        if lower == upper:
-            return values[lower]
+        self._state = state
 
-        fraction = index - lower
-
-        return (
-
-            values[lower]
-
-            + (
-
-                values[upper]
-                - values[lower]
-
-            ) * fraction
-
-        )
-
-
-    def reset(
-        self,
-    ) -> None:
-        """
-        Reset runtime statistics.
-        """
-
-        with self.lock:
-
-            self._ensure_mutable()
-
-            self._previous_value = self._value
-
-            self._values.clear()
-
-            self._count = 0
-
-            self._sum = 0.0
-
-            self._min = None
-
-            self._max = None
-
-            self._value = self._default_value()
-
-            self._update_count += 1
-
-            self._revision += 1
-
-            self._dirty = True
-
-            self._touch()
-# ======================================================
-# Part 3. Properties
-# ======================================================
+    # ==========================================================================
+    # Properties
+    # ==========================================================================
 
     @property
-    def value(
-        self,
-    ) -> list[float]:
-        """
-        Recorded observations.
+    def name(self) -> str | None:
+        return self._name
 
-        Returns
-        -------
-        list[float]
-            Copy of all observed values.
-        """
-
-        return list(self._values)
-
+    @name.setter
+    def name(self, value: str | None) -> None:
+        self._name = value
 
     @property
-    def count(
-        self,
-    ) -> int:
-        """
-        Number of observations.
-        """
+    def value(self) -> SummaryValue:
+        return self._value
 
-        return self._count
-
+    @value.setter
+    def value(self, value: SummaryValue) -> None:
+        self._value = value
 
     @property
-    def sum(
-        self,
-    ) -> float:
-        """
-        Sum of observations.
-        """
+    def description(self) -> str | None:
+        return self._description
 
-        return self._sum
-
+    @description.setter
+    def description(self, value: str | None) -> None:
+        self._description = value
 
     @property
-    def min(
-        self,
-    ) -> float | None:
-        """
-        Minimum observed value.
-        """
+    def unit(self) -> str | None:
+        return self._unit
 
-        return self._min
-
+    @unit.setter
+    def unit(self, value: str | None) -> None:
+        self._unit = value
 
     @property
-    def max(
-        self,
-    ) -> float | None:
-        """
-        Maximum observed value.
-        """
-
-        return self._max
-
+    def metadata(self) -> SummaryMetadata:
+        return self._metadata
 
     @property
-    def mean(
-        self,
-    ) -> float:
-        """
-        Arithmetic mean.
-
-        Returns
-        -------
-        float
-        """
-
-        if self._count == 0:
-            return 0.0
-
-        return self._sum / self._count
-
+    def annotations(self) -> SummaryAnnotations:
+        return self._annotations
 
     @property
-    def quantiles(
-        self,
-    ) -> dict[float, float | None]:
-        """
-        Current configured quantiles.
+    def tags(self) -> SummaryTags:
+        return self._tags
 
-        Returns
-        -------
-        dict
-        """
+    @property
+    def state(self) -> Any:
+        return self._state
 
+    @state.setter
+    def state(self, value: Any) -> None:
+        self._state = value
+
+    # ==========================================================================
+    # Value operations
+    # ==========================================================================
+
+    def set(self, value: SummaryValue) -> Summary:
+        self._value = value
+        return self
+
+    def reset(self) -> Summary:
+        self._value = DEFAULT_VALUE
+        return self
+
+    def add(self, amount: SummaryValue) -> Summary:
+        self._value += amount
+        return self
+
+    def subtract(self, amount: SummaryValue) -> Summary:
+        self._value -= amount
+        return self
+
+    def increment(self, amount: SummaryValue = 1) -> Summary:
+        return self.add(amount)
+
+    def decrement(self, amount: SummaryValue = 1) -> Summary:
+        return self.subtract(amount)
+
+    # ==========================================================================
+    # Lifecycle operations
+    # ==========================================================================
+
+    def enable(self) -> Summary:
+        if self._state is not None and hasattr(self._state, "enable"):
+            self._state.enable()
+        return self
+
+    def disable(self) -> Summary:
+        if self._state is not None and hasattr(self._state, "disable"):
+            self._state.disable()
+        return self
+
+    def activate(self) -> Summary:
+        if self._state is not None and hasattr(self._state, "activate"):
+            self._state.activate()
+        return self
+
+    def deactivate(self) -> Summary:
+        if self._state is not None and hasattr(self._state, "deactivate"):
+            self._state.deactivate()
+        return self
+
+    # ==========================================================================
+    # Metadata / annotation / tag operations
+    # ==========================================================================
+
+    def set_metadata(self, key: str, value: Any) -> Summary:
+        self._metadata[key] = value
+        return self
+
+    def get_metadata(self, key: str, default: Any = None) -> Any:
+        return self._metadata.get(key, default)
+
+    def remove_metadata(self, key: str) -> Summary:
+        self._metadata.pop(key, None)
+        return self
+
+    def clear_metadata(self) -> Summary:
+        self._metadata.clear()
+        return self
+
+    def set_annotation(self, key: str, value: Any) -> Summary:
+        self._annotations[key] = value
+        return self
+
+    def get_annotation(self, key: str, default: Any = None) -> Any:
+        return self._annotations.get(key, default)
+
+    def remove_annotation(self, key: str) -> Summary:
+        self._annotations.pop(key, None)
+        return self
+
+    def clear_annotations(self) -> Summary:
+        self._annotations.clear()
+        return self
+
+    def set_tag(self, key: str, value: Any) -> Summary:
+        self._tags[key] = value
+        return self
+
+    def get_tag(self, key: str, default: Any = None) -> Any:
+        return self._tags.get(key, default)
+
+    def remove_tag(self, key: str) -> Summary:
+        self._tags.pop(key, None)
+        return self
+
+    def clear_tags(self) -> Summary:
+        self._tags.clear()
+        return self
+
+    # ==========================================================================
+    # Serialization
+    # ==========================================================================
+
+    def to_dict(self) -> dict[str, Any]:
         return {
-            q: self.quantile(q)
-            for q in self._quantiles
+            "name": self._name,
+            "value": self._value,
+            "description": self._description,
+            "unit": self._unit,
+            "metadata": dict(self._metadata),
+            "annotations": dict(self._annotations),
+            "tags": dict(self._tags),
+            "state": (
+                self._state.to_dict()
+                if self._state is not None
+                and hasattr(self._state, "to_dict")
+                else self._state
+            ),
         }
 
+    def to_json(self, **kwargs: Any) -> str:
+        return json.dumps(self.to_dict(), **kwargs)
 
-    @property
-    def created_at(
-        self,
-    ):
-        """
-        Creation timestamp.
-        """
+    # ==========================================================================
+    # Snapshot / restore
+    # ==========================================================================
 
-        return self._created_at
+    def snapshot(self) -> dict[str, Any]:
+        return deepcopy(self.to_dict())
 
+    def restore(self, snapshot: dict[str, Any]) -> Summary:
+        self._name = snapshot.get("name")
+        self._value = snapshot.get("value", DEFAULT_VALUE)
+        self._description = snapshot.get("description")
+        self._unit = snapshot.get("unit")
 
-    @property
-    def updated_at(
-        self,
-    ):
-        """
-        Last update timestamp.
-        """
+        self._metadata = dict(snapshot.get("metadata", {}))
+        self._annotations = dict(snapshot.get("annotations", {}))
+        self._tags = dict(snapshot.get("tags", {}))
 
-        return self._updated_at
+        return self
 
+    # ==========================================================================
+    # Copy / clone
+    # ==========================================================================
 
-    @property
-    def revision(
-        self,
-    ) -> int:
-        """
-        Runtime revision.
-        """
+    def copy(self) -> Summary:
+        return deepcopy(self)
 
-        return self._revision
+    def clone(self) -> Summary:
+        return self.copy()
 
+    # ==========================================================================
+    # Validation
+    # ==========================================================================
 
-    @property
-    def dirty(
-        self,
-    ) -> bool:
-        """
-        Dirty flag.
-
-        Indicates whether runtime state has changed
-        since the last snapshot/export.
-        """
-
-        return self._dirty
-# ======================================================
-# Part 4. Snapshot
-# ======================================================
-
-    def snapshot(
-        self,
-    ) -> MetricSnapshot:
-        """
-        Create an immutable snapshot of the Summary.
-
-        Returns
-        -------
-        MetricSnapshot
-        """
-
-        with self.lock:
-
-            return MetricSnapshot.create(
-
-                name=self.name,
-
-                value={
-                    "count": self._count,
-                    "sum": self._sum,
-                    "min": self._min,
-                    "max": self._max,
-                    "mean": self.mean,
-                    "quantiles": self.quantiles,
-                },
-
-                metric_type="summary",
-
-                labels=self.labels.to_dict(),
-
-                attributes=self.attributes.to_dict(),
-
-                metadata=self.metadata.to_dict(),
-
+    def validate(self) -> bool:
+        if self._name is not None and not isinstance(
+            self._name,
+            str,
+        ):
+            raise SummaryValidationError(
+                "name must be str or None."
             )
-
-
-    def restore(
-        self,
-        snapshot: MetricSnapshot,
-    ) -> None:
-        """
-        Restore runtime state from a snapshot.
-
-        Parameters
-        ----------
-        snapshot
-            Summary snapshot.
-        """
-
-        if snapshot.metric_type != "summary":
-
-            raise TypeError(
-                "Snapshot is not a Summary."
-            )
-
-        data = snapshot.value
-
-        with self.lock:
-
-            self._ensure_mutable()
-
-            self._previous_value = self._value
-
-            self._count = int(
-                data.get("count", 0)
-            )
-
-            self._sum = float(
-                data.get("sum", 0.0)
-            )
-
-            self._min = data.get("min")
-
-            self._max = data.get("max")
-
-            # Summary snapshots do not retain the full
-            # observation history. Start with an empty list.
-            self._values = []
-
-            self._value = None
-
-            self._update_count += 1
-
-            self._revision += 1
-
-            self._dirty = True
-
-            self._touch()
-
-
-    def clone(
-        self,
-    ) -> "Summary":
-        """
-        Deep clone this Summary.
-
-        Returns
-        -------
-        Summary
-        """
-
-        clone = self.__class__(
-
-            descriptor=self.descriptor.copy(),
-
-            metadata=self.metadata.copy(),
-
-            labels=self.labels.copy(),
-
-            attributes=self.attributes.copy(),
-
-            quantiles=tuple(
-                self._quantiles
-            ),
-
-        )
-
-        with clone.lock:
-
-            clone._values = list(
-                self._values
-            )
-
-            clone._count = self._count
-
-            clone._sum = self._sum
-
-            clone._min = self._min
-
-            clone._max = self._max
-
-            clone._value = self._value
-
-            clone._previous_value = (
-                self._previous_value
-            )
-
-            clone._update_count = (
-                self._update_count
-            )
-
-            clone._revision = (
-                self._revision
-            )
-
-            clone._dirty = self._dirty
-
-            clone._updated_at = (
-                self._updated_at
-            )
-
-        return clone
-
-
-    def copy(
-        self,
-    ) -> "Summary":
-        """
-        Alias of clone().
-
-        Returns
-        -------
-        Summary
-        """
-
-        return self.clone()
-# ======================================================
-# Part 5. Lifecycle
-# ======================================================
-
-    def freeze(
-        self,
-    ) -> None:
-        """
-        Freeze the Summary.
-
-        A frozen Summary becomes read-only until
-        unfreeze() is called.
-        """
-
-        with self.lock:
-
-            if not self._closed:
-
-                self._frozen = True
-
-                self._revision += 1
-
-                self._dirty = True
-
-                self._touch()
-
-
-    def unfreeze(
-        self,
-    ) -> None:
-        """
-        Unfreeze the Summary.
-        """
-
-        with self.lock:
-
-            if not self._closed:
-
-                self._frozen = False
-
-                self._revision += 1
-
-                self._dirty = True
-
-                self._touch()
-
-
-    def enable(
-        self,
-    ) -> None:
-        """
-        Enable updates.
-        """
-
-        with self.lock:
-
-            if not self._closed:
-
-                self._enabled = True
-
-                self._revision += 1
-
-                self._dirty = True
-
-                self._touch()
-
-
-    def disable(
-        self,
-    ) -> None:
-        """
-        Disable updates.
-
-        Existing values remain available but new
-        observations are rejected.
-        """
-
-        with self.lock:
-
-            if not self._closed:
-
-                self._enabled = False
-
-                self._revision += 1
-
-                self._dirty = True
-
-                self._touch()
-
-
-    def close(
-        self,
-    ) -> None:
-        """
-        Permanently close the Summary.
-
-        Once closed, no runtime updates are allowed
-        until reopen() is invoked.
-        """
-
-        with self.lock:
-
-            self._closed = True
-
-            self._enabled = False
-
-            self._frozen = True
-
-            self._revision += 1
-
-            self._dirty = True
-
-            self._touch()
-
-
-    def reopen(
-        self,
-    ) -> None:
-        """
-        Reopen a previously closed Summary.
-        """
-
-        with self.lock:
-
-            self._closed = False
-
-            self._enabled = True
-
-            self._frozen = False
-
-            self._revision += 1
-
-            self._dirty = True
-
-            self._touch()
-# ======================================================
-# Part 6. Validation
-# ======================================================
-
-    def validate(
-        self,
-    ) -> None:
-        """
-        Validate the complete Summary state.
-
-        Raises
-        ------
-        ValueError
-            If the runtime state is invalid.
-        """
-
-        self._validate_runtime()
-
-        for q in self._quantiles:
-            self.validate_quantile(q)
-
-        for value in self._values:
-            self.validate_value(value)
-
-
-    def validate_quantile(
-        self,
-        quantile: float,
-    ) -> None:
-        """
-        Validate a quantile.
-
-        Parameters
-        ----------
-        quantile
-            Quantile value.
-
-        Raises
-        ------
-        TypeError
-            If quantile is not numeric.
-
-        ValueError
-            If quantile is outside [0, 1].
-        """
-
-        self.validate_numeric(quantile)
-
-        if not 0.0 <= float(quantile) <= 1.0:
-
-            raise ValueError(
-                "Quantile must be between 0.0 and 1.0."
-            )
-
-
-    def validate_value(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Validate an observation.
-
-        Parameters
-        ----------
-        value
-            Observation value.
-
-        Raises
-        ------
-        TypeError
-            If the value is not numeric.
-        """
-
-        self.validate_numeric(value)
-
-
-    def validate_numeric(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Validate a numeric value.
-
-        Parameters
-        ----------
-        value
-            Candidate numeric value.
-
-        Raises
-        ------
-        TypeError
-            If value is not int or float.
-
-        ValueError
-            If value is NaN or infinite.
-        """
 
         if not isinstance(
-            value,
+            self._value,
             (int, float),
+        ) or isinstance(
+            self._value,
+            bool,
         ):
-
-            raise TypeError(
-                "Value must be numeric."
+            raise SummaryValidationError(
+                "value must be int or float."
             )
 
-        value = float(value)
-
-        if value != value:
-
-            raise ValueError(
-                "NaN is not allowed."
-            )
-
-        if value in (
-            float("inf"),
-            float("-inf"),
+        if self._description is not None and not isinstance(
+            self._description,
+            str,
         ):
-
-            raise ValueError(
-                "Infinite values are not allowed."
+            raise SummaryValidationError(
+                "description must be str or None."
             )
-# ======================================================
-# Part 7. Diagnostics
-# ======================================================
 
-    def statistics(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime statistics.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "type": "summary",
-
-            "count": self._count,
-
-            "sum": self._sum,
-
-            "min": self._min,
-
-            "max": self._max,
-
-            "mean": self.mean,
-
-            "quantiles": self.quantiles,
-
-            "updates": self._update_count,
-
-            "revision": self._revision,
-
-            "created_at": self._created_at,
-
-            "updated_at": self._updated_at,
-
-        }
-
-
-    def health(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime health information.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "dirty": self._dirty,
-
-            "healthy": (
-
-                self._enabled
-
-                and not self._closed
-
-            ),
-
-            "observations": self._count,
-
-            "revision": self._revision,
-
-        }
-
-
-    def dump(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Dump complete runtime state.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "descriptor": self.descriptor.name,
-
-            "statistics": self.statistics(),
-
-            "health": self.health(),
-
-            "labels": self.labels.to_dict(),
-
-            "attributes": self.attributes.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-        }
-
-
-    def inspect(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return detailed inspection information.
-
-        Intended for debugging and runtime diagnostics.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "class": self.__class__.__name__,
-
-            "metric_type": "summary",
-
-            "value": self.value,
-
-            "count": self._count,
-
-            "sum": self._sum,
-
-            "min": self._min,
-
-            "max": self._max,
-
-            "mean": self.mean,
-
-            "quantiles": self.quantiles,
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "dirty": self._dirty,
-
-            "revision": self._revision,
-
-            "created_at": self._created_at,
-
-            "updated_at": self._updated_at,
-
-            "labels": self.labels.to_dict(),
-
-            "attributes": self.attributes.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-        }
-# ======================================================
-# Part 8. Serialization
-# ======================================================
-
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Serialize the Summary to a dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "metric_type": "summary",
-
-            "name": self.name,
-
-            "count": self._count,
-
-            "sum": self._sum,
-
-            "min": self._min,
-
-            "max": self._max,
-
-            "mean": self.mean,
-
-            "quantiles": list(
-                self._quantiles
-            ),
-
-            "values": list(
-                self._values
-            ),
-
-            "labels": self.labels.to_dict(),
-
-            "attributes": self.attributes.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-            "created_at": self._created_at.isoformat(),
-
-            "updated_at": self._updated_at.isoformat(),
-
-            "revision": self._revision,
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-        }
-
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: dict[str, Any],
-        *,
-        descriptor,
-    ) -> "Summary":
-        """
-        Construct a Summary from a dictionary.
-
-        Parameters
-        ----------
-        data
-            Serialized summary.
-
-        descriptor
-            Metric descriptor.
-
-        Returns
-        -------
-        Summary
-        """
-
-        summary = cls(
-
-            descriptor=descriptor,
-
-            quantiles=data.get(
-                "quantiles",
-            ),
-
-        )
-
-        for value in data.get(
-            "values",
-            [],
+        if self._unit is not None and not isinstance(
+            self._unit,
+            str,
         ):
-
-            summary.observe(value)
-
-        return summary
-
-
-    def to_json(
-        self,
-        **kwargs,
-    ) -> str:
-        """
-        Serialize the Summary to JSON.
-
-        Parameters
-        ----------
-        kwargs
-            Forwarded to json.dumps().
-
-        Returns
-        -------
-        str
-        """
-
-        import json
-
-        kwargs.setdefault(
-            "indent",
-            2,
-        )
-
-        kwargs.setdefault(
-            "ensure_ascii",
-            False,
-        )
-
-        return json.dumps(
-
-            self.to_dict(),
-
-            **kwargs,
-
-        )
-
-
-    @classmethod
-    def from_json(
-        cls,
-        payload: str,
-        *,
-        descriptor,
-    ) -> "Summary":
-        """
-        Construct a Summary from JSON.
-
-        Parameters
-        ----------
-        payload
-            JSON string.
-
-        descriptor
-            Metric descriptor.
-
-        Returns
-        -------
-        Summary
-        """
-
-        import json
-
-        return cls.from_dict(
-
-            json.loads(payload),
-
-            descriptor=descriptor,
-
-        )
-# ======================================================
-# Part 9. Export
-# ======================================================
-
-    def prometheus(
-        self,
-    ) -> str:
-        """
-        Export Summary in Prometheus exposition format.
-
-        Returns
-        -------
-        str
-        """
-
-        labels = ""
-
-        if len(self.labels):
-
-            labels = "{" + ",".join(
-
-                f'{k}="{v}"'
-
-                for k, v in sorted(
-                    self.labels.items()
-                )
-
-            ) + "}"
-
-        lines: list[str] = []
-
-        # Quantiles
-        for q in self._quantiles:
-
-            value = self.quantile(q)
-
-            quantile_labels = (
-                f'{{quantile="{q}"}}'
-                if not labels
-                else labels[:-1] + f',quantile="{q}"' + "}"
+            raise SummaryValidationError(
+                "unit must be str or None."
             )
 
-            lines.append(
-                f"{self.name}{quantile_labels} "
-                f"{0.0 if value is None else value}"
+        if not isinstance(self._metadata, dict):
+            raise SummaryValidationError(
+                "metadata must be dict."
             )
 
-        # Count
-        lines.append(
-            f"{self.name}_count{labels} {self._count}"
+        if self._annotations is None:
+            raise SummaryValidationError(
+                "annotations must not be None."
+            )
+
+        if self._tags is None:
+            raise SummaryValidationError(
+                "tags must not be None."
+            )
+
+        return True
+
+    # ==========================================================================
+    # Equality / hashing
+    # ==========================================================================
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Summary):
+            return NotImplemented
+
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self._name,
+                self._value,
+                self._description,
+                self._unit,
+                json.dumps(
+                    self._metadata,
+                    sort_keys=True,
+                    default=str,
+                ),
+                json.dumps(
+                    self._annotations,
+                    sort_keys=True,
+                    default=str,
+                ),
+                json.dumps(
+                    self._tags,
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
         )
 
-        # Sum
-        lines.append(
-            f"{self.name}_sum{labels} {self._sum}"
-        )
+    # ==========================================================================
+    # Representation
+    # ==========================================================================
 
-        return "\n".join(lines)
-
-
-    def otel(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Export Summary in an OpenTelemetry-friendly format.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "name": self.name,
-
-            "type": "summary",
-
-            "count": self._count,
-
-            "sum": self._sum,
-
-            "min": self._min,
-
-            "max": self._max,
-
-            "mean": self.mean,
-
-            "quantiles": self.quantiles,
-
-            "attributes": self.attributes.to_dict(),
-
-            "labels": self.labels.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-            "timestamp": self.updated_at.isoformat(),
-
-        }
-
-
-    def csv(
-        self,
-    ) -> str:
-        """
-        Export Summary as a CSV row.
-
-        Returns
-        -------
-        str
-        """
-
-        quantiles = ";".join(
-
-            f"{q}:{self.quantile(q)}"
-
-            for q in self._quantiles
-
-        )
-
-        return ",".join(
-
-            [
-
-                self.name,
-
-                "summary",
-
-                str(self._count),
-
-                str(self._sum),
-
-                str(self._min),
-
-                str(self._max),
-
-                str(self.mean),
-
-                quantiles,
-
-                self.updated_at.isoformat(),
-
-            ]
-
-        )
-# ======================================================
-# Part 10. Final Polish
-# ======================================================
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-
-        Returns
-        -------
-        str
-        """
-
+    def __repr__(self) -> str:
         return (
-
-            f"{self.__class__.__name__}("
-
-            f"name={self.name!r}, "
-
-            f"count={self._count}, "
-
-            f"sum={self._sum}, "
-
-            f"mean={self.mean}, "
-
-            f"revision={self._revision})"
-
+            f"Summary("
+            f"name={self._name!r}, "
+            f"value={self._value!r}, "
+            f"description={self._description!r}, "
+            f"unit={self._unit!r}"
+            f")"
         )
 
-
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human-readable representation.
-
-        Returns
-        -------
-        str
-        """
-
-        return (
-
-            f"{self.name}"
-
-            f"(count={self._count}, "
-
-            f"mean={self.mean:.6f}, "
-
-            f"min={self._min}, "
-
-            f"max={self._max})"
-
-        )
+    def __str__(self) -> str:
+        return str(self._value)
 
 
-    def __len__(
-        self,
-    ) -> int:
-        """
-        Number of recorded observations.
+# ==============================================================================
+# Part N. Public API
+# ==============================================================================
 
-        Returns
-        -------
-        int
-        """
+__all__ = [
+    # ------------------------------------------------------------------
+    # Constants
+    # ------------------------------------------------------------------
 
-        return self._count
+    "DEFAULT_VALUE",
+    "DEFAULT_NAME",
+    "DEFAULT_DESCRIPTION",
+    "DEFAULT_UNIT",
+    "DEFAULT_METADATA",
+    "DEFAULT_ANNOTATIONS",
+    "DEFAULT_TAGS",
 
+    # ------------------------------------------------------------------
+    # Type Aliases
+    # ------------------------------------------------------------------
 
-    def __bool__(
-        self,
-    ) -> bool:
-        """
-        Truthiness.
+    "SummaryValue",
+    "SummaryMetadata",
+    "SummaryAnnotations",
+    "SummaryTags",
 
-        Returns
-        -------
-        bool
-            True if at least one observation exists.
-        """
+    # ------------------------------------------------------------------
+    # Exceptions
+    # ------------------------------------------------------------------
 
-        return self._count > 0
+    "SummaryValidationError",
 
+    # ------------------------------------------------------------------
+    # Main class
+    # ------------------------------------------------------------------
 
-    # ==================================================
-    # Compatibility
-    # ==================================================
-
-    @property
-    def total(
-        self,
-    ) -> float:
-        """
-        Compatibility alias for sum.
-
-        Returns
-        -------
-        float
-        """
-
-        return self._sum
-
-
-    @property
-    def average(
-        self,
-    ) -> float:
-        """
-        Compatibility alias for mean.
-
-        Returns
-        -------
-        float
-        """
-
-        return self.mean
-
-
-    @property
-    def observations(
-        self,
-    ) -> list[float]:
-        """
-        Compatibility alias for recorded values.
-
-        Returns
-        -------
-        list[float]
-        """
-
-        return self.value
-
-
-    def export(
-        self,
-        format: str = "dict",
-    ) -> Any:
-        """
-        Generic export interface.
-
-        Parameters
-        ----------
-        format
-            One of:
-            - dict
-            - json
-            - prometheus
-            - otel
-            - csv
-
-        Returns
-        -------
-        Any
-        """
-
-        format = format.lower()
-
-        exporters = {
-
-            "dict": self.to_dict,
-
-            "json": self.to_json,
-
-            "prometheus": self.prometheus,
-
-            "otel": self.otel,
-
-            "csv": self.csv,
-
-        }
-
-        try:
-
-            return exporters[format]()
-
-        except KeyError:
-
-            raise ValueError(
-                f"Unsupported export format: {format}"
-            ) from None
-                                                                                                        
+    "Summary",
+]

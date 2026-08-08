@@ -1,175 +1,264 @@
-"""
-SciOS Observability
-===================
-
-Metric metadata model.
-
-This module provides metadata storage
-for observability objects.
-
-Metadata is used by:
-
-- MetricDescriptor
-- MetricRegistry
-- Exporters
-- Diagnostics
-- Runtime inspection
-- Distributed systems
-
-Design goals:
-
-- immutable friendly
-- validation aware
-- serialization ready
-- thread safe
-- exporter compatible
-"""
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
 
 from __future__ import annotations
 
-
 import json
-import uuid
-import time
 
 from copy import deepcopy
-from threading import RLock
-
-from typing import Any
-from typing import Mapping
-from typing import MutableMapping
-from typing import Iterator
+from dataclasses import dataclass, field
+from typing import Any, Mapping, MutableMapping, TypeAlias
 
 
-from .validation import MetricValidator
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
+
+METADATA_VERSION: str = "1.0.0"
+
+DEFAULT_ANNOTATIONS: dict[str, Any] = {}
+
+DEFAULT_TAGS: set[str] = set()
 
 
-__all__ = [
-    "MetricMetadata",
-]
+# ==============================================================================
+# Part 3. Exceptions
+# ==============================================================================
 
 
-# ======================================================
-# Constants
-# ======================================================
+class MetadataError(Exception):
+    """Base exception for MetricMetadata."""
 
 
-_METADATA_VERSION = "1.0"
-
-_MAX_METADATA_SIZE = 256
-
-
-# ======================================================
-# Type aliases
-# ======================================================
+class MetadataValidationError(MetadataError):
+    """Raised when metadata validation fails."""
 
 
-MetadataDict = dict[str, Any]
+# ==============================================================================
+# Part 4. Type Aliases
+# ==============================================================================
+
+AnnotationMap: TypeAlias = dict[str, Any]
+
+TagSet: TypeAlias = set[str]
 
 
-# ======================================================
-# MetricMetadata
-# ======================================================
+# ==============================================================================
+# Part 5. Dataclass
+# ==============================================================================
 
-
+@dataclass(slots=True)
 class MetricMetadata:
     """
-    Metadata container for metrics.
+    Runtime metadata attached to a metric.
 
-    Example
-    -------
+    Metadata contains optional user-defined information that does not
+    affect the metric value itself.
 
-    metadata = MetricMetadata(
-        values={
-            "owner": "SciOS",
-            "domain": "physics",
-        },
-        tags=[
-            "gpu",
-            "distributed",
-        ],
-    )
+    Examples
+    --------
+    >>> meta = MetricMetadata()
+    >>> meta.annotations
+    {}
+    >>> meta.tags
+    set()
     """
 
-    # --------------------------------------------------
-    # Construction
-    # --------------------------------------------------
+    annotations: AnnotationMap = field(default_factory=dict)
 
-    def __init__(
+    tags: TagSet = field(default_factory=set)
+
+    version: str = field(default=METADATA_VERSION, init=False)
+
+# ==============================================================================
+# Part 6. Constructor Validation
+# ==============================================================================
+
+    def __post_init__(self) -> None:
+        """
+        Validate constructor arguments.
+        """
+
+        if not isinstance(self.annotations, Mapping):
+            raise TypeError(
+                "annotations must be a mapping."
+            )
+
+        if isinstance(self.tags, (str, bytes)):
+            raise TypeError(
+                "tags must be a collection."
+            )
+
+        if not isinstance(self.tags, (set, list, tuple)):
+            raise TypeError(
+                "tags must be a collection."
+            )
+
+        # Normalize annotations
+        self.annotations = {
+            str(key): value
+            for key, value in self.annotations.items()
+        }
+
+        # Normalize tags
+        self.tags = {
+            str(tag).strip()
+            for tag in self.tags
+            if str(tag).strip()
+        }
+
+# ==============================================================================
+# Part 7. Properties
+# ==============================================================================
+
+    @property
+    def annotation_count(self) -> int:
+        return len(self.annotations)
+
+    @property
+    def tag_count(self) -> int:
+        return len(self.tags)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.annotations and not self.tags
+
+
+# ==============================================================================
+# Part 8. Annotation Management
+# ==============================================================================
+
+    def add_annotation(
         self,
-        values: Mapping[str, Any] | None = None,
-        *,
-        tags: list[str] | tuple[str, ...] | None = None,
-        annotations: Mapping[str, str] | None = None,
-        owner: str | None = None,
-        component: str | None = None,
-        version: str | None = None,
-    ):
+        key: str,
+        value: Any,
+    ) -> None:
         """
-        Create metadata object.
+        Add or update an annotation.
         """
 
+        key = str(key).strip()
 
-        self._lock = RLock()
-
-        self._id = str(
-            uuid.uuid4()
-        )
-
-        self._created_at = time.time()
-
-
-        self._frozen = False
-
-
-        self._values: MetadataDict = (
-            MetricValidator.validate_metadata(
-                values or {}
+        if not key:
+            raise MetadataValidationError(
+                "annotation key cannot be empty."
             )
-        )
 
+        self.annotations[key] = value
 
-        self._tags = (
-            MetricValidator.validate_tags(
-                tags
-            )
-        )
-
-
-        self._annotations = (
-            MetricValidator.validate_annotations(
-                annotations
-            )
-        )
-
-
-        self._owner = owner
-
-        self._component = component
-
-        self._version = (
-            version
-            or
-            _METADATA_VERSION
-        )
-
-
-    # --------------------------------------------------
-    # Factory methods
-    # --------------------------------------------------
-
-
-    @classmethod
-    def empty(
-        cls,
-    ) -> "MetricMetadata":
+    def remove_annotation(
+        self,
+        key: str,
+    ) -> None:
         """
-        Create empty metadata.
+        Remove an annotation if present.
         """
 
-        return cls()
+        self.annotations.pop(str(key), None)
+
+    def has_annotation(
+        self,
+        key: str,
+    ) -> bool:
+        return str(key) in self.annotations
+
+    def get_annotation(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self.annotations.get(str(key), default)
+
+    def clear_annotations(self) -> None:
+        self.annotations.clear()
 
 
+# ==============================================================================
+# Part 9. Tag Management
+# ==============================================================================
+
+    def add_tag(
+        self,
+        tag: str,
+    ) -> None:
+        """
+        Add a tag.
+        """
+
+        tag = str(tag).strip()
+
+        if not tag:
+            raise MetadataValidationError(
+                "tag cannot be empty."
+            )
+
+        self.tags.add(tag)
+
+    def remove_tag(
+        self,
+        tag: str,
+    ) -> None:
+        self.tags.discard(str(tag))
+
+    def has_tag(
+        self,
+        tag: str,
+    ) -> bool:
+        return str(tag) in self.tags
+
+    def clear_tags(self) -> None:
+        self.tags.clear()
+
+
+# ==============================================================================
+# Part 10. Validation
+# ==============================================================================
+
+    def validate(self) -> None:
+        """
+        Validate metadata.
+        """
+
+        for key in self.annotations:
+
+            if not isinstance(key, str):
+                raise MetadataValidationError(
+                    "annotation keys must be strings."
+                )
+
+            if not key.strip():
+                raise MetadataValidationError(
+                    "annotation key cannot be empty."
+                )
+
+        for tag in self.tags:
+
+            if not isinstance(tag, str):
+                raise MetadataValidationError(
+                    "tags must be strings."
+                )
+
+            if not tag.strip():
+                raise MetadataValidationError(
+                    "tag cannot be empty."
+                )
+
+
+# ==============================================================================
+# Part 11. Serialization
+# ==============================================================================
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Convert metadata into a dictionary.
+        """
+
+        return {
+            "annotations": dict(self.annotations),
+            "tags": sorted(self.tags),
+            "version": self.version,
+        }
 
     @classmethod
     def from_dict(
@@ -180,809 +269,112 @@ class MetricMetadata:
         Create metadata from dictionary.
         """
 
-        data = dict(data)
-
-
         return cls(
-            values=data.get(
-                "values",
-                {},
-            ),
-            tags=data.get(
-                "tags"
-            ),
-            annotations=data.get(
-                "annotations"
-            ),
-            owner=data.get(
-                "owner"
-            ),
-            component=data.get(
-                "component"
-            ),
-            version=data.get(
-                "version"
-            ),
+            annotations=data.get("annotations", {}),
+            tags=set(data.get("tags", [])),
         )
-
-
-
-    @classmethod
-    def from_json(
-        cls,
-        payload: str,
-    ) -> "MetricMetadata":
-        """
-        Deserialize JSON.
-        """
-
-        return cls.from_dict(
-            json.loads(payload)
-        )
-
-
-    # --------------------------------------------------
-    # Basic properties
-    # --------------------------------------------------
-
-
-    @property
-    def id(self) -> str:
-
-        return self._id
-
-
-    @property
-    def values(self) -> Mapping[str, Any]:
-
-        return dict(
-            self._values
-        )
-
-
-    @property
-    def tags(self) -> tuple[str, ...]:
-
-        return self._tags
-
-
-    @property
-    def annotations(self) -> Mapping[str, str]:
-
-        return dict(
-            self._annotations
-        )
-
-
-    @property
-    def owner(self) -> str | None:
-
-        return self._owner
-
-
-    @property
-    def component(self) -> str | None:
-
-        return self._component
-
-
-    @property
-    def version(self) -> str:
-
-        return self._version
-
-
-    @property
-    def frozen(self) -> bool:
-
-        return self._frozen
-    # ==================================================
-    # Part 2. CRUD API
-    # ==================================================
-
-
-    def get(
-        self,
-        key: str,
-        default: Any = None,
-    ) -> Any:
-        """
-        Get metadata value.
-
-        Example
-        -------
-
-        metadata.get(
-            "owner"
-        )
-        """
-
-        key = MetricValidator.normalize_identifier(
-            key,
-            field="metadata_key",
-        )
-
-
-        with self._lock:
-
-            return self._values.get(
-                key,
-                default,
-            )
-
-
-
-    def set(
-        self,
-        key: str,
-        value: Any,
-    ) -> "MetricMetadata":
-        """
-        Set metadata value.
-
-        Raises
-        ------
-
-        MetricFrozenError
-            If metadata is frozen.
-        """
-
-        self._ensure_mutable()
-
-
-        key = MetricValidator.normalize_identifier(
-            key,
-            field="metadata_key",
-        )
-
-
-        value = MetricValidator.validate_metadata_value(
-            value,
-            field=f"metadata.{key}",
-        )
-
-
-        with self._lock:
-
-            self._values[key] = value
-
-
-        return self
-
-
-
-    def update(
-        self,
-        values: Mapping[str, Any],
-    ) -> "MetricMetadata":
-        """
-        Update multiple metadata entries.
-
-        Example
-        -------
-
-        metadata.update(
-            {
-                "service": "kernel",
-                "region": "asia"
-            }
-        )
-        """
-
-        self._ensure_mutable()
-
-
-        validated = (
-            MetricValidator.validate_metadata(
-                values
-            )
-        )
-
-
-        with self._lock:
-
-            self._values.update(
-                validated
-            )
-
-
-        return self
-
-
-
-    def remove(
-        self,
-        key: str,
-        default: Any = None,
-    ) -> Any:
-        """
-        Remove metadata key.
-
-        Returns removed value.
-        """
-
-        self._ensure_mutable()
-
-
-        key = MetricValidator.normalize_identifier(
-            key,
-            field="metadata_key",
-        )
-
-
-        with self._lock:
-
-            return self._values.pop(
-                key,
-                default,
-            )
-
-
-
-    def clear(
-        self,
-    ) -> "MetricMetadata":
-        """
-        Remove all metadata values.
-        """
-
-        self._ensure_mutable()
-
-
-        with self._lock:
-
-            self._values.clear()
-
-
-        return self
-
-
-
-    def contains(
-        self,
-        key: str,
-    ) -> bool:
-        """
-        Check key existence.
-
-        Equivalent to:
-
-            key in metadata
-        """
-
-        key = MetricValidator.normalize_identifier(
-            key,
-            field="metadata_key",
-        )
-
-
-        with self._lock:
-
-            return key in self._values
-
-
-
-    def keys(
-        self,
-    ) -> tuple[str, ...]:
-        """
-        Return metadata keys.
-        """
-
-        with self._lock:
-
-            return tuple(
-                self._values.keys()
-            )
-
-
-
-    def items(
-        self,
-    ) -> tuple[tuple[str, Any], ...]:
-        """
-        Return metadata items.
-        """
-
-        with self._lock:
-
-            return tuple(
-                self._values.items()
-            )
-    # ==================================================
-    # Part 3. Lifecycle API
-    # ==================================================
-
-
-    def freeze(
-        self,
-    ) -> "MetricMetadata":
-        """
-        Freeze metadata.
-
-        After freezing:
-
-        - set()
-        - update()
-        - remove()
-        - clear()
-
-        are disabled.
-
-        Used for:
-
-        - production descriptors
-        - immutable snapshots
-        - distributed sharing
-        """
-
-        with self._lock:
-
-            self._frozen = True
-
-
-        return self
-
-
-
-    def unfreeze(
-        self,
-    ) -> "MetricMetadata":
-        """
-        Unfreeze metadata.
-
-        Allows mutation again.
-        """
-
-        with self._lock:
-
-            self._frozen = False
-
-
-        return self
-
-
-
-    def copy(
-        self,
-    ) -> "MetricMetadata":
-        """
-        Create shallow copy.
-
-        Metadata values are copied,
-        but nested objects are shared.
-        """
-
-        with self._lock:
-
-            new = MetricMetadata(
-                values=self._values,
-                tags=self._tags,
-                annotations=self._annotations,
-                owner=self._owner,
-                component=self._component,
-                version=self._version,
-            )
-
-
-            new._frozen = self._frozen
-
-
-        return new
-
-
-
-    def clone(
-        self,
-    ) -> "MetricMetadata":
-        """
-        Create deep copy.
-
-        Suitable for:
-
-        - snapshots
-        - checkpoints
-        - distributed transfer
-        """
-
-        with self._lock:
-
-            new = MetricMetadata(
-                values=deepcopy(
-                    self._values
-                ),
-
-                tags=deepcopy(
-                    self._tags
-                ),
-
-                annotations=deepcopy(
-                    self._annotations
-                ),
-
-                owner=self._owner,
-
-                component=self._component,
-
-                version=self._version,
-            )
-
-
-            new._created_at = (
-                self._created_at
-            )
-
-            new._frozen = (
-                self._frozen
-            )
-
-
-        return new
-    # ==================================================
-    # Part 4. Serialization API
-    # ==================================================
-
-
-    def to_dict(
-        self,
-        *,
-        sanitize: bool = False,
-    ) -> dict[str, Any]:
-        """
-        Serialize metadata into dictionary.
-
-        Output schema:
-
-        {
-            "id": "...",
-            "version": "...",
-            "created_at": 123456789,
-
-            "values": {},
-
-            "tags": [],
-
-            "annotations": {},
-
-            "owner": "...",
-
-            "component": "...",
-
-            "frozen": false
-        }
-
-        """
-
-        with self._lock:
-
-            result = {
-
-                "id": self._id,
-
-                "version": self._version,
-
-                "created_at":
-                    self._created_at,
-
-                "values":
-                    deepcopy(
-                        self._values
-                    ),
-
-                "tags":
-                    list(
-                        self._tags
-                    ),
-
-                "annotations":
-                    deepcopy(
-                        self._annotations
-                    ),
-
-                "owner":
-                    self._owner,
-
-                "component":
-                    self._component,
-
-                "frozen":
-                    self._frozen,
-
-            }
-
-
-        if sanitize:
-
-            result = (
-                MetricValidator.sanitize(
-                    result
-                )
-            )
-
-
-        return result
-
-
 
     def to_json(
         self,
         *,
-        indent: int | None = None,
-        sanitize: bool = False,
+        indent: int = 2,
     ) -> str:
         """
-        Serialize metadata to JSON string.
-
-        Compatible with:
-
-        - REST API
-        - logging
-        - storage
+        Serialize metadata into JSON.
         """
 
         return json.dumps(
-            self.to_dict(
-                sanitize=sanitize
-            ),
+            self.to_dict(),
             indent=indent,
-            default=str,
             sort_keys=True,
         )
-
-
 
     @classmethod
     def from_json(
         cls,
-        payload: str,
+        text: str,
     ) -> "MetricMetadata":
         """
-        Restore metadata from JSON.
-
+        Deserialize metadata from JSON.
         """
 
-        data = json.loads(
-            payload
+        return cls.from_dict(json.loads(text))
+
+# ==============================================================================
+# Part 12
+# Copy
+# ==============================================================================
+
+    def copy(self) -> "MetricMetadata":
+        """
+        Return a shallow copy.
+        """
+        return self.__class__(
+            annotations=dict(self.annotations),
+            tags=set(self.tags),
         )
 
-
-        metadata = cls(
-            values=data.get(
-                "values",
-                {},
-            ),
-
-            tags=data.get(
-                "tags",
-                (),
-            ),
-
-            annotations=data.get(
-                "annotations",
-                {},
-            ),
-
-            owner=data.get(
-                "owner"
-            ),
-
-            component=data.get(
-                "component"
-            ),
-
-            version=data.get(
-                "version"
-            ),
-        )
-
-
-        metadata._id = (
-            data.get(
-                "id",
-                metadata._id,
-            )
-        )
-
-
-        metadata._created_at = (
-            data.get(
-                "created_at",
-                metadata._created_at,
-            )
-        )
-
-
-        metadata._frozen = (
-            data.get(
-                "frozen",
-                False,
-            )
-        )
-
-
-        return metadata
-    # ==================================================
-    # Part 5. Diagnostics API
-    # ==================================================
-
-
-    def validate(
-        self,
-        *,
-        strict: bool = True,
-    ) -> bool:
+    def clone(self) -> "MetricMetadata":
         """
-        Validate current metadata state.
-
-        Returns
-        -------
-
-        bool
-
-        Raises
-        ------
-
-        MetricValidationError
-            If strict mode enabled.
+        Return a deep clone.
         """
+        return deepcopy(self)
 
 
-        try:
+# ==============================================================================
+# Part 13
+# Equality
+# ==============================================================================
 
-            MetricValidator.validate_metadata(
-                self._values
-            )
-
-
-            MetricValidator.validate_tags(
-                self._tags
-            )
-
-
-            MetricValidator.validate_annotations(
-                self._annotations
-            )
-
-
-            return True
-
-
-
-        except Exception:
-
-
-            if strict:
-
-                raise
-
-
-            return False
-
-
-
-    def statistics(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return metadata statistics.
-
-        Example output:
-
-        {
-            "keys": 5,
-            "tags": 3,
-            "annotations": 2,
-            "size_bytes": 512,
-            "frozen": False
-        }
-
-        """
-
-        with self._lock:
-
-
-            payload = self.to_json()
-
-
-            return {
-
-                "id":
-                    self._id,
-
-
-                "version":
-                    self._version,
-
-
-                "keys":
-                    len(
-                        self._values
-                    ),
-
-
-                "tags":
-                    len(
-                        self._tags
-                    ),
-
-
-                "annotations":
-                    len(
-                        self._annotations
-                    ),
-
-
-                "size_bytes":
-                    len(
-                        payload.encode(
-                            "utf-8"
-                        )
-                    ),
-
-
-                "frozen":
-                    self._frozen,
-
-
-                "created_at":
-                    self._created_at,
-
-            }
-
-
-
-    def dump(
-        self,
-        *,
-        pretty: bool = True,
-        sanitize: bool = True,
-    ) -> str:
-        """
-        Human readable metadata dump.
-
-        Used by:
-
-        - CLI
-        - debugging
-        - logging
-        """
-
-        data = self.to_dict(
-            sanitize=sanitize
-        )
-
-
-        if pretty:
-
-            return json.dumps(
-                data,
-                indent=2,
-                sort_keys=True,
-                default=str,
-            )
-
-
-        return json.dumps(
-            data,
-            default=str,
-        )
-
-
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-        """
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MetricMetadata):
+            return NotImplemented
 
         return (
+            self.annotations == other.annotations
+            and self.tags == other.tags
+        )
 
-            "MetricMetadata("
-            f"id={self._id!r}, "
-            f"keys={len(self._values)}, "
-            f"tags={len(self._tags)}, "
-            f"frozen={self._frozen}"
-            ")"
+    def __hash__(self) -> int:
+        return hash(
+            (
+                frozenset(self.annotations.items()),
+                frozenset(self.tags),
+            )
+        )
 
-        )                                    
+
+# ==============================================================================
+# Part 14
+# Representation
+# ==============================================================================
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"annotations={self.annotations!r}, "
+            f"tags={sorted(self.tags)!r}"
+            f")"
+        )
+
+    def __str__(self) -> str:
+        return (
+            f"MetricMetadata("
+            f"{len(self.annotations)} annotations, "
+            f"{len(self.tags)} tags)"
+        )
+
+
+# ==============================================================================
+# Part 15
+# Public API
+# ==============================================================================
+
+__all__ = [
+    "MetricMetadata",
+    "MetadataError",
+    "AnnotationMap",
+    "TagSet",
+]
+
+__version__ = "1.0.0"            

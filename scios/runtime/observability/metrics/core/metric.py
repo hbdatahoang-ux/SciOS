@@ -1,2561 +1,2001 @@
-"""
-SciOS Observability
-===================
-
-Metric Base Class.
-
-Part 1
-------
-
-Foundation layer.
-
-Responsibilities
-----------------
-
-- Abstract metric foundation
-- Runtime identity
-- Descriptor binding
-- Metadata binding
-- Label binding
-- Attribute binding
-- Thread safety
-
-This class contains no aggregation logic.
-
-Concrete implementations:
-
-- Counter
-- Gauge
-- Histogram
-- Summary
-- Timer
-
-"""
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
 
 from __future__ import annotations
 
 
-# ==========================================================
-# Imports
-# ==========================================================
+import copy
+import json
+import time
 
-from abc import ABC
-
+from dataclasses import dataclass, field
 from datetime import datetime
-from datetime import timezone
-
-from threading import RLock
-
-from typing import Any
-
-from uuid import UUID
-from uuid import uuid4
+from enum import Enum
+from typing import Any, TypeAlias
 
 
 from .attributes import MetricAttributes
-from .descriptor import MetricDescriptor
 from .labels import MetricLabels
-from .metadata import MetricMetadata
+from .annotations import MetricAnnotations
+from .tags import MetricTags
+from .metric_hooks import MetricHooks
+from .metric_snapshot import MetricSnapshot
+from .metric_state import MetricState
 
 
-__all__ = [
-    "Metric",
-]
 
 
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
 
-# ==========================================================
-# Metric Base Class
-# ==========================================================
+METRIC_VERSION: str = "1.0.0"
+
+DEFAULT_METRIC_NAME: str = "metric"
+
+DEFAULT_METRIC_VALUE: float = 0.0
+
+DEFAULT_TIMESTAMP: float = 0.0
 
 
-class Metric(ABC):
+# ==============================================================================
+# Callable Metadata Container
+# ==============================================================================
+
+class CallableContainer:
     """
-    Abstract base class for all metrics.
+    Hybrid metadata API wrapper.
 
-    Metric is a runtime object.
+    Supports:
 
-    It combines:
+        metric.labels
+        metric.labels()
+        metric.labels["key"]
+        metric.labels.add("key", "value")
+        metric.labels.get("key")
 
-    Descriptor
-        Static schema.
+        metric.attributes
+        metric.attributes()
+        metric.attributes["key"]
+        metric.attributes.add("key", "value")
+        metric.attributes.get("key")
 
-    Metadata
-        Semantic information.
+        metric.annotations
+        metric.annotations()
+        metric.annotations["key"]
+        metric.annotations.add("key", "value")
+        metric.annotations.get("key")
 
-    Labels
-        Metric dimensions.
+        metric.tags
+        metric.tags()
+        metric.tags.add("value")
+        "value" in metric.tags
 
-    Attributes
-        Runtime properties.
+        metric.hooks
+        metric.hooks()
+        metric.hooks.register(...)
 
-
-    It does NOT implement:
-
-    - counting
-    - aggregation
-    - histogram buckets
-    - timing logic
-
-    Those belong to subclasses.
+    The wrapper preserves the real underlying metadata container.
     """
 
+    __slots__ = (
+        "_container",
+    )
 
-    # ======================================================
+    # --------------------------------------------------------------------------
     # Constructor
-    # ======================================================
-
+    # --------------------------------------------------------------------------
 
     def __init__(
         self,
-        *,
-        descriptor: MetricDescriptor,
-        metadata: MetricMetadata | None = None,
-        labels: MetricLabels | None = None,
-        attributes: MetricAttributes | None = None,
-    ) -> None:
+        container,
+    ):
+        object.__setattr__(
+            self,
+            "_container",
+            container,
+        )
+
+    # --------------------------------------------------------------------------
+    # Internal container access
+    # --------------------------------------------------------------------------
+
+    def _get_container(self):
         """
-        Initialize metric instance.
+        Return the underlying metadata container.
 
-        Parameters
-        ----------
-
-        descriptor:
-            Metric schema definition.
-
-        metadata:
-            Runtime metadata.
-
-        labels:
-            Metric labels.
-
-        attributes:
-            Runtime attributes.
+        Safe during deepcopy / pickle reconstruction.
         """
 
-
-        # --------------------------------------------------
-        # Runtime Identity
-        # --------------------------------------------------
-
-        self._id: UUID = uuid4()
-        
-
-
-        self._created_at: datetime = (
-            datetime.now(
-                timezone.utc
+        try:
+            return object.__getattribute__(
+                self,
+                "_container",
             )
+
+        except AttributeError:
+            raise AttributeError(
+                "CallableContainer is not initialized."
+            ) from None
+
+    # --------------------------------------------------------------------------
+    # Internal storage access
+    # --------------------------------------------------------------------------
+
+    def _get_storage(self):
+        """
+        Return the underlying metadata storage.
+
+        Supported container layouts:
+
+            container.values
+            container._values
+
+        Current SciOS metadata containers use:
+
+            MetricAnnotations.values -> dict
+            MetricLabels.values      -> dict
+            MetricAttributes.values  -> dict
+            MetricTags.values        -> set
+        """
+
+        container = self._get_container()
+
+        # ------------------------------------------------------------------
+        # Preferred public storage
+        # ------------------------------------------------------------------
+
+        values = getattr(
+            container,
+            "values",
+            None,
         )
 
+        if values is not None:
+            return values
 
-        # --------------------------------------------------
-        # Descriptor
-        # --------------------------------------------------
+        # ------------------------------------------------------------------
+        # Backward-compatible private storage
+        # ------------------------------------------------------------------
 
-        self._descriptor: MetricDescriptor = (
-            descriptor
+        values = getattr(
+            container,
+            "_values",
+            None,
         )
 
+        if values is not None:
+            return values
 
-        # --------------------------------------------------
-        # Metadata
-        # --------------------------------------------------
+        return None
 
-        self._metadata: MetricMetadata = (
+    # --------------------------------------------------------------------------
+    # Callable API
+    # --------------------------------------------------------------------------
 
-            metadata.copy()
+    def __call__(self):
+        """
+        Return this wrapper itself.
 
-            if metadata is not None
+        Allows:
 
-            else descriptor.metadata.copy()
+            metric.labels()
+            metric.attributes()
+            metric.annotations()
+            metric.tags()
+            metric.hooks()
+        """
 
+        return self
+
+    # --------------------------------------------------------------------------
+    # Attribute delegation
+    # --------------------------------------------------------------------------
+
+    def __getattr__(
+        self,
+        name,
+    ):
+        """
+        Delegate unknown attributes to the underlying container.
+
+        Explicit wrapper methods such as:
+
+            add()
+            get()
+            clear()
+
+        are resolved on CallableContainer itself.
+        """
+
+        container = self._get_container()
+
+        return getattr(
+            container,
+            name,
         )
 
+    # --------------------------------------------------------------------------
+    # Item access
+    # --------------------------------------------------------------------------
 
-        # --------------------------------------------------
-        # Labels
-        # --------------------------------------------------
+    def __getitem__(
+        self,
+        key,
+    ):
+        """
+        Get metadata item.
+        """
 
-        self._labels: MetricLabels = (
+        container = self._get_container()
 
-            labels.copy()
+        try:
+            return container[key]
 
-            if labels is not None
+        except (
+            TypeError,
+            AttributeError,
+            KeyError,
+        ):
+            pass
 
-            else MetricLabels()
+        storage = self._get_storage()
 
+        if storage is not None:
+            return storage[key]
+
+        raise KeyError(
+            key,
         )
 
+    # --------------------------------------------------------------------------
+    # Item assignment
+    # --------------------------------------------------------------------------
 
-        # --------------------------------------------------
-        # Attributes
-        # --------------------------------------------------
+    def __setitem__(
+        self,
+        key,
+        value,
+    ):
+        """
+        Set metadata item.
+        """
 
-        self._attributes: MetricAttributes = (
+        container = self._get_container()
 
-            attributes.copy()
+        try:
+            container[key] = value
+            return
 
-            if attributes is not None
+        except (
+            TypeError,
+            AttributeError,
+        ):
+            pass
 
-            else MetricAttributes()
+        storage = self._get_storage()
 
+        if storage is not None:
+            storage[key] = value
+            return
+
+        raise TypeError(
+            f"{type(container).__name__} "
+            "does not support item assignment."
         )
 
+    # --------------------------------------------------------------------------
+    # Membership
+    # --------------------------------------------------------------------------
 
-        # --------------------------------------------------
-        # Synchronization
-        # --------------------------------------------------
-
-        self._lock: RLock = RLock()
-        # ==================================================
-        # Part 2. Runtime State
-        # ==================================================
-
-
-        # --------------------------------------------------
-        # Runtime Value
-        # --------------------------------------------------
-
-        self._value: Any = None
-
-
-        self._previous_value: Any = None
-
-
-
-        # --------------------------------------------------
-        # Update Tracking
-        # --------------------------------------------------
-
-        self._update_count: int = 0
-
-
-
-        # --------------------------------------------------
-        # Lifecycle State
-        # --------------------------------------------------
-
-        self._enabled: bool = True
-
-
-        self._frozen: bool = False
-
-
-        self._closed: bool = False
-
-
-
-        # --------------------------------------------------
-        # Runtime Timestamp
-        # --------------------------------------------------
-
-        self._updated_at: datetime = (
-            self._created_at
-        )
-
-
-
-        # --------------------------------------------------
-        # Version / Revision
-        # --------------------------------------------------
-
-        self._revision: int = 0
-
-
-
-        # --------------------------------------------------
-        # Dirty Tracking
-        # --------------------------------------------------
-
-        self._dirty: bool = False
-
-
-
-    # ======================================================
-    # Identity Properties
-    # ======================================================
-
-
-    @property
-    def id(
+    def __contains__(
         self,
-    ) -> UUID:
-        """
-        Runtime unique identifier.
-        """
-
-        return self._id
-
-
-
-    @property
-    def created_at(
-        self,
-    ) -> datetime:
-        """
-        Metric creation time.
-        """
-
-        return self._created_at
-
-
-
-    # ======================================================
-    # Descriptor Access
-    # ======================================================
-
-
-    @property
-    def descriptor(
-        self,
-    ) -> MetricDescriptor:
-        """
-        Metric descriptor.
-
-        Descriptor is immutable schema.
-        """
-
-        return self._descriptor
-
-
-
-    # ======================================================
-    # Metadata Access
-    # ======================================================
-
-
-    @property
-    def metadata(
-        self,
-    ) -> MetricMetadata:
-        """
-        Metric metadata.
-        """
-
-        return self._metadata
-
-
-
-    # ======================================================
-    # Labels Access
-    # ======================================================
-
-
-    @property
-    def labels(
-        self,
-    ) -> MetricLabels:
-        """
-        Metric labels.
-        """
-
-        return self._labels
-
-
-
-    # ======================================================
-    # Attributes Access
-    # ======================================================
-
-
-    @property
-    def attributes(
-        self,
-    ) -> MetricAttributes:
-        """
-        Metric attributes.
-        """
-
-        return self._attributes
-
-
-
-    # ======================================================
-    # Synchronization Access
-    # ======================================================
-
-
-    @property
-    def lock(
-        self,
-    ) -> RLock:
-        """
-        Internal synchronization lock.
-
-        Used internally by metric runtime.
-        """
-
-        return self._lock
-    # ======================================================
-    # Runtime State Properties
-    # ======================================================
-
-
-    @property
-    def value(
-        self,
-    ) -> Any:
-        """
-        Current metric value.
-
-        Read-only access.
-        """
-
-        return self._value
-
-
-
-    @property
-    def previous_value(
-        self,
-    ) -> Any:
-        """
-        Previous metric value.
-        """
-
-        return self._previous_value
-
-
-
-    @property
-    def update_count(
-        self,
-    ) -> int:
-        """
-        Number of successful updates.
-        """
-
-        return self._update_count
-
-
-
-    @property
-    def enabled(
-        self,
+        item,
     ) -> bool:
         """
-        Whether metric accepts updates.
+        Support:
+
+            "production" in metric.tags
+            "host" in metric.labels
         """
 
-        return self._enabled
+        container = self._get_container()
 
+        try:
+            return item in container
 
+        except TypeError:
+            pass
 
-    @property
-    def frozen(
+        storage = self._get_storage()
+
+        if storage is not None:
+            return item in storage
+
+        return False
+
+    # --------------------------------------------------------------------------
+    # Iteration
+    # --------------------------------------------------------------------------
+
+    def __iter__(self):
+        """
+        Iterate over metadata.
+        """
+
+        container = self._get_container()
+
+        try:
+            return iter(container)
+
+        except TypeError:
+            pass
+
+        storage = self._get_storage()
+
+        if storage is not None:
+            return iter(storage)
+
+        return iter(())
+
+    # --------------------------------------------------------------------------
+    # Length
+    # --------------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        """
+        Return metadata size.
+        """
+
+        container = self._get_container()
+
+        try:
+            return len(container)
+
+        except TypeError:
+            pass
+
+        storage = self._get_storage()
+
+        if storage is not None:
+            return len(storage)
+
+        return 0
+
+    # --------------------------------------------------------------------------
+    # Unified add API
+    # --------------------------------------------------------------------------
+
+    def add(
         self,
-    ) -> bool:
+        *args,
+    ):
         """
-        Whether metric is frozen.
-        """
+        Uniform metadata insertion API.
 
-        return self._frozen
+        Mapping-style:
 
+            annotations.add(
+                "description",
+                "request counter",
+            )
 
+            labels.add(
+                "host",
+                "node01",
+            )
 
-    @property
-    def closed(
-        self,
-    ) -> bool:
-        """
-        Whether metric is permanently closed.
-        """
+            attributes.add(
+                "region",
+                "test",
+            )
 
-        return self._closed
+        Set-style:
 
-
-
-    @property
-    def updated_at(
-        self,
-    ) -> datetime:
-        """
-        Last update timestamp.
-        """
-
-        return self._updated_at
-
-
-
-    @property
-    def revision(
-        self,
-    ) -> int:
-        """
-        Runtime revision number.
-
-        Incremented on state changes.
+            tags.add(
+                "production",
+            )
         """
 
-        return self._revision
+        container = self._get_container()
 
+        # ------------------------------------------------------------------
+        # 1. Native container add()
+        # ------------------------------------------------------------------
 
+        native_add = getattr(
+            container,
+            "add",
+            None,
+        )
 
-    @property
-    def dirty(
-        self,
-    ) -> bool:
-        """
-        Whether state changed since last checkpoint.
-        """
+        if callable(native_add):
+            return native_add(
+                *args,
+            )
 
-        return self._dirty
-    # ======================================================
-    # Part 3. Value API
-    # ======================================================
+        # ------------------------------------------------------------------
+        # 2. Resolve actual storage
+        # ------------------------------------------------------------------
 
+        storage = self._get_storage()
+
+        # ------------------------------------------------------------------
+        # 3. Mapping-style add(key, value)
+        # ------------------------------------------------------------------
+
+        if len(args) == 2:
+
+            key, value = args
+
+            if storage is not None:
+
+                if isinstance(
+                    storage,
+                    dict,
+                ):
+                    storage[key] = value
+                    return value
+
+                try:
+                    storage[key] = value
+                    return value
+
+                except (
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                ):
+                    pass
+
+            # --------------------------------------------------------------
+            # Generic container assignment
+            # --------------------------------------------------------------
+
+            try:
+                container[key] = value
+                return value
+
+            except (
+                TypeError,
+                AttributeError,
+                KeyError,
+            ):
+                pass
+
+        # ------------------------------------------------------------------
+        # 4. Set-style add(value)
+        # ------------------------------------------------------------------
+
+        if len(args) == 1:
+
+            value = args[0]
+
+            # --------------------------------------------------------------
+            # Set storage
+            # --------------------------------------------------------------
+
+            if isinstance(
+                storage,
+                set,
+            ):
+
+                storage.add(
+                    value,
+                )
+
+                return value
+
+            # --------------------------------------------------------------
+            # Generic storage exposing add()
+            # --------------------------------------------------------------
+
+            if storage is not None:
+
+                storage_add = getattr(
+                    storage,
+                    "add",
+                    None,
+                )
+
+                if callable(storage_add):
+
+                    storage_add(
+                        value,
+                    )
+
+                    return value
+
+            # --------------------------------------------------------------
+            # Generic container add()
+            # --------------------------------------------------------------
+
+            try:
+                container[value] = value
+                return value
+
+            except (
+                TypeError,
+                AttributeError,
+                KeyError,
+            ):
+                pass
+
+        # ------------------------------------------------------------------
+        # 5. Invalid operation
+        # ------------------------------------------------------------------
+
+        raise AttributeError(
+            f"{type(container).__name__} "
+            f"does not support add{args!r}"
+        )
+
+    # --------------------------------------------------------------------------
+    # Get API
+    # --------------------------------------------------------------------------
 
     def get(
         self,
-    ) -> Any:
+        key,
+        default=None,
+    ):
         """
-        Return current metric value.
+        Get metadata value.
 
-        Thread-safe read access.
+        Mapping:
+
+            metric.annotations.get(
+                "description",
+            )
+
+        Tags:
+
+            metric.tags.get(
+                "production",
+            )
+
+        For tags, the returned value is the tag itself when present.
         """
 
-        with self._lock:
+        container = self._get_container()
 
-            self._access()
+        # ------------------------------------------------------------------
+        # Native get()
+        # ------------------------------------------------------------------
 
-            return self._value
+        native_get = getattr(
+            container,
+            "get",
+            None,
+        )
+
+        if callable(native_get):
+
+            try:
+                return native_get(
+                    key,
+                    default,
+                )
+
+            except TypeError:
+                return native_get(
+                    key,
+                )
+
+        # ------------------------------------------------------------------
+        # Actual storage
+        # ------------------------------------------------------------------
+
+        storage = self._get_storage()
+
+        if storage is None:
+            return default
+
+        # ------------------------------------------------------------------
+        # Mapping
+        # ------------------------------------------------------------------
+
+        if isinstance(
+            storage,
+            dict,
+        ):
+            return storage.get(
+                key,
+                default,
+            )
+
+        # ------------------------------------------------------------------
+        # Set
+        # ------------------------------------------------------------------
+
+        if isinstance(
+            storage,
+            set,
+        ):
+
+            if key in storage:
+                return key
+
+            return default
+
+        # ------------------------------------------------------------------
+        # Generic mapping-like object
+        # ------------------------------------------------------------------
+
+        try:
+            return storage.get(
+                key,
+                default,
+            )
+
+        except AttributeError:
+            pass
+
+        # ------------------------------------------------------------------
+        # Generic item access
+        # ------------------------------------------------------------------
+
+        try:
+            return storage[key]
+
+        except (
+            KeyError,
+            TypeError,
+            IndexError,
+        ):
+            return default
+
+    # --------------------------------------------------------------------------
+    # Clear API
+    # --------------------------------------------------------------------------
+
+    def clear(self):
+        """
+        Clear the underlying metadata container.
+        """
+
+        container = self._get_container()
+
+        native_clear = getattr(
+            container,
+            "clear",
+            None,
+        )
+
+        if callable(native_clear):
+            return native_clear()
+
+        storage = self._get_storage()
+
+        if storage is not None:
+
+            storage_clear = getattr(
+                storage,
+                "clear",
+                None,
+            )
+
+            if callable(storage_clear):
+                return storage_clear()
+
+        raise AttributeError(
+            f"{type(container).__name__} "
+            "does not support clear()"
+        )
+
+    # --------------------------------------------------------------------------
+    # Representation
+    # --------------------------------------------------------------------------
+
+    def __repr__(self):
+        try:
+
+            container = object.__getattribute__(
+                self,
+                "_container",
+            )
+
+        except AttributeError:
+
+            return (
+                "CallableContainer(<uninitialized>)"
+            )
+
+        return repr(
+            container,
+        )
 
 
 
-    def set(
+
+
+# ==============================================================================
+# Part 3. Enums
+# ==============================================================================
+
+class MetricType(str, Enum):
+    """Supported metric types."""
+
+    COUNTER = "counter"
+    GAUGE = "gauge"
+    HISTOGRAM = "histogram"
+    SUMMARY = "summary"
+    UNTYPED = "untyped"
+
+
+class MetricUnit(str, Enum):
+    """Supported metric units."""
+
+    NONE = "none"
+
+    COUNT = "count"
+
+    BYTES = "bytes"
+
+    SECONDS = "seconds"
+    MILLISECONDS = "milliseconds"
+    MICROSECONDS = "microseconds"
+    NANOSECONDS = "nanoseconds"
+
+    PERCENT = "percent"
+
+    CELSIUS = "celsius"
+
+    VOLTS = "volts"
+    AMPERES = "amperes"
+    WATTS = "watts"
+
+    HERTZ = "hertz"
+
+
+# ==============================================================================
+# Part 4. Exceptions
+# ==============================================================================
+
+class MetricError(Exception):
+    """Base metric exception."""
+
+
+class MetricValidationError(MetricError):
+    """Raised when metric validation fails."""
+
+
+# ==============================================================================
+# Part 5. Type Aliases
+# ==============================================================================
+
+MetricValue: TypeAlias = int | float
+
+MetricPayload: TypeAlias = dict[str, Any]
+
+
+
+# ==============================================================================
+# Part 6. Dataclass
+# ==============================================================================
+
+@dataclass(
+    slots=True,
+    eq=True,
+    repr=False,
+)
+class Metric:
+    """
+    Runtime metric object.
+
+    Public metadata API:
+
+        metric.labels
+        metric.labels()
+
+        metric.attributes
+        metric.attributes()
+
+        metric.annotations
+        metric.annotations()
+
+        metric.tags
+        metric.tags()
+
+        metric.hooks
+        metric.hooks()
+
+    The private metadata fields always contain the real containers.
+    CallableContainer objects are public API proxies only.
+    """
+
+    # ------------------------------------------------------------------
+    # Core fields
+    # ------------------------------------------------------------------
+
+    name: str = DEFAULT_METRIC_NAME
+
+    value: MetricValue = DEFAULT_METRIC_VALUE
+
+    metric_type: MetricType = MetricType.GAUGE
+
+    unit: MetricUnit = MetricUnit.NONE
+
+    # ------------------------------------------------------------------
+    # Runtime state
+    # ------------------------------------------------------------------
+
+    state: MetricState = field(
+        default_factory=MetricState,
+    )
+
+    # ------------------------------------------------------------------
+    # Real metadata containers
+    #
+    # IMPORTANT:
+    # These MUST remain the actual container objects.
+    #
+    # Do NOT replace them with CallableContainer.
+    # ------------------------------------------------------------------
+
+    _labels: MetricLabels = field(
+        default_factory=MetricLabels,
+        repr=False,
+    )
+
+    _attributes: MetricAttributes = field(
+        default_factory=MetricAttributes,
+        repr=False,
+    )
+
+    _annotations: MetricAnnotations = field(
+        default_factory=MetricAnnotations,
+        repr=False,
+    )
+
+    _tags: MetricTags = field(
+        default_factory=MetricTags,
+        repr=False,
+    )
+
+    _hooks: MetricHooks = field(
+        default_factory=MetricHooks,
+        repr=False,
+    )
+
+    # ------------------------------------------------------------------
+    # Public API proxies
+    #
+    # These are runtime helpers and must NOT participate in equality.
+    # ------------------------------------------------------------------
+
+    _labels_proxy: CallableContainer | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    _attributes_proxy: CallableContainer | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    _annotations_proxy: CallableContainer | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    _tags_proxy: CallableContainer | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    _hooks_proxy: CallableContainer | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    # ------------------------------------------------------------------
+    # Lifecycle timestamps
+    # ------------------------------------------------------------------
+
+    created_at: float = field(
+        default_factory=time.time,
+        init=False,
+    )
+
+    updated_at: float = field(
+        default_factory=time.time,
+        init=False,
+    )
+
+    # ------------------------------------------------------------------
+    # Version
+    # ------------------------------------------------------------------
+
+    version: str = field(
+        default=METRIC_VERSION,
+        init=False,
+        compare=False,
+    )
+
+    # ==========================================================================
+    # Initialization / Validation
+    # ==========================================================================
+
+    def __post_init__(self) -> None:
+        """
+        Validate and initialize the metric.
+
+        This is the single authoritative constructor hook.
+        """
+
+        # ------------------------------------------------------------------
+        # Name
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self.name,
+            str,
+        ):
+            raise MetricValidationError(
+                "Metric name must be a string."
+            )
+
+        self.name = self.name.strip()
+
+        if not self.name:
+            raise MetricValidationError(
+                "Metric name cannot be empty."
+            )
+
+        # ------------------------------------------------------------------
+        # Value
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self.value,
+            (int, float),
+        ):
+            raise MetricValidationError(
+                "Metric value must be numeric."
+            )
+
+        if isinstance(
+            self.value,
+            bool,
+        ):
+            raise MetricValidationError(
+                "Metric value cannot be boolean."
+            )
+
+        # ------------------------------------------------------------------
+        # Metric type
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self.metric_type,
+            MetricType,
+        ):
+            raise MetricValidationError(
+                "Invalid metric type."
+            )
+
+        # ------------------------------------------------------------------
+        # Unit
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self.unit,
+            MetricUnit,
+        ):
+            raise MetricValidationError(
+                "Invalid metric unit."
+            )
+
+        # ------------------------------------------------------------------
+        # Runtime state
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self.state,
+            MetricState,
+        ):
+            raise MetricValidationError(
+                "state must be MetricState."
+            )
+
+        # ------------------------------------------------------------------
+        # Metadata containers
+        # ------------------------------------------------------------------
+
+        metadata_fields = (
+            (
+                self._labels,
+                MetricLabels,
+                "labels",
+            ),
+            (
+                self._attributes,
+                MetricAttributes,
+                "attributes",
+            ),
+            (
+                self._annotations,
+                MetricAnnotations,
+                "annotations",
+            ),
+            (
+                self._tags,
+                MetricTags,
+                "tags",
+            ),
+            (
+                self._hooks,
+                MetricHooks,
+                "hooks",
+            ),
+        )
+
+        for container, expected, name in metadata_fields:
+
+            if not isinstance(
+                container,
+                expected,
+            ):
+                raise MetricValidationError(
+                    f"{name} must be {expected.__name__}."
+                )
+
+        # ------------------------------------------------------------------
+        # Timestamp normalization
+        # ------------------------------------------------------------------
+
+        now = time.time()
+
+        if self.created_at <= DEFAULT_TIMESTAMP:
+            self.created_at = now
+
+        if self.updated_at <= DEFAULT_TIMESTAMP:
+            self.updated_at = self.created_at
+
+        if self.updated_at < self.created_at:
+            self.updated_at = self.created_at
+
+        # ------------------------------------------------------------------
+        # Public metadata API
+        # ------------------------------------------------------------------
+
+        self._init_metadata_api()
+
+    # ==========================================================================
+    # Callable Metadata API
+    # ==========================================================================
+
+    def _init_metadata_api(self) -> None:
+        """
+        Rebuild public metadata proxies.
+
+        The real containers remain untouched.
+
+        _labels      -> MetricLabels
+        _attributes  -> MetricAttributes
+        _annotations -> MetricAnnotations
+        _tags        -> MetricTags
+        _hooks       -> MetricHooks
+        """
+
+        self._labels_proxy = CallableContainer(
+            self._labels,
+        )
+
+        self._attributes_proxy = CallableContainer(
+            self._attributes,
+        )
+
+        self._annotations_proxy = CallableContainer(
+            self._annotations,
+        )
+
+        self._tags_proxy = CallableContainer(
+            self._tags,
+        )
+
+        self._hooks_proxy = CallableContainer(
+            self._hooks,
+        )
+
+    # ==========================================================================
+    # Timestamp
+    # ==========================================================================
+
+    def touch(self) -> None:
+        """
+        Update modification timestamp.
+        """
+
+        self.updated_at = time.time()
+
+
+
+
+    # ==============================================================================
+    # Part 8. Properties
+    # ==============================================================================
+
+
+    # ------------------------------------------------------------------------------
+    # Timestamp
+    # ------------------------------------------------------------------------------
+
+
+    @property
+    def timestamp(self) -> float:
+        """
+        Latest update timestamp.
+        """
+
+        return self.updated_at
+
+
+    @property
+    def age(self) -> float:
+        """
+        Metric lifetime in seconds.
+        """
+
+        return max(
+            0.0,
+            time.time() - self.created_at,
+        )
+
+
+    # ------------------------------------------------------------------------------
+    # Runtime state
+    # ------------------------------------------------------------------------------
+
+
+    @property
+    def enabled(self) -> bool:
+        """
+        Whether counter is enabled.
+        """
+
+        return self.state.is_enabled()
+
+
+    @property
+    def active(self) -> bool:
+        """
+        Whether counter is active.
+        """
+
+        return self.state.is_active()
+
+
+    @property
+    def healthy(self) -> bool:
+        """
+        Whether counter is healthy.
+        """
+
+        return self.state.is_healthy()
+
+
+    # ------------------------------------------------------------------------------
+    # Metadata API
+    #
+    # IMPORTANT:
+    #
+    # Do NOT return:
+    #
+    #     self._annotations
+    #     self._tags
+    #
+    # Those are the real metadata containers.
+    #
+    # The public API must return CallableContainer proxies.
+    # ------------------------------------------------------------------------------
+
+
+    @property
+    def labels(self) -> CallableContainer:
+        """
+        Labels metadata API.
+
+        Supports:
+
+            counter.labels
+            counter.labels()
+            counter.labels["host"]
+            counter.labels.add("host", "node01")
+        """
+
+        return self._labels_proxy
+
+
+    @property
+    def attributes(self) -> CallableContainer:
+        """
+        Attributes metadata API.
+
+        Supports:
+
+            counter.attributes
+            counter.attributes()
+            counter.attributes["region"]
+            counter.attributes.add("region", "test")
+        """
+
+        return self._attributes_proxy
+
+
+    @property
+    def annotations(self) -> CallableContainer:
+        """
+        Annotations metadata API.
+
+        Supports:
+
+            counter.annotations
+            counter.annotations()
+            counter.annotations["description"]
+            counter.annotations.add(
+                "description",
+                "request counter",
+            )
+        """
+
+        return self._annotations_proxy
+
+
+    @property
+    def tags(self) -> CallableContainer:
+        """
+        Tags metadata API.
+
+        Supports:
+
+            counter.tags
+            counter.tags()
+            counter.tags.add("production")
+        """
+
+        return self._tags_proxy
+
+
+    @property
+    def hooks(self) -> CallableContainer:
+        """
+        Hooks metadata API.
+
+        Supports:
+
+            counter.hooks
+            counter.hooks()
+            counter.hooks.register(...)
+        """
+
+        return self._hooks_proxy
+
+
+
+
+
+
+# ==============================================================================
+# Part 9. Value Operations
+# ==============================================================================
+
+
+    def set_value(
         self,
-        value: Any,
+        value: MetricValue,
     ) -> None:
-        """
-        Replace current metric value.
 
-        This is the primitive mutation operation.
-
-        Subclasses may override update()
-        for specialized behavior.
-        """
-
-        with self._lock:
-
-            self._ensure_mutable()
-
-
-            old_value = self._value
-
-
-            self._before_update(
-                old_value,
-                value,
+        if not isinstance(value, (int, float)):
+            raise MetricValidationError(
+                "Metric value must be numeric."
             )
 
 
-            self._previous_value = (
-                self._value
+        self.value = value
+
+        self.touch()
+
+
+
+    def get_value(self) -> MetricValue:
+
+        return self.value
+
+
+
+    def increment(
+        self,
+        amount: MetricValue = 1,
+    ) -> MetricValue:
+
+        if not isinstance(amount, (int, float)):
+            raise MetricValidationError(
+                "Increment amount must be numeric."
             )
 
 
-            self._value = value
+        self.value += amount
+
+        self.touch()
+
+        return self.value
 
 
-            self._update_count += 1
 
+    def decrement(
+        self,
+        amount: MetricValue = 1,
+    ) -> MetricValue:
 
-            self._touch()
-
-
-            self._after_update(
-                old_value,
-                value,
+        if not isinstance(amount, (int, float)):
+            raise MetricValidationError(
+                "Decrement amount must be numeric."
             )
+
+
+        self.value -= amount
+
+        self.touch()
+
+        return self.value
+
+
+
+    def reset(self) -> None:
+
+        self.value = DEFAULT_METRIC_VALUE
+
+        self.touch()
 
 
 
     def update(
         self,
-        value: Any,
+        value: MetricValue,
     ) -> None:
+
+        self.set_value(value)
+
+
+
+    def touch(self) -> None:
+
+        self.updated_at = time.time()
+
+
+# ==============================================================================
+# Part 10. State Management
+# ==============================================================================
+
+    def enable(self) -> None:
         """
-        Update metric value.
-
-        Default implementation delegates
-        to set().
-
-        Specialized metrics override this.
-
-        Examples:
-
-        Counter:
-            increment
-
-        Histogram:
-            observe
-
-        Timer:
-            record duration
-        """
-
-        self.set(
-            value
-        )
-
-
-
-    def reset(
-        self,
-    ) -> None:
-        """
-        Reset metric value.
-
-        Subclasses may override
-        _default_value().
+        Enable metric.
         """
 
-        self.set(
-            self._default_value()
-        )
+        self.state.enable()
+        self.touch()
 
 
-
-    def clear(
-        self,
-    ) -> None:
+    def disable(self) -> None:
         """
-        Clear current metric value.
-
-        Equivalent to setting None.
+        Disable metric.
         """
 
-        self.set(
-            None
-        )
+        self.state.disable()
+        self.touch()
 
 
-
-    def delta(
-        self,
-    ) -> Any:
+    def activate(self) -> None:
         """
-        Calculate value difference.
-
-        Returns
-        -------
-
-        None
-            If values cannot be subtracted.
+        Activate metric.
         """
 
-
-        with self._lock:
-
-            if (
-                self._value is None
-                or self._previous_value is None
-            ):
-                return None
+        self.state.activate()
+        self.touch()
 
 
-            try:
-
-                return (
-                    self._value
-                    -
-                    self._previous_value
-                )
-
-
-            except Exception:
-
-                return None
-
-
-
-    def changed(
-        self,
-    ) -> bool:
+    def deactivate(self) -> None:
         """
-        Check whether current value differs
-        from previous value.
+        Deactivate metric.
         """
 
-        with self._lock:
-
-            return (
-                self._value
-                !=
-                self._previous_value
-            )        
-    # ======================================================
-    # Internal Runtime Hooks
-    # ======================================================
+        self.state.deactivate()
+        self.touch()
 
 
-    def _access(
-        self,
-    ) -> None:
+    def archive(self) -> None:
         """
-        Record read access.
+        Archive metric.
         """
 
-        self._last_accessed_at = (
-            datetime.now(
-                timezone.utc
-            )
-        )
+        self.state.archive()
+        self.touch()
 
 
-
-    def _touch(
-        self,
-    ) -> None:
-        """
-        Mark runtime state changed.
-        """
-
-        now = datetime.now(
-            timezone.utc
-        )
-
-
-        self._updated_at = now
-
-        self._revision += 1
-
-        self._dirty = True
-
-
-
-    def _ensure_mutable(
-        self,
-    ) -> None:
-        """
-        Validate mutation permission.
-        """
-
-        if self._closed:
-            raise RuntimeError(
-                "Metric is closed."
-            )
-
-
-        if self._frozen:
-            raise RuntimeError(
-                "Metric is frozen."
-            )
-
-
-        if not self._enabled:
-            raise RuntimeError(
-                "Metric is disabled."
-            )
-
-
-
-    def _default_value(
-        self,
-    ) -> Any:
-        """
-        Default reset value.
-
-        Override in subclasses.
-        """
-
-        return None
-
-
-
-    def _before_update(
-        self,
-        old_value: Any,
-        new_value: Any,
-    ) -> None:
-        """
-        Update hook before mutation.
-        """
-
-        return None
-
-
-
-    def _after_update(
-        self,
-        old_value: Any,
-        new_value: Any,
-    ) -> None:
-        """
-        Update hook after mutation.
-        """
-
-        return None
-    # ======================================================
-    # Part 4. Snapshot API
-    # ======================================================
-
-
-    def snapshot(
-        self,
-    ) -> MetricSnapshot:
-        """
-        Create immutable runtime snapshot.
-
-        Snapshot contains:
-
-        - descriptor
-        - value
-        - labels
-        - attributes
-        - revision
-        - timestamps
-        """
-
-        with self._lock:
-
-            self._before_snapshot()
-
-
-            snapshot = MetricSnapshot(
-
-                descriptor=self._descriptor,
-
-                value=self._value,
-
-                previous_value=self._previous_value,
-
-                labels=self._labels.copy(),
-
-                attributes=self._attributes.copy(),
-
-                revision=self._revision,
-
-                update_count=self._update_count,
-
-                created_at=self._created_at,
-
-                updated_at=self._updated_at,
-
-            )
-
-
-            self._last_snapshot_at = (
-                datetime.now(
-                    timezone.utc
-                )
-            )
-
-
-            self._dirty = False
-
-
-            self._after_snapshot(
-                snapshot
-            )
-
-
-            return snapshot
     def restore(
         self,
-        snapshot: MetricSnapshot,
+        snapshot: MetricSnapshot | None = None,
     ) -> None:
         """
-        Restore metric runtime state
-        from snapshot.
+        Restore metric state or complete metric snapshot.
+
+        Parameters
+        ----------
+        snapshot:
+            None:
+                Restore lifecycle state only.
+
+            MetricSnapshot:
+                Restore the complete metric state.
         """
 
-        with self._lock:
+        # ------------------------------------------------------------------
+        # Lifecycle restore only
+        # ------------------------------------------------------------------
 
-            self._ensure_mutable()
+        if snapshot is None:
+            self.state.restore()
+            self.touch()
+            return
+
+        # ------------------------------------------------------------------
+        # Validate snapshot
+        # ------------------------------------------------------------------
+
+        if not isinstance(snapshot, MetricSnapshot):
+            raise MetricValidationError(
+                "snapshot must be a MetricSnapshot."
+            )
+
+        data = copy.deepcopy(snapshot.snapshot)
+
+        # ------------------------------------------------------------------
+        # Core fields
+        # ------------------------------------------------------------------
+
+        self.name = data["name"]
+
+        self.value = data["value"]
+
+        self.metric_type = MetricType(
+            data["metric_type"]
+        )
+
+        self.unit = MetricUnit(
+            data["unit"]
+        )
+
+        # ------------------------------------------------------------------
+        # Runtime state
+        # ------------------------------------------------------------------
+
+        self.state = MetricState.from_dict(
+            data.get(
+                "state",
+                {},
+            )
+        )
+
+        # ------------------------------------------------------------------
+        # Metadata containers
+        #
+        # IMPORTANT:
+        # Keep the REAL metadata containers here.
+        # CallableContainer is only the public API proxy.
+        # ------------------------------------------------------------------
+
+        self._labels = MetricLabels.from_dict(
+            data.get(
+                "labels",
+                {},
+            )
+        )
+
+        self._attributes = MetricAttributes.from_dict(
+            data.get(
+                "attributes",
+                {},
+            )
+        )
+
+        self._annotations = MetricAnnotations.from_dict(
+            data.get(
+                "annotations",
+                {},
+            )
+        )
+
+        self._tags = MetricTags.from_dict(
+            data.get(
+                "tags",
+                [],
+            )
+        )
+
+        self._hooks = MetricHooks.from_dict(
+            data.get(
+                "hooks",
+                {},
+            )
+        )
+
+        # ------------------------------------------------------------------
+        # Lifecycle timestamps
+        # ------------------------------------------------------------------
+
+        self.created_at = data.get(
+            "created_at",
+            self.created_at,
+        )
+
+        self.updated_at = data.get(
+            "updated_at",
+            self.updated_at,
+        )
+
+        # ------------------------------------------------------------------
+        # Version
+        # ------------------------------------------------------------------
+
+        if "version" in data:
+            self.version = data["version"]
+
+        # ------------------------------------------------------------------
+        # Rebuild callable metadata proxies
+        #
+        # _labels / _annotations / _tags remain REAL containers.
+        # ------------------------------------------------------------------
+
+        self._init_metadata_api()
 
 
-            if (
-                snapshot.descriptor.id
-                != self._descriptor.id
+    def snapshot(self) -> MetricSnapshot:
+        """
+        Create an immutable metric snapshot.
+        """
+
+        return MetricSnapshot(
+            snapshot=copy.deepcopy(
+                self.to_dict()
+            )
+        )
+
+# ==============================================================================
+# Part 11. Metadata Access
+# ==============================================================================
+
+
+    def get_labels(self) -> MetricLabels:
+        return self._labels
+
+
+
+    def get_attributes(self) -> MetricAttributes:
+        return self._attributes
+
+
+
+    def get_annotations(self) -> MetricAnnotations:
+        return self._annotations
+
+
+
+    def get_tags(self) -> MetricTags:
+        return self._tags
+
+
+
+    def get_hooks(self) -> MetricHooks:
+        return self._hooks
+
+
+
+# ==============================================================================
+# Part 12. Validation
+# ==============================================================================
+
+
+    def validate(self) -> bool:
+
+        try:
+
+            if not isinstance(self.name, str):
+                return False
+
+
+            if not self.name.strip():
+                return False
+
+
+            if not isinstance(
+                self.value,
+                (int, float),
             ):
+                return False
 
-                raise ValueError(
-                    "Snapshot descriptor mismatch."
+
+            if not isinstance(
+                self.metric_type,
+                MetricType,
+            ):
+                return False
+
+
+            if not isinstance(
+                self.unit,
+                MetricUnit,
+            ):
+                return False
+
+
+            if not isinstance(
+                self.state,
+                MetricState,
+            ):
+                return False
+
+
+            if not isinstance(
+                self._labels,
+                MetricLabels,
+            ):
+                return False
+
+
+            if not isinstance(
+                self._attributes,
+                MetricAttributes,
+            ):
+                return False
+
+
+            if not isinstance(
+                self._annotations,
+                MetricAnnotations,
+            ):
+                return False
+
+
+            if not isinstance(
+                self._tags,
+                MetricTags,
+            ):
+                return False
+
+
+            if not isinstance(
+                self._hooks,
+                MetricHooks,
+            ):
+                return False
+
+
+            return True
+
+
+        except Exception:
+
+            return False
+
+
+
+# ==============================================================================
+# Part 13. Serialization
+# ==============================================================================
+
+
+    def to_dict(self) -> MetricPayload:
+
+        return {
+
+            "name": self.name,
+
+            "value": self.value,
+
+            "metric_type": self.metric_type.value,
+
+            "unit": self.unit.value,
+
+            "state": self.state.to_dict(),
+
+            "labels": self._labels.to_dict(),
+
+            "attributes": self._attributes.to_dict(),
+
+            "annotations": self._annotations.to_dict(),
+
+            "tags": self._tags.to_dict(),
+
+            "hooks": self._hooks.to_dict(),
+
+
+            "created_at": self.created_at,
+
+            "updated_at": self.updated_at,
+
+            "version": self.version,
+
+        }
+
+
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: MetricPayload,
+    ) -> "Metric":
+
+        return cls(
+
+            name=data["name"],
+
+            value=data["value"],
+
+            metric_type=MetricType(
+                data["metric_type"]
+            ),
+
+            unit=MetricUnit(
+                data["unit"]
+            ),
+
+            state=MetricState.from_dict(
+                data["state"]
+            ),
+
+
+            _labels=MetricLabels.from_dict(
+                data.get(
+                    "labels",
+                    {},
                 )
+            ),
 
 
-            self._before_restore(
-                snapshot
-            )
+            _attributes=MetricAttributes.from_dict(
+                data.get(
+                    "attributes",
+                    {},
+                )
+            ),
 
 
-            self._value = (
-                snapshot.value
-            )
+            _annotations=MetricAnnotations.from_dict(
+                data.get(
+                    "annotations",
+                    {},
+                )
+            ),
 
 
-            self._previous_value = (
-                snapshot.previous_value
-            )
+            _tags=MetricTags.from_dict(
+                data.get(
+                    "tags",
+                    [],
+                )
+            ),
 
 
-            self._labels = (
-                snapshot.labels.copy()
-            )
+            _hooks=MetricHooks.from_dict(
+                data.get(
+                    "hooks",
+                    {},
+                )
+            ),
 
 
-            self._attributes = (
-                snapshot.attributes.copy()
-            )
+        )
 
 
-            self._revision = (
-                snapshot.revision
-            )
+
+    def to_json(self) -> str:
+
+        return json.dumps(
+
+            self.to_dict(),
+
+            ensure_ascii=False,
+
+            sort_keys=True,
+
+        )
 
 
-            self._update_count = (
-                snapshot.update_count
-            )
 
-
-            self._updated_at = (
-                snapshot.updated_at
-            )
-
-
-            self._touch()
-
-
-            self._after_restore(
-                snapshot
-            )
-    def clone(
-        self,
+    @classmethod
+    def from_json(
+        cls,
+        payload: str,
     ) -> "Metric":
-        """
-        Create deep independent copy.
 
-        New runtime identity.
-        Same descriptor schema.
-        """
-
-        with self._lock:
+        return cls.from_dict(
+            json.loads(payload)
+        )
 
 
-            cloned = self.__class__(
 
-                descriptor=(
-                    self._descriptor.copy()
-                ),
-
-                metadata=(
-                    self._metadata.copy()
-                ),
-
-                labels=(
-                    self._labels.copy()
-                ),
-
-                attributes=(
-                    self._attributes.copy()
-                ),
-
-            )
+# ==============================================================================
+# Part 14. Copy
+# ==============================================================================
 
 
-            cloned.restore(
-                self.snapshot()
-            )
-
-
-            return cloned
-    def copy(
-        self,
-    ) -> "Metric":
-        """
-        Alias of clone().
-        """
+    def copy(self) -> "Metric":
 
         return self.clone()
-    def _before_snapshot(
-        self,
-    ) -> None:
-        """
-        Hook before snapshot creation.
-        """
 
-        return None
 
 
+    def clone(self) -> "Metric":
 
-    def _after_snapshot(
-        self,
-        snapshot: MetricSnapshot,
-    ) -> None:
-        """
-        Hook after snapshot creation.
-        """
+        return Metric(
 
-        return None
+            name=self.name,
 
+            value=self.value,
 
+            metric_type=self.metric_type,
 
-    def _before_restore(
-        self,
-        snapshot: MetricSnapshot,
-    ) -> None:
-        """
-        Hook before restore.
-        """
+            unit=self.unit,
 
-        return None
 
+            state=self.state.clone(),
 
 
-    def _after_restore(
-        self,
-        snapshot: MetricSnapshot,
-    ) -> None:
-        """
-        Hook after restore.
-        """
+            _labels=self._labels.clone(),
 
-        return None
-    # ======================================================
-    # Part 5. Lifecycle API
-    # ======================================================
+            _attributes=self._attributes.clone(),
 
+            _annotations=self._annotations.clone(),
 
-    def freeze(
-        self,
-    ) -> None:
-        """
-        Freeze metric.
+            _tags=self._tags.clone(),
 
-        Frozen metrics:
+            _hooks=self._hooks.clone(),
 
-        - keep current state
-        - allow read operations
-        - reject mutations
-
-        Used for:
-        - checkpoint
-        - export
-        - immutable snapshots
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot freeze closed metric."
-                )
-
-
-            if self._frozen:
-                return
-
-
-            self._before_freeze()
-
-
-            self._frozen = True
-
-
-            self._touch()
-
-
-            self._after_freeze()
-
-
-
-    def unfreeze(
-        self,
-    ) -> None:
-        """
-        Unfreeze metric.
-
-        Allows future mutations.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot unfreeze closed metric."
-                )
-
-
-            if not self._frozen:
-                return
-
-
-            self._before_unfreeze()
-
-
-            self._frozen = False
-
-
-            self._touch()
-
-
-            self._after_unfreeze()
-
-
-
-    def enable(
-        self,
-    ) -> None:
-        """
-        Enable metric updates.
-
-        Disabled metrics preserve
-        their runtime state but reject writes.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot enable closed metric."
-                )
-
-
-            if self._enabled:
-                return
-
-
-            self._before_enable()
-
-
-            self._enabled = True
-
-
-            self._touch()
-
-
-            self._after_enable()
-
-
-
-    def disable(
-        self,
-    ) -> None:
-        """
-        Disable metric updates.
-
-        Disabled metrics:
-
-        - keep current value
-        - reject mutations
-        - remain observable
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot disable closed metric."
-                )
-
-
-            if not self._enabled:
-                return
-
-
-            self._before_disable()
-
-
-            self._enabled = False
-
-
-            self._touch()
-
-
-            self._after_disable()
-
-
-
-    def close(
-        self,
-    ) -> None:
-        """
-        Permanently close metric.
-
-        Closed metric:
-
-        - cannot update
-        - cannot freeze/unfreeze
-        - cannot enable/disable
-
-        Read operations remain valid.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                return
-
-
-            self._before_close()
-
-
-            self._closed = True
-
-
-            self._enabled = False
-
-
-            self._frozen = True
-
-
-            self._touch()
-
-
-            self._after_close()
-
-
-
-    def reopen(
-        self,
-    ) -> None:
-        """
-        Reopen closed metric.
-
-        Used by:
-
-        - recovery system
-        - checkpoint restore
-        - distributed failover
-        """
-
-        with self._lock:
-
-            if not self._closed:
-                return
-
-
-            self._before_reopen()
-
-
-            self._closed = False
-
-
-            self._enabled = True
-
-
-            self._frozen = False
-
-
-            self._touch()
-
-
-            self._after_reopen()
-    # ======================================================
-    # Part 6. Internal Runtime Engine
-    # ======================================================
-
-
-    # ======================================================
-    # Access Tracking
-    # ======================================================
-
-
-    def _access(
-        self,
-    ) -> None:
-        """
-        Record metric read access.
-
-        Used for:
-
-        - diagnostics
-        - monitoring
-        - idle detection
-        """
-
-        self._last_accessed_at = (
-            datetime.now(
-                timezone.utc
-            )
         )
 
 
 
-    # ======================================================
-    # Runtime Mutation Tracking
-    # ======================================================
-
-
-    def _touch(
-        self,
-    ) -> None:
-        """
-        Mark runtime state changed.
-
-        Updates:
-
-        - timestamp
-        - revision
-        - dirty flag
-        """
-
-        self._updated_at = (
-            datetime.now(
-                timezone.utc
-            )
-        )
-
-
-        self._revision += 1
-
-
-        self._dirty = True
-
-
-
-    # ======================================================
-    # Mutation Protection
-    # ======================================================
-
-
-    def _ensure_mutable(
-        self,
-    ) -> None:
-        """
-        Validate metric mutation permission.
-
-        Raises
-        ------
-
-        RuntimeError:
-            If metric cannot be modified.
-        """
-
-
-        if self._closed:
-
-            raise RuntimeError(
-                "Metric is closed."
-            )
-
-
-        if self._frozen:
-
-            raise RuntimeError(
-                "Metric is frozen."
-            )
-
-
-        if not self._enabled:
-
-            raise RuntimeError(
-                "Metric is disabled."
-            )
-
-
-
-    # ======================================================
-    # Default Reset Value
-    # ======================================================
-
-
-    def _default_value(
-        self,
-    ) -> Any:
-        """
-        Default value used by reset().
-
-        Subclasses override this.
-
-        Examples:
-
-        Counter:
-            0
-
-        Gauge:
-            0.0
-
-        Histogram:
-            empty buckets
-
-        """
-
-        return None
-
-
-
-    # ======================================================
-    # Runtime State Export
-    # ======================================================
-
-
-    def state(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return complete runtime state.
-
-        Designed for:
-
-        - debugging
-        - exporters
-        - APIs
-        - diagnostics
-        """
-
-        with self._lock:
-
-            self._access()
-
-
-            return {
-
-                "id": str(
-                    self._id
-                ),
-
-
-                "value":
-                    self._value,
-
-
-                "previous_value":
-                    self._previous_value,
-
-
-                "update_count":
-                    self._update_count,
-
-
-                "enabled":
-                    self._enabled,
-
-
-                "frozen":
-                    self._frozen,
-
-
-                "closed":
-                    self._closed,
-
-
-                "revision":
-                    self._revision,
-
-
-                "dirty":
-                    self._dirty,
-
-
-                "created_at":
-                    self._created_at.isoformat(),
-
-
-                "updated_at":
-                    self._updated_at.isoformat(),
-
-
-                "descriptor":
-                    self._descriptor.to_dict()
-                    if hasattr(
-                        self._descriptor,
-                        "to_dict"
-                    )
-                    else str(
-                        self._descriptor
-                    ),
-
-
-                "metadata":
-                    self._metadata.to_dict()
-                    if hasattr(
-                        self._metadata,
-                        "to_dict"
-                    )
-                    else dict(
-                        self._metadata
-                    ),
-
-
-                "labels":
-                    dict(
-                        self._labels
-                    ),
-
-
-                "attributes":
-                    dict(
-                        self._attributes
-                    ),
-
-            }
-
-
-
-    # ======================================================
-    # Health Diagnostics
-    # ======================================================
-
-
-    def health(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Runtime health report.
-
-        Returns:
-
-        - healthy
-        - issues
-        - status
-        """
-
-        with self._lock:
-
-            issues = []
-
-
-            if self._closed:
-
-                issues.append(
-                    "closed"
-                )
-
-
-            if not self._enabled:
-
-                issues.append(
-                    "disabled"
-                )
-
-
-            if self._frozen:
-
-                issues.append(
-                    "frozen"
-                )
-
-
-            return {
-
-                "healthy":
-                    len(issues) == 0,
-
-
-                "status":
-                    "healthy"
-                    if not issues
-                    else "degraded",
-
-
-                "issues":
-                    issues,
-
-
-                "revision":
-                    self._revision,
-
-
-                "updates":
-                    self._update_count,
-
-            }
-
-
-
-    # ======================================================
-    # Runtime Statistics
-    # ======================================================
-
-
-    def statistics(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Runtime metric statistics.
-
-        Used by:
-
-        - observability dashboards
-        - exporters
-        - debugging
-        """
-
-        with self._lock:
-
-            return {
-
-                "updates":
-                    self._update_count,
-
-
-                "revision":
-                    self._revision,
-
-
-                "dirty":
-                    self._dirty,
-
-
-                "enabled":
-                    self._enabled,
-
-
-                "frozen":
-                    self._frozen,
-
-
-                "closed":
-                    self._closed,
-
-
-                "has_value":
-                    self._value is not None,
-
-            }
-    # ======================================================
-    # Part 7. Diagnostics
-    # ======================================================
-
-
-    # ======================================================
-    # Validation
-    # ======================================================
-
-
-    def validate(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Validate internal metric state.
-
-        Returns
-        -------
-
-        dict
-
-            {
-                "valid": bool,
-                "errors": list
-            }
-        """
-
-        with self._lock:
-
-            errors: list[str] = []
-
-
-            # ----------------------------------------------
-            # Descriptor
-            # ----------------------------------------------
-
-            if self._descriptor is None:
-
-                errors.append(
-                    "Missing descriptor."
-                )
-
-
-            # ----------------------------------------------
-            # Identity
-            # ----------------------------------------------
-
-            if self._id is None:
-
-                errors.append(
-                    "Missing metric identity."
-                )
-
-
-            # ----------------------------------------------
-            # Lifecycle consistency
-            # ----------------------------------------------
-
-            if (
-                self._closed
-                and self._enabled
-            ):
-
-                errors.append(
-                    "Closed metric cannot be enabled."
-                )
-
-
-            if (
-                self._closed
-                and not self._frozen
-            ):
-
-                errors.append(
-                    "Closed metric must be frozen."
-                )
-
-
-            # ----------------------------------------------
-            # Counters
-            # ----------------------------------------------
-
-            if self._update_count < 0:
-
-                errors.append(
-                    "Invalid update counter."
-                )
-
-
-            if self._revision < 0:
-
-                errors.append(
-                    "Invalid revision."
-                )
-
-
-            return {
-
-                "valid":
-                    len(errors) == 0,
-
-
-                "errors":
-                    errors,
-
-            }
-
-
-
-    # ======================================================
-    # Dump
-    # ======================================================
-
-
-    def dump(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Export complete diagnostic dump.
-
-        Intended for:
-
-        - debugging
-        - support
-        - incident reports
-        """
-
-        with self._lock:
-
-            return {
-
-                "identity": {
-
-                    "id":
-                        str(
-                            self._id
-                        ),
-
-                    "created_at":
-                        self._created_at.isoformat(),
-
-                },
-
-
-                "descriptor":
-                    self._descriptor.to_dict()
-                    if hasattr(
-                        self._descriptor,
-                        "to_dict"
-                    )
-                    else str(
-                        self._descriptor
-                    ),
-
-
-                "runtime":
-                    self.state(),
-
-
-                "statistics":
-                    self.statistics(),
-
-
-                "health":
-                    self.health(),
-
-
-                "validation":
-                    self.validate(),
-
-            }
-
-
-
-    # ======================================================
-    # Info
-    # ======================================================
-
-
-    def info(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return compact metric information.
-
-        Suitable for APIs.
-        """
-
-        with self._lock:
-
-            return {
-
-                "id":
-                    str(
-                        self._id
-                    ),
-
-
-                "name":
-                    getattr(
-                        self._descriptor,
-                        "name",
-                        None,
-                    ),
-
-
-                "value":
-                    self._value,
-
-
-                "enabled":
-                    self._enabled,
-
-
-                "frozen":
-                    self._frozen,
-
-
-                "closed":
-                    self._closed,
-
-
-                "revision":
-                    self._revision,
-
-            }
-
-
-
-    # ======================================================
-    # Debug Information
-    # ======================================================
-
-
-    def debug(
-        self,
-    ) -> str:
-        """
-        Human readable debug output.
-        """
-
-        return (
-            f"{self.__class__.__name__}("
-            f"id={self._id}, "
-            f"value={self._value!r}, "
-            f"enabled={self._enabled}, "
-            f"frozen={self._frozen}, "
-            f"closed={self._closed}, "
-            f"revision={self._revision}"
-            ")"
-        )
-
-
-
-    # ======================================================
-    # Error Diagnostics
-    # ======================================================
-
-
-    def errors(
-        self,
-    ) -> list[str]:
-        """
-        Return current validation errors.
-
-        Convenience wrapper around validate().
-        """
-
-        result = self.validate()
-
-
-        return result[
-            "errors"
-        ]
-
-
-
-    # ======================================================
-    # Representation
-    # ======================================================
-
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-        """
-
-        return self.debug()
-    # ======================================================
-    # Part 8. Python Protocols
-    # ======================================================
-
-
-    # ======================================================
-    # String Representation
-    # ======================================================
-
-
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human readable value representation.
-        """
-
-        return str(
-            self._value
-        )
-
-
-
-    # ======================================================
-    # Equality
-    # ======================================================
+# ==============================================================================
+# Part 15. Equality
+# ==============================================================================
 
 
     def __eq__(
         self,
         other: object,
     ) -> bool:
-        """
-        Compare metric values.
 
-        Supports:
-
-        Metric == Metric
-        Metric == raw value
-        """
-
-        if isinstance(
-            other,
-            Metric,
-        ):
-
-            return (
-                self._value
-                ==
-                other._value
-            )
-
-
-        return (
-            self._value
-            ==
-            other
-        )
-
-
-
-    # ======================================================
-    # Hash
-    # ======================================================
-
-
-    def __hash__(
-        self,
-    ) -> int:
-        """
-        Hash by immutable runtime identity.
-
-        Allows:
-
-        set()
-        dict keys
-        """
-
-        return hash(
-            self._id
-        )
-
-
-
-    # ======================================================
-    # Boolean Conversion
-    # ======================================================
-
-
-    def __bool__(
-        self,
-    ) -> bool:
-        """
-        Metric truth value.
-
-        False when:
-
-        - no value
-        - disabled
-        - closed
-        """
-
-        if self._closed:
-
-            return False
-
-
-        if not self._enabled:
-
-            return False
-
-
-        return bool(
-            self._value
-        )
-
-
-
-    # ======================================================
-    # Iterator Protocol
-    # ======================================================
-
-
-    def __iter__(
-        self,
-    ):
-        """
-        Iterate over metric value.
-
-        Examples:
-
-        Gauge(10)
-            -> [10]
-
-        Histogram([...])
-            -> iterate buckets
-        """
-
-        try:
-
-            return iter(
-                self._value
-            )
-
-
-        except TypeError:
-
-            return iter(
-                (
-                    self._value,
-                )
-            )
-
-
-
-    # ======================================================
-    # Length Protocol
-    # ======================================================
-
-
-    def __len__(
-        self,
-    ) -> int:
-        """
-        Return length of metric value.
-
-        Scalar values return 1.
-        """
-
-        if self._value is None:
-
-            return 0
-
-
-        try:
-
-            return len(
-                self._value
-            )
-
-
-        except TypeError:
-
-            return 1
-
-
-
-    # ======================================================
-    # Context Manager
-    # ======================================================
-
-
-    def __enter__(
-        self,
-    ):
-        """
-        Enter metric context.
-
-        Example:
-
-        with metric:
-            metric.update(value)
-        """
-
-        with self._lock:
-
-            if self._closed:
-
-                raise RuntimeError(
-                    "Cannot enter closed metric."
-                )
-
-
-            return self
-
-
-
-    def __exit__(
-        self,
-        exc_type,
-        exc_value,
-        traceback,
-    ) -> bool:
-        """
-        Exit metric context.
-
-        Does not suppress exceptions.
-        """
-
-        self.close()
-
-
-        return False
-    # ======================================================
-    # Part 9. Final Integration
-    # ======================================================
-
-
-    # ======================================================
-    # Update Hooks
-    # ======================================================
-
-
-    def _before_update(
-        self,
-        old_value: Any,
-        new_value: Any,
-    ) -> None:
-        """
-        Hook before value mutation.
-
-        Subclasses override:
-
-        - validation
-        - preprocessing
-        - constraints
-        """
-
-        return None
-
-
-
-    def _after_update(
-        self,
-        old_value: Any,
-        new_value: Any,
-    ) -> None:
-        """
-        Hook after value mutation.
-
-        Used by:
-
-        - exporters
-        - observers
-        - event systems
-        """
-
-        return None
-
-
-
-    # ======================================================
-    # Snapshot Hooks
-    # ======================================================
-
-
-    def _before_snapshot(
-        self,
-    ) -> None:
-        """
-        Hook before snapshot creation.
-        """
-
-        return None
-
-
-
-    def _after_snapshot(
-        self,
-        snapshot: Any,
-    ) -> None:
-        """
-        Hook after snapshot creation.
-        """
-
-        return None
-
-
-
-    def _before_restore(
-        self,
-        snapshot: Any,
-    ) -> None:
-        """
-        Hook before snapshot restore.
-        """
-
-        return None
-
-
-
-    def _after_restore(
-        self,
-        snapshot: Any,
-    ) -> None:
-        """
-        Hook after snapshot restore.
-        """
-
-        return None
-
-
-
-    # ======================================================
-    # Lifecycle Hooks
-    # ======================================================
-
-
-    def _before_freeze(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _after_freeze(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _before_unfreeze(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _after_unfreeze(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _before_enable(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _after_enable(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _before_disable(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _after_disable(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _before_close(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _after_close(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _before_reopen(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    def _after_reopen(
-        self,
-    ) -> None:
-
-        return None
-
-
-
-    # ======================================================
-    # Type Safety
-    # ======================================================
-
-
-    def validate_type(
-        self,
-        value: Any,
-    ) -> bool:
-        """
-        Validate runtime value type.
-
-        Base metric accepts all values.
-
-        Subclasses override.
-
-        Examples:
-
-        Counter:
-            int
-
-        Gauge:
-            float
-
-        Histogram:
-            numeric
-        """
-
-        return True
-
-
-
-    def ensure_type(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Raise error if value type invalid.
-        """
-
-        if not self.validate_type(
-            value
-        ):
-
-            raise TypeError(
-                f"Invalid value type: "
-                f"{type(value).__name__}"
-            )
-
-
-
-    # ======================================================
-    # Export Helpers
-    # ======================================================
-
-
-    def export(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Export metric representation.
-
-        Used by:
-
-        - exporters
-        - APIs
-        - telemetry pipelines
-        """
-
-        return {
-
-            "id":
-                str(
-                    self._id
-                ),
-
-
-            "name":
-                getattr(
-                    self._descriptor,
-                    "name",
-                    None,
-                ),
-
-
-            "value":
-                self._value,
-
-
-            "labels":
-                dict(
-                    self._labels
-                ),
-
-
-            "attributes":
-                dict(
-                    self._attributes
-                ),
-
-
-            "timestamp":
-                self._updated_at.isoformat(),
-
-
-            "revision":
-                self._revision,
-
-        }
-
-
-
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Compatibility alias.
-
-        Same as export().
-        """
-
-        return self.export()
-
-
-
-    # ======================================================
-    # Compatibility Helpers
-    # ======================================================
-
-
-    def copy_value(
-        self,
-    ) -> Any:
-        """
-        Return safe value copy.
-
-        Prevent external mutation.
-        """
-
-        value = self._value
-
-
-        if hasattr(
-            value,
-            "copy"
-        ):
-
-            return value.copy()
-
-
-        return value
-
-
-
-    def compatible_with(
-        self,
-        other: "Metric",
-    ) -> bool:
-        """
-        Check runtime compatibility.
-
-        Metrics are compatible when:
-
-        - same descriptor
-        - same metric schema
-        """
 
         if not isinstance(
             other,
             Metric,
         ):
-
-            return False
+            return NotImplemented
 
 
         return (
-            self._descriptor
-            ==
-            other._descriptor
+
+            self.name == other.name
+
+            and self.value == other.value
+
+            and self.metric_type == other.metric_type
+
+            and self.unit == other.unit
+
+            and self.state == other.state
+
+            and self._labels == other._labels
+
+            and self._attributes == other._attributes
+
+            and self._annotations == other._annotations
+
+            and self._tags == other._tags
+
+            and self._hooks == other._hooks
+
         )
 
 
 
-    # ======================================================
-    # Final Representation
-    # ======================================================
+    def __hash__(self) -> int:
+
+        return hash(
+
+            (
+
+                self.name,
+
+                self.metric_type,
+
+                self.unit,
+
+                self.value,
+
+            )
+
+        )
 
 
-    def summary(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Compact production summary.
-        """
 
-        return {
+# ==============================================================================
+# Part 16. Representation
+# ==============================================================================
 
-            "id":
-                str(
-                    self._id
-                ),
 
-            "name":
-                getattr(
-                    self._descriptor,
-                    "name",
-                    None,
-                ),
+    def __repr__(self) -> str:
 
-            "value":
-                self._value,
+        return (
 
-            "state":
-                {
-                    "enabled":
-                        self._enabled,
+            f"{self.__class__.__name__}("
 
-                    "frozen":
-                        self._frozen,
+            f"name={self.name!r}, "
 
-                    "closed":
-                        self._closed,
-                },
+            f"value={self.value!r}, "
 
-            "revision":
-                self._revision,
+            f"type={self.metric_type.value!r}, "
 
-        }                                                                                                                
+            f"unit={self.unit.value!r})"
+
+        )
+
+
+
+    def __str__(self) -> str:
+
+        return (
+
+            f"{self.name}"
+
+            f"={self.value}"
+
+            f" [{self.unit.value}]"
+
+        )
+
+
+
+# ==============================================================================
+# Part 17. Public API
+# ==============================================================================
+
+
+__all__ = [
+
+    "METRIC_VERSION",
+
+    "DEFAULT_METRIC_NAME",
+
+    "DEFAULT_METRIC_VALUE",
+
+    "DEFAULT_TIMESTAMP",
+
+    "MetricType",
+
+    "MetricUnit",
+
+    "MetricError",
+
+    "MetricValidationError",
+
+    "MetricValue",
+
+    "MetricPayload",
+
+    "Metric",
+
+]

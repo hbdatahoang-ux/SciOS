@@ -1,1726 +1,1068 @@
 """
-SciOS Observability
-===================
+Runtime metric timer for measuring elapsed execution time.
 
-Timer Metric
-
-Part 1
-------
-
-Foundation layer.
-
-A Timer measures execution duration and timing statistics.
-
-Responsibilities
-----------------
-
-- Runtime timer metric
-- High-resolution clock
-- Duration accumulation
-- Timing statistics
-- Snapshot support
-- Lifecycle integration
-
-Concrete APIs are implemented in later parts.
+Python 3.11+
 """
+
+# ==============================================================================
+
+# Part 1. Imports
+
+# ==============================================================================
 
 from __future__ import annotations
 
-# ======================================================
-# Imports
-# ======================================================
-
+import copy
+import json
 import time
 
-from typing import Any
+from typing import Any, TypeAlias
 
-from .metric import Metric
-from .descriptor import MetricDescriptor
-from .metadata import MetricMetadata
-from .labels import MetricLabels
-from .attributes import MetricAttributes
+from .metric_state import MetricState
 
 
-__all__ = [
-    "Timer",
-]
+
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
+
+DEFAULT_VALUE: float = 0.0
+
+DEFAULT_NAME: str | None = None
+
+DEFAULT_DESCRIPTION: str | None = None
+
+DEFAULT_UNIT: str | None = None
+
+DEFAULT_METADATA: dict[str, Any] = {}
+
+DEFAULT_ANNOTATIONS: dict[str, Any] = {}
+
+DEFAULT_TAGS: dict[str, Any] = {}
 
 
-# ======================================================
-# Timer
-# ======================================================
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+NumericValue: TypeAlias = int | float
+
+Metadata: TypeAlias = dict[str, Any]
+
+Annotation: TypeAlias = dict[str, Any]
+
+Tag: TypeAlias = dict[str, Any]
 
 
-class Timer(Metric):
+# ==============================================================================
+# Part 4. Exceptions
+# ==============================================================================
+
+
+class TimerValidationError(ValueError):
     """
-    Runtime timer metric.
-
-    Timer measures elapsed durations using a
-    monotonic high-resolution clock.
-
-    Runtime statistics include:
-
-    - total duration
-    - observation count
-    - minimum duration
-    - maximum duration
-    - average duration
+    Raised when a Timer contains invalid configuration or state.
     """
 
-    # ==================================================
+    pass
+
+
+# ==============================================================================
+# State Sentinel
+# ==============================================================================
+
+_STATE_UNSET = object()
+
+
+# ==============================================================================
+# Part 5. Timer class
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# Constructor sentinel
+#
+# Distinguishes:
+#
+#     Timer()
+#         -> create default MetricState
+#
+#     Timer(state=None)
+#         -> explicitly store None
+#
+#     Timer(state=some_state)
+#         -> preserve exact object identity
+# ------------------------------------------------------------------------------
+
+_STATE_UNSET = object()
+
+
+class Timer:
+    """
+    SciOS Runtime Timer.
+
+    Runtime metric timer for measuring elapsed execution time.
+    """
+
+    # ==========================================================================
     # Constructor
-    # ==================================================
+    # ==========================================================================
 
     def __init__(
         self,
+        value: NumericValue = DEFAULT_VALUE,
         *,
-        descriptor: MetricDescriptor,
-        metadata: MetricMetadata | None = None,
-        labels: MetricLabels | None = None,
-        attributes: MetricAttributes | None = None,
+        name: str | None = DEFAULT_NAME,
+        description: str | None = DEFAULT_DESCRIPTION,
+        unit: str | None = DEFAULT_UNIT,
+        metadata: Metadata | None = None,
+        annotations: Annotation | None = None,
+        tags: Tag | None = None,
+        state: MetricState | None | object = _STATE_UNSET,
     ) -> None:
-        """
-        Initialize a Timer metric.
-        """
+        self._name = name
+        self._value = value
+        self._description = description
+        self._unit = unit
 
-        super().__init__(
-
-            descriptor=descriptor,
-
-            metadata=metadata,
-
-            labels=labels,
-
-            attributes=attributes,
-
+        self._metadata = copy.deepcopy(
+            DEFAULT_METADATA
+            if metadata is None
+            else metadata
         )
 
-        # ----------------------------------------------
-        # High Resolution Clock
-        # ----------------------------------------------
+        self._annotations = copy.deepcopy(
+            DEFAULT_ANNOTATIONS
+            if annotations is None
+            else annotations
+        )
 
-        self._clock = time.perf_counter
+        self._tags = copy.deepcopy(
+            DEFAULT_TAGS
+            if tags is None
+            else tags
+        )
 
-        # ----------------------------------------------
-        # Runtime Timing State
-        # ----------------------------------------------
+        # ------------------------------------------------------------------
+        # State semantics
+        #
+        # Timer()            -> default MetricState
+        # Timer(state=None)  -> explicit None
+        # Timer(state=obj)   -> exact object identity
+        # ------------------------------------------------------------------
 
-        self._running: bool = False
+        if state is _STATE_UNSET:
+            self._state = MetricState()
+        else:
+            self._state = state
 
-        self._started_at: float | None = None
+        # ------------------------------------------------------------------
+        # Timer internals
+        # ------------------------------------------------------------------
 
-        self._last_duration: float = 0.0
-
-        # ----------------------------------------------
-        # Statistics
-        # ----------------------------------------------
-
-        self._count: int = 0
-
-        self._total: float = 0.0
-
-        self._min: float | None = None
-
-        self._max: float | None = None
-
-        # ----------------------------------------------
-        # Default Metric Value
-        # ----------------------------------------------
-
-        self._value = 0.0
-
-        self._previous_value = 0.0
-
-        # ----------------------------------------------
-        # Runtime Validation
-        # ----------------------------------------------
+        self._elapsed = 0.0
+        self._start_time: float | None = None
+        self._pause_time: float | None = None
+        self._paused_elapsed = 0.0
 
         self.validate()
 
-    # ==================================================
-    # Clock
-    # ==================================================
+    # ==========================================================================
+    # Properties
+    # ==========================================================================
 
     @property
-    def clock(
+    def name(self) -> str | None:
+        return self._name
+
+    @name.setter
+    def name(self, value: str | None) -> None:
+        if value is not None and not isinstance(value, str):
+            raise TypeError("name must be str or None.")
+
+        self._name = value
+
+    # --------------------------------------------------------------------------
+
+    @property
+    def value(self) -> NumericValue:
+        return self._value
+
+    @value.setter
+    def value(self, value: NumericValue) -> None:
+        self._validate_numeric(value, "value")
+        self._value = value
+
+    # --------------------------------------------------------------------------
+
+    @property
+    def description(self) -> str | None:
+        return self._description
+
+    @description.setter
+    def description(self, value: str | None) -> None:
+        if value is not None and not isinstance(value, str):
+            raise TypeError(
+                "description must be str or None."
+            )
+
+        self._description = value
+
+    # --------------------------------------------------------------------------
+
+    @property
+    def unit(self) -> str | None:
+        return self._unit
+
+    @unit.setter
+    def unit(self, value: str | None) -> None:
+        if value is not None and not isinstance(value, str):
+            raise TypeError("unit must be str or None.")
+
+        self._unit = value
+
+    # --------------------------------------------------------------------------
+
+    @property
+    def metadata(self) -> Metadata:
+        return self._metadata
+
+    @metadata.setter
+    def metadata(self, value: Metadata) -> None:
+        if not isinstance(value, dict):
+            raise TypeError("metadata must be dict.")
+
+        self._metadata = copy.deepcopy(value)
+
+    # --------------------------------------------------------------------------
+
+    @property
+    def annotations(self) -> Annotation:
+        return self._annotations
+
+    @annotations.setter
+    def annotations(self, value: Annotation) -> None:
+        if value is None:
+            raise TypeError(
+                "annotations must not be None."
+            )
+
+        if not isinstance(value, dict):
+            raise TypeError(
+                "annotations must be dict."
+            )
+
+        self._annotations = copy.deepcopy(value)
+
+    # --------------------------------------------------------------------------
+
+    @property
+    def tags(self) -> Tag:
+        return self._tags
+
+    @tags.setter
+    def tags(self, value: Tag) -> None:
+        if value is None:
+            raise TypeError(
+                "tags must not be None."
+            )
+
+        if not isinstance(value, dict):
+            raise TypeError(
+                "tags must be dict."
+            )
+
+        self._tags = copy.deepcopy(value)
+
+    # --------------------------------------------------------------------------
+
+    @property
+    def state(self) -> MetricState | None:
+        return self._state
+
+    @state.setter
+    def state(
         self,
-    ):
-        """
-        High-resolution runtime clock.
-
-        Returns
-        -------
-        Callable
-        """
-
-        return self._clock
-
-    # ==================================================
-    # Internal Runtime Validation
-    # ==================================================
-
-    def _validate_runtime(
-        self,
+        value: MetricState | None,
     ) -> None:
-        """
-        Validate internal runtime state.
-
-        Raises
-        ------
-        RuntimeError
-            If internal timer state is inconsistent.
-        """
-
-        if self._count < 0:
-
-            raise RuntimeError(
-                "Negative observation count."
-            )
-
-        if self._total < 0.0:
-
-            raise RuntimeError(
-                "Negative accumulated duration."
-            )
-
-        if (
-
-            self._min is not None
-
-            and self._max is not None
-
-            and self._min > self._max
-
+        if value is not None and not isinstance(
+            value,
+            MetricState,
         ):
-
-            raise RuntimeError(
-                "Minimum duration exceeds maximum duration."
-            )
-# ======================================================
-# Part 2. Timer API
-# ======================================================
-
-    def start(
-        self,
-    ) -> None:
-        """
-        Start timing.
-
-        Raises
-        ------
-        RuntimeError
-            If the timer is already running.
-        """
-
-        with self.lock:
-
-            self._ensure_mutable()
-
-            if self._running:
-
-                raise RuntimeError(
-                    "Timer is already running."
-                )
-
-            self._started_at = self._clock()
-
-            self._running = True
-
-            self._touch()
-
-
-    def stop(
-        self,
-    ) -> float:
-        """
-        Stop timing and record the elapsed duration.
-
-        Returns
-        -------
-        float
-            Measured duration in seconds.
-        """
-
-        with self.lock:
-
-            self._ensure_mutable()
-
-            if not self._running:
-
-                raise RuntimeError(
-                    "Timer is not running."
-                )
-
-            duration = (
-
-                self._clock()
-
-                - self._started_at
-
+            raise TypeError(
+                "state must be MetricState or None."
             )
 
-            self._running = False
+        # Preserve exact object identity.
+        self._state = value
 
-            self._started_at = None
+    # ==========================================================================
+    # Value operations
+    # ==========================================================================
 
-            self.observe(duration)
-
-            return duration
-
-
-    def observe(
+    def set_value(
         self,
-        duration: float,
-    ) -> float:
-        """
-        Record a duration.
+        value: NumericValue,
+    ) -> "Timer":
+        self._validate_numeric(value, "value")
+        self._value = value
+        return self
 
-        Parameters
-        ----------
-        duration
-            Duration in seconds.
+    # --------------------------------------------------------------------------
 
-        Returns
-        -------
-        float
-            Recorded duration.
-        """
-
-        with self.lock:
-
-            self._ensure_mutable()
-
-            self.validate_duration(duration)
-
-            self._previous_value = self._value
-
-            self._value = float(duration)
-
-            self._last_duration = float(duration)
-
-            self._count += 1
-
-            self._total += duration
-
-            if (
-
-                self._min is None
-
-                or duration < self._min
-
-            ):
-
-                self._min = duration
-
-            if (
-
-                self._max is None
-
-                or duration > self._max
-
-            ):
-
-                self._max = duration
-
-            self._update_count += 1
-
-            self._revision += 1
-
-            self._dirty = True
-
-            self._touch()
-
-            return duration
-
-
-    def record(
+    def add_value(
         self,
-        duration: float,
-    ) -> float:
-        """
-        Alias of observe().
-        """
+        amount: NumericValue = 1,
+    ) -> "Timer":
+        self._validate_numeric(amount, "amount")
+        self._value += amount
+        return self
 
-        return self.observe(duration)
+    # --------------------------------------------------------------------------
 
-
-    def update(
+    def subtract_value(
         self,
-        duration: float,
-    ) -> float:
-        """
-        Alias of observe().
-        """
+        amount: NumericValue = 1,
+    ) -> "Timer":
+        self._validate_numeric(amount, "amount")
+        self._value -= amount
+        return self
 
-        return self.observe(duration)
+    # --------------------------------------------------------------------------
 
-
-    def elapsed(
+    def increment(
         self,
-    ) -> float:
-        """
-        Return current elapsed time.
+        amount: NumericValue = 1,
+    ) -> "Timer":
+        return self.add_value(amount)
 
-        Returns
-        -------
-        float
-        """
+    # --------------------------------------------------------------------------
 
-        if not self._running:
+    def decrement(
+        self,
+        amount: NumericValue = 1,
+    ) -> "Timer":
+        return self.subtract_value(amount)
 
-            return self._last_duration
+    # --------------------------------------------------------------------------
 
+    def reset(self) -> "Timer":
+        self._value = DEFAULT_VALUE
+
+        self._elapsed = 0.0
+        self._start_time = None
+        self._pause_time = None
+        self._paused_elapsed = 0.0
+
+        self._apply_state_reset()
+
+        return self
+
+    # ==========================================================================
+    # Metadata operations
+    # ==========================================================================
+
+    def set_metadata(
+        self,
+        key: str,
+        value: Any,
+    ) -> "Timer":
+        if not isinstance(key, str):
+            raise TypeError(
+                "metadata key must be str."
+            )
+
+        self._metadata[key] = value
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def get_metadata(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._metadata.get(
+            key,
+            default,
+        )
+
+    # --------------------------------------------------------------------------
+
+    def remove_metadata(
+        self,
+        key: str,
+    ) -> "Timer":
+        self._metadata.pop(
+            key,
+            None,
+        )
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def clear_metadata(self) -> "Timer":
+        self._metadata.clear()
+        return self
+
+    # ==========================================================================
+    # Annotation operations
+    # ==========================================================================
+
+    def set_annotation(
+        self,
+        key: str,
+        value: Any,
+    ) -> "Timer":
+        if not isinstance(key, str):
+            raise TypeError(
+                "annotation key must be str."
+            )
+
+        self._annotations[key] = value
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def get_annotation(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._annotations.get(
+            key,
+            default,
+        )
+
+    # --------------------------------------------------------------------------
+
+    def remove_annotation(
+        self,
+        key: str,
+    ) -> "Timer":
+        self._annotations.pop(
+            key,
+            None,
+        )
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def clear_annotations(self) -> "Timer":
+        self._annotations.clear()
+        return self
+
+    # ==========================================================================
+    # Tag operations
+    # ==========================================================================
+
+    def set_tag(
+        self,
+        key: str,
+        value: Any,
+    ) -> "Timer":
+        if not isinstance(key, str):
+            raise TypeError(
+                "tag key must be str."
+            )
+
+        self._tags[key] = value
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def get_tag(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._tags.get(
+            key,
+            default,
+        )
+
+    # --------------------------------------------------------------------------
+
+    def remove_tag(
+        self,
+        key: str,
+    ) -> "Timer":
+        self._tags.pop(
+            key,
+            None,
+        )
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def clear_tags(self) -> "Timer":
+        self._tags.clear()
+        return self
+
+    # ==========================================================================
+    # Timer operations
+    # ==========================================================================
+
+    def start(self) -> "Timer":
+        if self.is_running():
+            return self
+
+        if self.is_paused():
+            return self
+
+        self._start_time = self._now()
+        self._pause_time = None
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def stop(self) -> "Timer":
+        if self._start_time is None:
+            return self
+
+        now = self._now()
+
+        if self.is_paused():
+            self._elapsed += (
+                self._pause_time
+                - self._start_time
+            )
+        else:
+            self._elapsed += (
+                now
+                - self._start_time
+            )
+
+        self._start_time = None
+        self._pause_time = None
+        self._paused_elapsed = 0.0
+
+        self._value = self._elapsed
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def pause(self) -> "Timer":
+        if self._start_time is None:
+            return self
+
+        if self.is_paused():
+            return self
+
+        self._pause_time = self._now()
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def resume(self) -> "Timer":
+        if self._start_time is None:
+            return self
+
+        if not self.is_paused():
+            return self
+
+        now = self._now()
+
+        self._paused_elapsed = (
+            self._pause_time
+            - self._start_time
+        )
+
+        self._elapsed += self._paused_elapsed
+
+        self._start_time = now
+        self._pause_time = None
+        self._paused_elapsed = 0.0
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def elapsed(self) -> float:
+        if self._start_time is None:
+            return float(self._elapsed)
+
+        if self.is_paused():
+            return float(
+                self._elapsed
+                + (
+                    self._pause_time
+                    - self._start_time
+                )
+            )
+
+        return float(
+            self._elapsed
+            + (
+                self._now()
+                - self._start_time
+            )
+        )
+
+    # --------------------------------------------------------------------------
+
+    def duration(self) -> float:
+        return self.elapsed()
+
+    # --------------------------------------------------------------------------
+
+    def is_running(self) -> bool:
         return (
-
-            self._clock()
-
-            - self._started_at
-
+            self._start_time is not None
+            and self._pause_time is None
         )
 
-
-    def reset(
-        self,
-    ) -> None:
-        """
-        Reset the timer.
-
-        Clears all observations and statistics.
-        """
-
-        with self.lock:
-
-            self._ensure_mutable()
-
-            self._running = False
-
-            self._started_at = None
-
-            self._last_duration = 0.0
-
-            self._value = 0.0
-
-            self._previous_value = 0.0
-
-            self._count = 0
-
-            self._total = 0.0
-
-            self._min = None
-
-            self._max = None
-
-            self._update_count = 0
-
-            self._revision += 1
-
-            self._dirty = True
-
-            self._touch()
-# ======================================================
-# Part 3. Properties
-# ======================================================
-
-    @property
-    def value(
-        self,
-    ) -> float:
-        """
-        Last recorded duration.
-
-        Returns
-        -------
-        float
-        """
-
-        return float(self._value)
-
-
-    @property
-    def count(
-        self,
-    ) -> int:
-        """
-        Number of recorded durations.
-
-        Returns
-        -------
-        int
-        """
-
-        return self._count
-
-
-    @property
-    def total(
-        self,
-    ) -> float:
-        """
-        Total accumulated duration.
-
-        Returns
-        -------
-        float
-        """
-
-        return self._total
-
-
-    @property
-    def min(
-        self,
-    ) -> float | None:
-        """
-        Minimum recorded duration.
-
-        Returns
-        -------
-        float | None
-        """
-
-        return self._min
-
-
-    @property
-    def max(
-        self,
-    ) -> float | None:
-        """
-        Maximum recorded duration.
-
-        Returns
-        -------
-        float | None
-        """
-
-        return self._max
-
-
-    @property
-    def mean(
-        self,
-    ) -> float:
-        """
-        Mean duration.
-
-        Returns
-        -------
-        float
-        """
-
-        if self._count == 0:
-
-            return 0.0
-
-        return self._total / self._count
-
-
-    @property
-    def running(
-        self,
-    ) -> bool:
-        """
-        Whether the timer is currently running.
-
-        Returns
-        -------
-        bool
-        """
-
-        return self._running
-
-
-    @property
-    def started_at(
-        self,
-    ) -> float | None:
-        """
-        Internal high-resolution start timestamp.
-
-        Returns
-        -------
-        float | None
-        """
-
-        return self._started_at
-
-
-    @property
-    def created_at(
-        self,
-    ):
-        """
-        Metric creation timestamp.
-        """
-
-        return self._created_at
-
-
-    @property
-    def updated_at(
-        self,
-    ):
-        """
-        Last update timestamp.
-        """
-
-        return self._updated_at
-
-
-    @property
-    def revision(
-        self,
-    ) -> int:
-        """
-        Runtime revision number.
-
-        Returns
-        -------
-        int
-        """
-
-        return self._revision
-
-
-    @property
-    def dirty(
-        self,
-    ) -> bool:
-        """
-        Dirty state.
-
-        Indicates whether runtime state has
-        changed since the previous checkpoint.
-
-        Returns
-        -------
-        bool
-        """
-
-        return self._dirty
-# ======================================================
-# Part 4. Snapshot
-# ======================================================
-
-    def snapshot(
-        self,
-    ) -> MetricSnapshot:
-        """
-        Create an immutable snapshot of the timer.
-
-        Returns
-        -------
-        MetricSnapshot
-        """
-
-        return MetricSnapshot.create(
-
-            name=self.name,
-
-            value={
-
-                "last": self._value,
-
-                "count": self._count,
-
-                "total": self._total,
-
-                "min": self._min,
-
-                "max": self._max,
-
-                "mean": self.mean,
-
-                "running": self._running,
-
-            },
-
-            metric_type="timer",
-
-            labels=self.labels.to_dict(),
-
-            attributes=self.attributes.to_dict(),
-
-            metadata=self.metadata.to_dict(),
-
+    # --------------------------------------------------------------------------
+
+    def is_paused(self) -> bool:
+        return (
+            self._start_time is not None
+            and self._pause_time is not None
         )
 
+    # --------------------------------------------------------------------------
+
+    def clear(self) -> "Timer":
+        self._elapsed = 0.0
+        self._start_time = None
+        self._pause_time = None
+        self._paused_elapsed = 0.0
+        self._value = DEFAULT_VALUE
+
+        return self
+
+    # ==========================================================================
+    # Lifecycle operations
+    # ==========================================================================
+
+    def enable(self) -> "Timer":
+        if (
+            self._state is not None
+            and hasattr(self._state, "enable")
+        ):
+            self._state.enable()
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def disable(self) -> "Timer":
+        if (
+            self._state is not None
+            and hasattr(self._state, "disable")
+        ):
+            self._state.disable()
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def activate(self) -> "Timer":
+        if (
+            self._state is not None
+            and hasattr(self._state, "activate")
+        ):
+            self._state.activate()
+
+        return self
+
+    # --------------------------------------------------------------------------
+
+    def deactivate(self) -> "Timer":
+        if (
+            self._state is not None
+            and hasattr(self._state, "deactivate")
+        ):
+            self._state.deactivate()
+
+        return self
+
+    # ==========================================================================
+    # Snapshot
+    # ==========================================================================
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "value": self._value,
+            "name": self._name,
+            "description": self._description,
+            "unit": self._unit,
+            "metadata": copy.deepcopy(
+                self._metadata
+            ),
+            "annotations": copy.deepcopy(
+                self._annotations
+            ),
+            "tags": copy.deepcopy(
+                self._tags
+            ),
+            "state": copy.deepcopy(
+                self._state
+            ),
+            "elapsed": self._elapsed,
+            "start_time": self._start_time,
+            "pause_time": self._pause_time,
+            "paused_elapsed": self._paused_elapsed,
+        }
+
+    # ==========================================================================
+    # Restore
+    # ==========================================================================
 
     def restore(
         self,
-        snapshot: MetricSnapshot,
-    ) -> None:
-        """
-        Restore timer state from a snapshot.
-
-        Parameters
-        ----------
-        snapshot
-            Snapshot to restore from.
-        """
-
-        self._ensure_mutable()
-
-        if snapshot.metric_type != "timer":
-
+        snapshot: dict[str, Any],
+    ) -> "Timer":
+        if not isinstance(snapshot, dict):
             raise TypeError(
-                "Snapshot is not a Timer snapshot."
+                "snapshot must be dict."
             )
 
-        value = snapshot.value
+        # ------------------------------------------------------------------
+        # Every field is restored from the snapshot.
+        #
+        # Missing optional fields intentionally reset to their defaults.
+        # This is important for:
+        #
+        #     timer.restore({"value": 10})
+        #
+        # which must not retain previous name/description/unit/metadata/etc.
+        # ------------------------------------------------------------------
 
-        self._previous_value = self._value
-
-        self._value = float(
-            value.get("last", 0.0)
+        self._value = snapshot.get(
+            "value",
+            DEFAULT_VALUE,
         )
 
-        self._count = int(
-            value.get("count", 0)
+        self._name = snapshot.get(
+            "name",
+            DEFAULT_NAME,
         )
 
-        self._total = float(
-            value.get("total", 0.0)
+        self._description = snapshot.get(
+            "description",
+            DEFAULT_DESCRIPTION,
         )
 
-        self._min = value.get("min")
-
-        self._max = value.get("max")
-
-        self._running = bool(
-            value.get("running", False)
+        self._unit = snapshot.get(
+            "unit",
+            DEFAULT_UNIT,
         )
 
-        self._started_at = None
-
-        self._revision += 1
-
-        self._dirty = True
-
-        self._touch()
-
-
-    def clone(
-        self,
-    ) -> "Timer":
-        """
-        Clone the timer.
-
-        Returns
-        -------
-        Timer
-        """
-
-        cloned = self.__class__(
-
-            descriptor=self.descriptor,
-
-            metadata=self.metadata.copy(),
-
-            labels=self.labels.copy(),
-
-            attributes=self.attributes.copy(),
-
+        self._metadata = copy.deepcopy(
+            snapshot.get(
+                "metadata",
+                DEFAULT_METADATA,
+            )
         )
 
-        cloned.restore(
+        self._annotations = copy.deepcopy(
+            snapshot.get(
+                "annotations",
+                DEFAULT_ANNOTATIONS,
+            )
+        )
+
+        self._tags = copy.deepcopy(
+            snapshot.get(
+                "tags",
+                DEFAULT_TAGS,
+            )
+        )
+
+        # Missing state is explicitly None.
+        #
+        # Do NOT deepcopy here: restore preserves the exact state
+        # object supplied by the snapshot.
+        self._state = snapshot.get(
+            "state",
+            None,
+        )
+
+        self._elapsed = snapshot.get(
+            "elapsed",
+            0.0,
+        )
+
+        self._start_time = snapshot.get(
+            "start_time",
+            None,
+        )
+
+        self._pause_time = snapshot.get(
+            "pause_time",
+            None,
+        )
+
+        self._paused_elapsed = snapshot.get(
+            "paused_elapsed",
+            0.0,
+        )
+
+        self.validate()
+
+        return self
+
+    # ==========================================================================
+    # Copy / Clone
+    # ==========================================================================
+
+    def copy(self) -> "Timer":
+        return copy.deepcopy(self)
+
+    # --------------------------------------------------------------------------
+
+    def clone(self) -> "Timer":
+        return copy.deepcopy(self)
+
+    # ==========================================================================
+    # Serialization
+    # ==========================================================================
+
+    def to_dict(self) -> dict[str, Any]:
+        return copy.deepcopy(
             self.snapshot()
         )
 
-        return cloned
+    # --------------------------------------------------------------------------
 
+    def to_json(self) -> str:
+        return json.dumps(
+            self.to_dict(),
+            sort_keys=True,
+            default=str,
+        )
 
-    def copy(
+    # ==========================================================================
+    # Comparison / Representation
+    # ==========================================================================
+
+    def __eq__(
         self,
-    ) -> "Timer":
-        """
-        Alias of clone().
+        other: object,
+    ) -> bool:
+        if not isinstance(other, Timer):
+            return NotImplemented
 
-        Returns
-        -------
-        Timer
-        """
+        return (
+            self.to_dict()
+            == other.to_dict()
+        )
 
-        return self.clone()
-# ======================================================
-# Part 5. Lifecycle
-# ======================================================
+    # --------------------------------------------------------------------------
 
-    def freeze(
-        self,
-    ) -> None:
-        """
-        Freeze the timer.
-
-        Frozen timers cannot be modified.
-        """
-
-        if self._closed:
-
-            raise RuntimeError(
-                "Cannot freeze a closed Timer."
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self._value,
+                self._name,
+                self._description,
+                self._unit,
+                json.dumps(
+                    self._metadata,
+                    sort_keys=True,
+                    default=str,
+                ),
+                json.dumps(
+                    self._annotations,
+                    sort_keys=True,
+                    default=str,
+                ),
+                json.dumps(
+                    self._tags,
+                    sort_keys=True,
+                    default=str,
+                ),
+                json.dumps(
+                    self._state,
+                    sort_keys=True,
+                    default=str,
+                ),
             )
+        )
 
-        self._frozen = True
+    # --------------------------------------------------------------------------
 
-        self._touch()
+    def __repr__(self) -> str:
+        return (
+            "Timer("
+            f"value={self._value!r}, "
+            f"name={self._name!r}, "
+            f"description={self._description!r}, "
+            f"unit={self._unit!r}"
+            ")"
+        )
 
+    # --------------------------------------------------------------------------
 
-    def unfreeze(
+    def __str__(self) -> str:
+        return str(self._value)
+
+    # ==========================================================================
+    # Internal helpers
+    # ==========================================================================
+
+    def _apply_state_reset(self) -> None:
+        if (
+            self._state is not None
+            and hasattr(self._state, "reset")
+        ):
+            self._state.reset()
+
+    # --------------------------------------------------------------------------
+
+    def _validate_numeric(
         self,
+        value: NumericValue,
+        field: str,
     ) -> None:
-        """
-        Unfreeze the timer.
-        """
-
-        if self._closed:
-
-            raise RuntimeError(
-                "Cannot unfreeze a closed Timer."
+        if isinstance(value, bool):
+            raise TimerValidationError(
+                f"{field} must be int or float."
             )
-
-        self._frozen = False
-
-        self._touch()
-
-
-    def enable(
-        self,
-    ) -> None:
-        """
-        Enable the timer.
-        """
-
-        if self._closed:
-
-            raise RuntimeError(
-                "Cannot enable a closed Timer."
-            )
-
-        self._enabled = True
-
-        self._touch()
-
-
-    def disable(
-        self,
-    ) -> None:
-        """
-        Disable the timer.
-
-        A disabled timer ignores updates.
-        """
-
-        if self._closed:
-
-            raise RuntimeError(
-                "Cannot disable a closed Timer."
-            )
-
-        self._enabled = False
-
-        self._touch()
-
-
-    def close(
-        self,
-    ) -> None:
-        """
-        Permanently close the timer.
-
-        Running timers are stopped.
-        """
-
-        if self._running:
-
-            self._running = False
-
-            self._started_at = None
-
-        self._closed = True
-
-        self._enabled = False
-
-        self._touch()
-
-
-    def reopen(
-        self,
-    ) -> None:
-        """
-        Reopen a previously closed timer.
-        """
-
-        self._closed = False
-
-        self._enabled = True
-
-        self._running = False
-
-        self._started_at = None
-
-        self._touch()
-# ======================================================
-# Part 6. Validation
-# ======================================================
-
-    def validate(
-        self,
-    ) -> None:
-        """
-        Validate the complete Timer state.
-
-        Raises
-        ------
-        ValueError
-            If the runtime state is invalid.
-        """
-
-        self.validate_state()
-
-        self.validate_numeric(self._value)
-
-        self.validate_numeric(self._total)
-
-        if self._min is not None:
-
-            self.validate_duration(self._min)
-
-        if self._max is not None:
-
-            self.validate_duration(self._max)
-
-
-    def validate_duration(
-        self,
-        duration: float,
-    ) -> None:
-        """
-        Validate a duration.
-
-        Parameters
-        ----------
-        duration
-            Duration in seconds.
-
-        Raises
-        ------
-        ValueError
-            If duration is negative.
-        """
-
-        self.validate_numeric(duration)
-
-        if duration < 0.0:
-
-            raise ValueError(
-                "Duration must be >= 0."
-            )
-
-
-    def validate_numeric(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Validate a numeric value.
-
-        Parameters
-        ----------
-        value
-            Numeric value.
-
-        Raises
-        ------
-        TypeError
-            If value is not numeric.
-
-        ValueError
-            If value is NaN or infinite.
-        """
 
         if not isinstance(
             value,
             (int, float),
         ):
+            raise TimerValidationError(
+                f"{field} must be int or float."
+            )
 
+    # --------------------------------------------------------------------------
+
+    def _now(self) -> float:
+        return time.perf_counter()
+
+    # ==========================================================================
+    # Validation
+    # ==========================================================================
+
+    def validate(self) -> bool:
+        if (
+            self._name is not None
+            and not isinstance(
+                self._name,
+                str,
+            )
+        ):
             raise TypeError(
-                "Value must be numeric."
+                "name must be str or None."
             )
 
-        value = float(value)
+        self._validate_numeric(
+            self._value,
+            "value",
+        )
 
-        if value != value:
-
-            raise ValueError(
-                "NaN is not allowed."
+        if (
+            self._description is not None
+            and not isinstance(
+                self._description,
+                str,
             )
-
-        if value in (
-
-            float("inf"),
-
-            float("-inf"),
-
         ):
-
-            raise ValueError(
-                "Infinite values are not allowed."
-            )
-
-
-    def validate_state(
-        self,
-    ) -> None:
-        """
-        Validate internal Timer runtime state.
-
-        Raises
-        ------
-        RuntimeError
-            If the Timer state is inconsistent.
-        """
-
-        if self._count < 0:
-
-            raise RuntimeError(
-                "Negative observation count."
-            )
-
-        if self._total < 0.0:
-
-            raise RuntimeError(
-                "Negative accumulated duration."
+            raise TypeError(
+                "description must be str or None."
             )
 
         if (
-
-            self._min is not None
-
-            and self._max is not None
-
-            and self._min > self._max
-
+            self._unit is not None
+            and not isinstance(
+                self._unit,
+                str,
+            )
         ):
-
-            raise RuntimeError(
-                "Minimum duration exceeds maximum duration."
+            raise TypeError(
+                "unit must be str or None."
             )
 
-        if self._running and self._started_at is None:
-
-            raise RuntimeError(
-                "Running timer has no start time."
+        if not isinstance(
+            self._metadata,
+            dict,
+        ):
+            raise TypeError(
+                "metadata must be dict."
             )
+
+        if not isinstance(
+            self._annotations,
+            dict,
+        ):
+            raise TypeError(
+                "annotations must be dict."
+            )
+
+        if not isinstance(
+            self._tags,
+            dict,
+        ):
+            raise TypeError(
+                "tags must be dict."
+            )
+
+        # ------------------------------------------------------------------
+        # None is part of the Timer validation contract.
+        # ------------------------------------------------------------------
 
         if (
-
-            not self._running
-
-            and self._started_at is not None
-
-        ):
-
-            raise RuntimeError(
-                "Stopped timer still has a start time."
+            self._state is not None
+            and not isinstance(
+                self._state,
+                MetricState,
             )
-# ======================================================
-# Part 7. Diagnostics
-# ======================================================
-
-    def statistics(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime statistics.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "name": self.name,
-
-            "metric_type": "timer",
-
-            "value": self._value,
-
-            "count": self._count,
-
-            "total": self._total,
-
-            "min": self._min,
-
-            "max": self._max,
-
-            "mean": self.mean,
-
-            "running": self._running,
-
-            "revision": self._revision,
-
-            "dirty": self._dirty,
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "created_at": self._created_at,
-
-            "updated_at": self._updated_at,
-
-        }
-
-
-    def health(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime health information.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        try:
-
-            self.validate()
-
-            status = "healthy"
-
-            valid = True
-
-        except Exception as exc:
-
-            status = "unhealthy"
-
-            valid = False
-
-            error = str(exc)
-
-        result = {
-
-            "status": status,
-
-            "valid": valid,
-
-            "running": self._running,
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "dirty": self._dirty,
-
-            "revision": self._revision,
-
-        }
-
-        if not valid:
-
-            result["error"] = error
-
-        return result
-
-
-    def dump(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Dump the complete runtime state.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "statistics": self.statistics(),
-
-            "labels": self.labels.to_dict(),
-
-            "attributes": self.attributes.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-            "snapshot": self.snapshot().to_dict(),
-
-        }
-
-
-    def inspect(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return a production inspection report.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "type": self.__class__.__name__,
-
-            "descriptor": self.descriptor.name,
-
-            "state": {
-
-                "running": self._running,
-
-                "enabled": self._enabled,
-
-                "frozen": self._frozen,
-
-                "closed": self._closed,
-
-                "dirty": self._dirty,
-
-            },
-
-            "statistics": self.statistics(),
-
-            "health": self.health(),
-
-            "snapshot_version": self.snapshot().version,
-
-        }
-# ======================================================
-# Part 8. Serialization
-# ======================================================
-
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Serialize the timer to a dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "name": self.name,
-
-            "metric_type": "timer",
-
-            "value": self._value,
-
-            "count": self._count,
-
-            "total": self._total,
-
-            "min": self._min,
-
-            "max": self._max,
-
-            "mean": self.mean,
-
-            "running": self._running,
-
-            "started_at": self._started_at,
-
-            "created_at": self._created_at,
-
-            "updated_at": self._updated_at,
-
-            "revision": self._revision,
-
-            "dirty": self._dirty,
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "labels": self.labels.to_dict(),
-
-            "attributes": self.attributes.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-        }
-
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: dict[str, Any],
-    ) -> "Timer":
-        """
-        Construct a Timer from a serialized dictionary.
-
-        Parameters
-        ----------
-        data
-            Serialized timer.
-
-        Returns
-        -------
-        Timer
-        """
-
-        timer = cls(
-
-            descriptor=MetricDescriptor(
-
-                name=data["name"],
-
-                metric_type="timer",
-
-            ),
-
-            metadata=MetricMetadata.from_dict(
-
-                data.get("metadata", {})
-
-            ),
-
-            labels=MetricLabels.from_dict(
-
-                data.get("labels", {})
-
-            ),
-
-            attributes=MetricAttributes.from_dict(
-
-                data.get("attributes", {})
-
-            ),
-
+        ):
+            raise TypeError(
+                "state must be MetricState or None."
+            )
+
+        self._validate_numeric(
+            self._elapsed,
+            "elapsed",
         )
 
-        timer._value = float(
-            data.get("value", 0.0)
+        self._validate_numeric(
+            self._paused_elapsed,
+            "paused_elapsed",
         )
 
-        timer._previous_value = timer._value
-
-        timer._count = int(
-            data.get("count", 0)
-        )
-
-        timer._total = float(
-            data.get("total", 0.0)
-        )
-
-        timer._min = data.get("min")
-
-        timer._max = data.get("max")
-
-        timer._running = bool(
-            data.get("running", False)
-        )
-
-        timer._started_at = data.get(
-            "started_at"
-        )
-
-        timer._revision = int(
-            data.get("revision", 0)
-        )
-
-        timer._dirty = bool(
-            data.get("dirty", False)
-        )
-
-        timer._enabled = bool(
-            data.get("enabled", True)
-        )
-
-        timer._frozen = bool(
-            data.get("frozen", False)
-        )
-
-        timer._closed = bool(
-            data.get("closed", False)
-        )
-
-        return timer
-
-
-    def to_json(
-        self,
-        *,
-        indent: int | None = 2,
-    ) -> str:
-        """
-        Serialize the timer to JSON.
-
-        Parameters
-        ----------
-        indent
-            JSON indentation.
-
-        Returns
-        -------
-        str
-        """
-
-        import json
-
-        return json.dumps(
-
-            self.to_dict(),
-
-            indent=indent,
-
-            default=str,
-
-            ensure_ascii=False,
-
-        )
-
-
-    @classmethod
-    def from_json(
-        cls,
-        payload: str,
-    ) -> "Timer":
-        """
-        Construct a Timer from JSON.
-
-        Parameters
-        ----------
-        payload
-            JSON string.
-
-        Returns
-        -------
-        Timer
-        """
-
-        import json
-
-        return cls.from_dict(
-
-            json.loads(payload)
-
-        )
-# ======================================================
-# Part 9. Export
-# ======================================================
-
-    def prometheus(
-        self,
-    ) -> str:
-        """
-        Export the Timer in Prometheus exposition format.
-
-        Timer is exported as a Summary-compatible metric:
-
-            <name>_count
-            <name>_sum
-
-        Returns
-        -------
-        str
-        """
-
-        labels = ""
-
-        if len(self.labels):
-
-            labels = "{" + ",".join(
-
-                f'{k}="{v}"'
-
-                for k, v in sorted(
-                    self.labels.items()
-                )
-
-            ) + "}"
-
-        return "\n".join(
-
-            [
-
-                f"{self.name}_count{labels} {self._count}",
-
-                f"{self.name}_sum{labels} {self._total}",
-
-            ]
-
-        )
-
-
-    def otel(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Export the Timer in an OpenTelemetry-friendly format.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "name": self.name,
-
-            "type": "timer",
-
-            "value": self._value,
-
-            "count": self._count,
-
-            "sum": self._total,
-
-            "min": self._min,
-
-            "max": self._max,
-
-            "mean": self.mean,
-
-            "running": self._running,
-
-            "attributes": self.attributes.to_dict(),
-
-            "labels": self.labels.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-            "timestamp": self.updated_at.isoformat(),
-
-        }
-
-
-    def csv(
-        self,
-    ) -> str:
-        """
-        Export the Timer as a CSV row.
-
-        Returns
-        -------
-        str
-        """
-
-        return ",".join(
-
-            [
-
-                self.name,
-
-                "timer",
-
-                str(self._value),
-
-                str(self._count),
-
-                str(self._total),
-
-                str(self._min),
-
-                str(self._max),
-
-                str(self.mean),
-
-                str(self._running),
-
-                self.updated_at.isoformat(),
-
-            ]
-
-        )
-# ======================================================
-# Part 10. Final Polish
-# ======================================================
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-
-        Returns
-        -------
-        str
-        """
-
-        return (
-
-            f"{self.__class__.__name__}("
-
-            f"name={self.name!r}, "
-
-            f"value={self._value:.6f}, "
-
-            f"count={self._count}, "
-
-            f"total={self._total:.6f}, "
-
-            f"running={self._running}, "
-
-            f"revision={self._revision})"
-
-        )
-
-
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human-readable representation.
-
-        Returns
-        -------
-        str
-        """
-
-        return (
-
-            f"{self.name}"
-
-            f"(last={self._value:.6f}s, "
-
-            f"count={self._count}, "
-
-            f"mean={self.mean:.6f}s)"
-
-        )
-
-
-    def __float__(
-        self,
-    ) -> float:
-        """
-        Convert the Timer to float.
-
-        Returns
-        -------
-        float
-            Last recorded duration.
-        """
-
-        return float(self._value)
-
-
-    def __bool__(
-        self,
-    ) -> bool:
-        """
-        Truthiness.
-
-        Returns
-        -------
-        bool
-            True if at least one observation has
-            been recorded.
-        """
-
-        return self._count > 0
-
-
-    # ==================================================
-    # Compatibility
-    # ==================================================
-
-    @property
-    def last(
-        self,
-    ) -> float:
-        """
-        Compatibility alias for value.
-
-        Returns
-        -------
-        float
-        """
-
-        return self._value
-
-
-    @property
-    def average(
-        self,
-    ) -> float:
-        """
-        Compatibility alias for mean.
-
-        Returns
-        -------
-        float
-        """
-
-        return self.mean
-
-
-    @property
-    def duration(
-        self,
-    ) -> float:
-        """
-        Compatibility alias for the last duration.
-
-        Returns
-        -------
-        float
-        """
-
-        return self._value
-
-
-    def export(
-        self,
-        format: str = "dict",
-    ) -> Any:
-        """
-        Generic export interface.
-
-        Parameters
-        ----------
-        format
-            Supported formats:
-
-            - dict
-            - json
-            - prometheus
-            - otel
-            - csv
-
-        Returns
-        -------
-        Any
-        """
-
-        format = format.lower()
-
-        exporters = {
-
-            "dict": self.to_dict,
-
-            "json": self.to_json,
-
-            "prometheus": self.prometheus,
-
-            "otel": self.otel,
-
-            "csv": self.csv,
-
-        }
-
-        try:
-
-            return exporters[format]()
-
-        except KeyError:
-
-            raise ValueError(
-
-                f"Unsupported export format: {format}"
-
-            ) from None                                                                                    
+        if self._start_time is not None:
+            self._validate_numeric(
+                self._start_time,
+                "start_time",
+            )
+
+        if self._pause_time is not None:
+            self._validate_numeric(
+                self._pause_time,
+                "pause_time",
+            )
+
+        return True
+
+
+# ==============================================================================
+# Part N. Public API
+# ==============================================================================
+
+__all__ = [
+    "DEFAULT_VALUE",
+    "DEFAULT_NAME",
+    "DEFAULT_DESCRIPTION",
+    "DEFAULT_UNIT",
+    "DEFAULT_METADATA",
+    "DEFAULT_ANNOTATIONS",
+    "DEFAULT_TAGS",
+    "NumericValue",
+    "Metadata",
+    "Annotation",
+    "Tag",
+    "TimerValidationError",
+    "Timer",
+]

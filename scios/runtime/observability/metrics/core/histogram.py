@@ -1,1509 +1,927 @@
 """
-SciOS Observability
-===================
+SciOS Runtime Histogram
+=======================
 
-Histogram Metric
+A Histogram represents a metric that records observations and aggregates
+them into configurable value buckets.
 
-Part 1
-------
-
-Foundation
-
-Responsibilities
-----------------
-
-- Histogram metric implementation
-- Bucket management
-- Runtime validation
-- Default initialization
-
-Histogram stores observations inside configurable buckets.
-
-Aggregation/export logic is implemented by the Metric base class.
+Python 3.11+
 """
 
 from __future__ import annotations
 
-from bisect import bisect_right
+# ==============================================================================
+
+# Part 1. Imports
+
+# ==============================================================================
+
+from typing import Any, Final, TypeAlias
+
+from copy import deepcopy
+import json
 from typing import Any
-from typing import Iterable
 
-from .metric import Metric
-from .descriptor import MetricDescriptor
-from .metadata import MetricMetadata
-from .labels import MetricLabels
-from .attributes import MetricAttributes
+from .metric_state import MetricState
 
-__all__ = [
-    "Histogram",
-]
+# ==============================================================================
 
+# Part 2. Constants
 
-# ==========================================================
-# Histogram
-# ==========================================================
+# ==============================================================================
 
+DEFAULT_VALUE: Final[float] = 0.0
 
-class Histogram(Metric):
+DEFAULT_NAME: Final[str | None] = None
+
+DEFAULT_DESCRIPTION: Final[str | None] = None
+
+DEFAULT_UNIT: Final[str | None] = None
+
+DEFAULT_BUCKETS: Final[tuple[float, ...]] = ()
+
+DEFAULT_METADATA: Final[dict[str, Any]] = {}
+
+DEFAULT_ANNOTATIONS: Final[dict[str, Any]] = {}
+
+DEFAULT_TAGS: Final[dict[str, Any]] = {}
+
+# ==============================================================================
+
+# Part 3. Type Aliases
+
+# ==============================================================================
+
+NumericValue: TypeAlias = int | float
+
+BucketValue: TypeAlias = int | float
+
+BucketCollection: TypeAlias = tuple[BucketValue, ...]
+
+Metadata: TypeAlias = dict[str, Any]
+
+Annotation: TypeAlias = dict[str, Any]
+
+Tag: TypeAlias = dict[str, Any]
+
+# ==============================================================================
+
+# Part 4. Exceptions
+
+# ==============================================================================
+
+class HistogramValidationError(ValueError):
     """
-    Histogram metric.
-
-    A Histogram records observations into ordered buckets.
-
-    Example
-    -------
-    buckets = (
-        0.1,
-        0.5,
-        1.0,
-        2.5,
-        5.0,
-        10.0,
-    )
+    Raised when a Histogram contains invalid configuration or state.
     """
 
-    DEFAULT_BUCKETS = (
-        0.005,
-        0.01,
-        0.025,
-        0.05,
-        0.10,
-        0.25,
-        0.50,
-        1.0,
-        2.5,
-        5.0,
-        10.0,
-        float("inf"),
-    )
+    pass
 
-    # ======================================================
+# ==============================================================================
+# Part 5. Histogram class
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Internal sentinel
+# ------------------------------------------------------------------------------
+
+_DEFAULT_STATE = object()
+
+
+class Histogram:
+    """
+    SciOS Runtime Histogram.
+
+    A Histogram records numeric observations and provides aggregate
+    statistics over those observations.
+    """
+
+    # ==========================================================================
     # Constructor
-    # ======================================================
+    # ==========================================================================
 
     def __init__(
         self,
+        value: NumericValue = DEFAULT_VALUE,
         *,
-        descriptor: MetricDescriptor,
-        metadata: MetricMetadata | None = None,
-        labels: MetricLabels | None = None,
-        attributes: MetricAttributes | None = None,
-        buckets: Iterable[float] | None = None,
+        name: str | None = DEFAULT_NAME,
+        description: str | None = DEFAULT_DESCRIPTION,
+        unit: str | None = DEFAULT_UNIT,
+        buckets: BucketCollection = DEFAULT_BUCKETS,
+        metadata: Metadata | None = None,
+        annotations: Annotation | None = None,
+        tags: Tag | None = None,
+        state: MetricState | None | object = _DEFAULT_STATE,
     ) -> None:
-        """
-        Initialize Histogram.
+        self._name = name
+        self._value = value
+        self._description = description
+        self._unit = unit
 
-        Parameters
-        ----------
-        descriptor
-            Metric descriptor.
+        # Do not validate ordering/duplicates during construction.
+        # The validation contract is exposed through validate().
+        self._buckets = tuple(buckets)
 
-        metadata
-            Metric metadata.
-
-        labels
-            Metric labels.
-
-        attributes
-            Runtime attributes.
-
-        buckets
-            Ordered histogram bucket boundaries.
-        """
-
-        super().__init__(
-            descriptor=descriptor,
-            metadata=metadata,
-            labels=labels,
-            attributes=attributes,
+        self._metadata = deepcopy(
+            DEFAULT_METADATA if metadata is None else metadata
         )
 
-        # --------------------------------------------------
-        # Buckets
-        # --------------------------------------------------
-
-        bucket_values = tuple(
-            buckets or self.DEFAULT_BUCKETS
+        self._annotations = deepcopy(
+            DEFAULT_ANNOTATIONS if annotations is None else annotations
         )
 
-        self._validate_buckets(
-            bucket_values
+        self._tags = deepcopy(
+            DEFAULT_TAGS if tags is None else tags
         )
 
-        self._buckets: tuple[float, ...] = (
-            bucket_values
+        # Distinguish omitted state from explicit state=None.
+        self._state = (
+            MetricState()
+            if state is _DEFAULT_STATE
+            else state
         )
 
-        self._bucket_counts: list[int] = [
-            0
-            for _ in self._buckets
-        ]
+        self._observations: list[float] = []
 
-        # --------------------------------------------------
-        # Runtime Statistics
-        # --------------------------------------------------
+        # Validate basic configuration while allowing the explicit
+        # None-state contract and deferred bucket validation.
+        self._validate_basic_configuration()
 
-        self._count: int = 0
-
-        self._sum: float = 0.0
-
-        self._min: float | None = None
-
-        self._max: float | None = None
-
-        # --------------------------------------------------
-        # Default Runtime Value
-        # --------------------------------------------------
-
-        self._value = self._default_value()
-
-        # --------------------------------------------------
-        # Runtime Validation
-        # --------------------------------------------------
-
-        self.validate()
-
-    # ======================================================
-    # Buckets
-    # ======================================================
+    # ==========================================================================
+    # Properties
+    # ==========================================================================
 
     @property
-    def buckets(
-        self,
-    ) -> tuple[float, ...]:
-        """
-        Histogram bucket boundaries.
-        """
+    def name(self) -> str | None:
+        return self._name
 
-        return self._buckets
+    @name.setter
+    def name(self, value: str | None) -> None:
+        if value is not None and not isinstance(value, str):
+            raise TypeError("name must be str or None.")
+        self._name = value
 
     @property
-    def bucket_counts(
-        self,
-    ) -> tuple[int, ...]:
-        """
-        Current bucket counts.
-        """
-
-        return tuple(
-            self._bucket_counts
-        )
-
-    # ======================================================
-    # Default Value
-    # ======================================================
-
-    def _default_value(
-        self,
-    ) -> list[int]:
-        """
-        Default histogram value.
-        """
-
-        return [
-            0
-            for _ in self._buckets
-        ]
-
-    # ======================================================
-    # Runtime Validation
-    # ======================================================
-
-    def validate(
-        self,
-    ) -> None:
-        """
-        Validate histogram runtime state.
-        """
-
-        self._validate_buckets(
-            self._buckets
-        )
-
-        if len(
-            self._bucket_counts
-        ) != len(
-            self._buckets
-        ):
-            raise ValueError(
-                "Bucket count mismatch."
-            )
-
-        if self._count < 0:
-            raise ValueError(
-                "Count cannot be negative."
-            )
-
-        if self._sum < 0:
-            raise ValueError(
-                "Sum cannot be negative."
-            )
-
-    def _validate_buckets(
-        self,
-        buckets: Iterable[float],
-    ) -> None:
-        """
-        Validate bucket configuration.
-        """
-
-        bucket_list = list(
-            buckets
-        )
-
-        if not bucket_list:
-            raise ValueError(
-                "Histogram requires at least one bucket."
-            )
-
-        previous = float("-inf")
-
-        for bucket in bucket_list:
-
-            if not isinstance(
-                bucket,
-                (int, float),
-            ):
-                raise TypeError(
-                    "Bucket values must be numeric."
-                )
-
-            if bucket <= previous:
-                raise ValueError(
-                    "Buckets must be strictly increasing."
-                )
-
-            previous = float(
-                bucket
-            )
-    # ======================================================
-    # Part 2. Histogram API
-    # ======================================================
-
-    def observe(
-        self,
-        value: float,
-    ) -> None:
-        """
-        Record a single observation.
-
-        Parameters
-        ----------
-        value
-            Numeric value to record.
-        """
-
-        self.validate_numeric(value)
-        self._ensure_mutable()
-
-        with self.lock:
-
-            self._access()
-
-            self._previous_value = self._value
-
-            index = bisect_right(
-                self._buckets,
-                float(value),
-            )
-
-            if index >= len(self._bucket_counts):
-                index = len(self._bucket_counts) - 1
-
-            self._bucket_counts[index] += 1
-
-            self._count += 1
-
-            self._sum += float(value)
-
-            if (
-                self._min is None
-                or value < self._min
-            ):
-                self._min = float(value)
-
-            if (
-                self._max is None
-                or value > self._max
-            ):
-                self._max = float(value)
-
-            self._value = tuple(
-                self._bucket_counts
-            )
-
-            self._update_count += 1
-
-            self._touch()
-
-
-    def record(
-        self,
-        value: float,
-    ) -> None:
-        """
-        Alias of observe().
-        """
-
-        self.observe(value)
-
-
-    def update(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Update histogram.
-
-        Accepts either
-
-        - scalar numeric value
-        - iterable of numeric values
-        """
-
-        if isinstance(
-            value,
-            (list, tuple, set),
-        ):
-
-            for item in value:
-                self.observe(item)
-
-            return
-
-        self.observe(value)
-
-
-    def count(
-        self,
-    ) -> int:
-        """
-        Total number of observations.
-        """
-
-        return self._count
-
-
-    def sum(
-        self,
-    ) -> float:
-        """
-        Sum of all observations.
-        """
-
-        return self._sum
-
-
-    def bucket_counts(
-        self,
-    ) -> tuple[int, ...]:
-        """
-        Return immutable bucket counts.
-        """
-
-        return tuple(
-            self._bucket_counts
-        )
-
-
-    def reset(
-        self,
-    ) -> None:
-        """
-        Reset histogram runtime state.
-        """
-
-        self._ensure_mutable()
-
-        with self.lock:
-
-            self._bucket_counts = [
-
-                0
-
-                for _ in self._buckets
-
-            ]
-
-            self._count = 0
-
-            self._sum = 0.0
-
-            self._min = None
-
-            self._max = None
-
-            self._previous_value = self._value
-
-            self._value = tuple(
-                self._bucket_counts
-            )
-
-            self._update_count += 1
-
-            self._touch()
-    # ======================================================
-    # Part 3. Properties
-    # ======================================================
+    def value(self) -> NumericValue:
+        return self._value
+
+    @value.setter
+    def value(self, value: NumericValue) -> None:
+        self._validate_numeric(value, "value")
+        self._value = value
 
     @property
-    def value(
-        self,
-    ) -> tuple[int, ...]:
-        """
-        Current bucket counts.
+    def description(self) -> str | None:
+        return self._description
 
-        Returns
-        -------
-        tuple[int, ...]
-            Immutable histogram bucket counts.
-        """
-        return tuple(self._bucket_counts)
-
+    @description.setter
+    def description(self, value: str | None) -> None:
+        if value is not None and not isinstance(value, str):
+            raise TypeError("description must be str or None.")
+        self._description = value
 
     @property
-    def buckets(
-        self,
-    ) -> tuple[float, ...]:
-        """
-        Histogram bucket boundaries.
-        """
+    def unit(self) -> str | None:
+        return self._unit
+
+    @unit.setter
+    def unit(self, value: str | None) -> None:
+        if value is not None and not isinstance(value, str):
+            raise TypeError("unit must be str or None.")
+        self._unit = value
+
+    @property
+    def buckets(self) -> BucketCollection:
         return tuple(self._buckets)
 
+    @buckets.setter
+    def buckets(self, value: BucketCollection) -> None:
+        self._buckets = tuple(value)
 
     @property
-    def count(
-        self,
-    ) -> int:
-        """
-        Total number of observations.
-        """
-        return self._count
+    def metadata(self) -> Metadata:
+        return self._metadata
 
-
-    @property
-    def sum(
-        self,
-    ) -> float:
-        """
-        Sum of all observed values.
-        """
-        return self._sum
-
+    @metadata.setter
+    def metadata(self, value: Metadata) -> None:
+        if not isinstance(value, dict):
+            raise TypeError("metadata must be dict.")
+        self._metadata = deepcopy(value)
 
     @property
-    def min(
-        self,
-    ) -> float | None:
-        """
-        Minimum observed value.
-        """
-        return self._min
+    def annotations(self) -> Annotation:
+        return self._annotations
 
-
-    @property
-    def max(
-        self,
-    ) -> float | None:
-        """
-        Maximum observed value.
-        """
-        return self._max
-
+    @annotations.setter
+    def annotations(self, value: Annotation) -> None:
+        if value is None:
+            raise TypeError("annotations must not be None.")
+        if not isinstance(value, dict):
+            raise TypeError("annotations must be dict.")
+        self._annotations = deepcopy(value)
 
     @property
-    def mean(
-        self,
-    ) -> float:
-        """
-        Mean of all observations.
-        """
-        if self._count == 0:
-            return 0.0
+    def tags(self) -> Tag:
+        return self._tags
 
-        return self._sum / self._count
-
-
-    @property
-    def created_at(
-        self,
-    ):
-        """
-        Histogram creation timestamp.
-        """
-        return self._created_at
-
+    @tags.setter
+    def tags(self, value: Tag) -> None:
+        if value is None:
+            raise TypeError("tags must not be None.")
+        if not isinstance(value, dict):
+            raise TypeError("tags must be dict.")
+        self._tags = deepcopy(value)
 
     @property
-    def updated_at(
+    def state(self) -> MetricState | None:
+        return self._state
+
+    @state.setter
+    def state(self, value: MetricState | None) -> None:
+        if value is not None and not isinstance(value, MetricState):
+            raise TypeError("state must be MetricState or None.")
+        self._state = value
+
+    # ==========================================================================
+    # Value operations
+    # ==========================================================================
+
+    def set_value(self, value: NumericValue) -> "Histogram":
+        self._validate_numeric(value, "value")
+        self._value = value
+        return self
+
+    def reset(self) -> "Histogram":
+        self._value = DEFAULT_VALUE
+        self._observations.clear()
+        self._apply_state_reset()
+        return self
+
+    def add_value(
         self,
-    ):
-        """
-        Last update timestamp.
-        """
-        return self._updated_at
-
-
-    @property
-    def revision(
-        self,
-    ) -> int:
-        """
-        Runtime revision number.
-        """
-        return self._revision
-
-
-    @property
-    def dirty(
-        self,
-    ) -> bool:
-        """
-        Whether the histogram has been modified
-        since the last checkpoint.
-        """
-        return self._dirty
-    # ======================================================
-    # Part 4. Snapshot
-    # ======================================================
-
-    def snapshot(
-        self,
-    ) -> MetricSnapshot:
-        """
-        Create an immutable snapshot of this histogram.
-
-        Returns
-        -------
-        MetricSnapshot
-        """
-
-        with self.lock:
-
-            return MetricSnapshot.create(
-
-                name=self.name,
-
-                value={
-                    "buckets": tuple(self._bucket_counts),
-                    "count": self._count,
-                    "sum": self._sum,
-                    "min": self._min,
-                    "max": self._max,
-                    "mean": self.mean,
-                },
-
-                metric_type="histogram",
-
-                labels=self.labels.to_dict(),
-
-                attributes=self.attributes.to_dict(),
-
-                metadata=self.metadata.to_dict(),
-            )
-
-
-    def restore(
-        self,
-        snapshot: MetricSnapshot,
-    ) -> None:
-        """
-        Restore histogram state from a snapshot.
-
-        Parameters
-        ----------
-        snapshot
-            Histogram snapshot.
-        """
-
-        self._ensure_mutable()
-
-        if snapshot.metric_type != "histogram":
-            raise TypeError(
-                "Snapshot is not a histogram."
-            )
-
-        value = snapshot.value
-
-        with self.lock:
-
-            self._bucket_counts = list(
-                value.get(
-                    "buckets",
-                    (),
-                )
-            )
-
-            self._count = int(
-                value.get(
-                    "count",
-                    0,
-                )
-            )
-
-            self._sum = float(
-                value.get(
-                    "sum",
-                    0.0,
-                )
-            )
-
-            self._min = value.get(
-                "min"
-            )
-
-            self._max = value.get(
-                "max"
-            )
-
-            self._value = tuple(
-                self._bucket_counts
-            )
-
-            self._update_count += 1
-
-            self._touch()
-
-
-    def clone(
-        self,
+        amount: NumericValue = 1,
     ) -> "Histogram":
-        """
-        Deep clone this histogram.
+        self._validate_numeric(amount, "amount")
+        self._value += amount
+        return self
 
-        Returns
-        -------
-        Histogram
-        """
-
-        clone = self.__class__(
-
-            descriptor=self.descriptor.copy(),
-
-            metadata=self.metadata.copy(),
-
-            labels=self.labels.copy(),
-
-            attributes=self.attributes.copy(),
-
-            buckets=self.buckets,
-        )
-
-        clone.restore(
-            self.snapshot()
-        )
-
-        return clone
-
-
-    def copy(
+    def subtract_value(
         self,
+        amount: NumericValue = 1,
     ) -> "Histogram":
-        """
-        Alias of clone().
+        self._validate_numeric(amount, "amount")
+        self._value -= amount
+        return self
 
-        Returns
-        -------
-        Histogram
-        """
-
-        return self.clone()
-    # ======================================================
-    # Part 5. Lifecycle
-    # ======================================================
-
-    def freeze(
+    def increment(
         self,
-    ) -> None:
-        """
-        Freeze the histogram.
+        amount: NumericValue = 1,
+    ) -> "Histogram":
+        return self.add_value(amount)
 
-        A frozen histogram cannot be modified until
-        unfreeze() is called.
-        """
-
-        with self.lock:
-
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot freeze a closed histogram."
-                )
-
-            if self._frozen:
-                return
-
-            self._frozen = True
-
-            self._touch()
-
-
-    def unfreeze(
+    def decrement(
         self,
-    ) -> None:
-        """
-        Unfreeze the histogram.
-        """
+        amount: NumericValue = 1,
+    ) -> "Histogram":
+        return self.subtract_value(amount)
 
-        with self.lock:
+    # ==========================================================================
+    # Histogram operations
+    # ==========================================================================
 
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot unfreeze a closed histogram."
-                )
+    def observe(self, value: NumericValue) -> "Histogram":
+        self._validate_numeric(value, "observation")
+        self._observations.append(float(value))
+        return self
 
-            if not self._frozen:
-                return
+    def record(self, value: NumericValue) -> "Histogram":
+        return self.observe(value)
 
-            self._frozen = False
+    def count(self) -> int:
+        return len(self._observations)
 
-            self._touch()
+    def sum(self) -> float:
+        return float(sum(self._observations))
 
+    def min(self) -> float | None:
+        if not self._observations:
+            return None
+        return min(self._observations)
 
-    def enable(
+    def max(self) -> float | None:
+        if not self._observations:
+            return None
+        return max(self._observations)
+
+    def mean(self) -> float | None:
+        if not self._observations:
+            return None
+        return self.sum() / self.count()
+
+    def percentile(
         self,
-    ) -> None:
-        """
-        Enable the histogram.
-
-        Enabled histograms accept new observations.
-        """
-
-        with self.lock:
-
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot enable a closed histogram."
-                )
-
-            if self._enabled:
-                return
-
-            self._enabled = True
-
-            self._touch()
-
-
-    def disable(
-        self,
-    ) -> None:
-        """
-        Disable the histogram.
-
-        Disabled histograms reject new observations
-        but preserve their current state.
-        """
-
-        with self.lock:
-
-            if self._closed:
-                raise RuntimeError(
-                    "Cannot disable a closed histogram."
-                )
-
-            if not self._enabled:
-                return
-
-            self._enabled = False
-
-            self._touch()
-
-
-    def close(
-        self,
-    ) -> None:
-        """
-        Permanently close the histogram.
-
-        A closed histogram becomes read-only.
-        """
-
-        with self.lock:
-
-            if self._closed:
-                return
-
-            self._closed = True
-
-            self._enabled = False
-
-            self._frozen = True
-
-            self._touch()
-
-
-    def reopen(
-        self,
-    ) -> None:
-        """
-        Reopen a previously closed histogram.
-        """
-
-        with self.lock:
-
-            if not self._closed:
-                return
-
-            self._closed = False
-
-            self._enabled = True
-
-            self._frozen = False
-
-            self._touch()
-    # ======================================================
-    # Part 6. Validation
-    # ======================================================
-
-    def validate(
-        self,
-    ) -> None:
-        """
-        Validate the complete histogram state.
-
-        Raises
-        ------
-        ValueError
-            If the histogram configuration is invalid.
-        """
-
-        self.validate_bucket()
-
-        if self._count < 0:
-            raise ValueError(
-                "Histogram count cannot be negative."
-            )
-
-        if self._sum < 0:
-            raise ValueError(
-                "Histogram sum cannot be negative."
-            )
-
+        percentile: float,
+    ) -> float | None:
         if (
-            self._min is not None
-            and self._max is not None
-            and self._min > self._max
-        ):
-            raise ValueError(
-                "Histogram minimum cannot exceed maximum."
-            )
-
-        if len(self._bucket_counts) != len(self._buckets):
-            raise ValueError(
-                "Bucket count size does not match bucket definition."
-            )
-
-
-    def validate_bucket(
-        self,
-    ) -> None:
-        """
-        Validate histogram bucket configuration.
-
-        Buckets must be strictly increasing.
-        """
-
-        if not self._buckets:
-            raise ValueError(
-                "Histogram must contain at least one bucket."
-            )
-
-        previous = None
-
-        for bucket in self._buckets:
-
-            self.validate_numeric(bucket)
-
-            if (
-                previous is not None
-                and bucket <= previous
-            ):
-                raise ValueError(
-                    "Histogram buckets must be strictly increasing."
-                )
-
-            previous = bucket
-
-
-    def validate_value(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Validate an observed value.
-        """
-
-        self.validate_numeric(value)
-
-
-    def validate_numeric(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Validate a numeric value.
-
-        Raises
-        ------
-        TypeError
-            If value is not numeric.
-        """
-
-        if not isinstance(
-            value,
-            (int, float),
+            isinstance(percentile, bool)
+            or not isinstance(percentile, (int, float))
         ):
             raise TypeError(
-                "Histogram values must be numeric."
+                "percentile must be int or float."
             )
 
-        if isinstance(
-            value,
-            bool,
-        ):
-            raise TypeError(
-                "Boolean values are not valid histogram observations."
-            )
-
-        if value != value:
+        if not 0 <= percentile <= 100:
             raise ValueError(
-                "NaN is not allowed."
+                "percentile must be between 0 and 100."
             )
 
-        if value in (
-            float("inf"),
-            float("-inf"),
-        ):
-            raise ValueError(
-                "Infinite values are not allowed."
+        if not self._observations:
+            return None
+
+        values = sorted(self._observations)
+
+        if len(values) == 1:
+            return values[0]
+
+        position = (
+            (len(values) - 1)
+            * (percentile / 100.0)
+        )
+
+        lower = int(position)
+        upper = min(
+            lower + 1,
+            len(values) - 1,
+        )
+
+        if lower == upper:
+            return values[lower]
+
+        fraction = position - lower
+
+        return (
+            values[lower]
+            + (
+                values[upper] - values[lower]
+            ) * fraction
+        )
+
+    def bucket_counts(self) -> dict[float, int]:
+        counts = {
+            bucket: 0
+            for bucket in self._buckets
+        }
+
+        for observation in self._observations:
+            for bucket in self._buckets:
+                if observation <= bucket:
+                    counts[bucket] += 1
+
+        return counts
+
+    def clear_observations(self) -> "Histogram":
+        self._observations.clear()
+        return self
+
+    # ==========================================================================
+    # Lifecycle operations
+    # ==========================================================================
+
+    def enable(self) -> "Histogram":
+        if self._state is not None:
+            method = getattr(
+                self._state,
+                "enable",
+                None,
             )
-    # ======================================================
-    # Part 7. Diagnostics
-    # ======================================================
+            if callable(method):
+                method()
+        return self
 
-    def statistics(
+    def disable(self) -> "Histogram":
+        if self._state is not None:
+            method = getattr(
+                self._state,
+                "disable",
+                None,
+            )
+            if callable(method):
+                method()
+        return self
+
+    def activate(self) -> "Histogram":
+        if self._state is not None:
+            method = getattr(
+                self._state,
+                "activate",
+                None,
+            )
+            if callable(method):
+                method()
+        return self
+
+    def deactivate(self) -> "Histogram":
+        if self._state is not None:
+            method = getattr(
+                self._state,
+                "deactivate",
+                None,
+            )
+            if callable(method):
+                method()
+        return self
+
+    # ==========================================================================
+    # Metadata operations
+    # ==========================================================================
+
+    def set_metadata(
         self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime statistics for this histogram.
-
-        Returns
-        -------
-        dict[str, Any]
-            Runtime statistics.
-        """
-
-        return {
-            "metric": self.name,
-            "type": "histogram",
-            "count": self._count,
-            "sum": self._sum,
-            "min": self._min,
-            "max": self._max,
-            "mean": self.mean,
-            "bucket_count": len(self._buckets),
-            "observations": len(self._values),
-            "revision": self._revision,
-            "dirty": self._dirty,
-            "enabled": self._enabled,
-            "frozen": self._frozen,
-            "closed": self._closed,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-        }
-
-
-    def health(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime health information.
-        """
-
-        issues: list[str] = []
-
-        if self._closed:
-            issues.append("closed")
-
-        if not self._enabled:
-            issues.append("disabled")
-
-        if self._frozen:
-            issues.append("frozen")
-
-        try:
-            self.validate()
-        except Exception as exc:
-            issues.append(str(exc))
-
-        return {
-            "healthy": len(issues) == 0,
-            "status": (
-                "healthy"
-                if not issues
-                else "degraded"
-            ),
-            "issues": issues,
-            "revision": self._revision,
-            "dirty": self._dirty,
-        }
-
-
-    def dump(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Dump complete histogram state.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-            "name": self.name,
-            "metric_type": "histogram",
-            "value": self.value,
-            "count": self._count,
-            "sum": self._sum,
-            "min": self._min,
-            "max": self._max,
-            "mean": self.mean,
-            "buckets": list(self._buckets),
-            "bucket_counts": self.bucket_counts(),
-            "labels": self.labels.to_dict(),
-            "attributes": self.attributes.to_dict(),
-            "metadata": self.metadata.to_dict(),
-            "revision": self._revision,
-            "dirty": self._dirty,
-            "enabled": self._enabled,
-            "frozen": self._frozen,
-            "closed": self._closed,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-        }
-
-
-    def inspect(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Developer inspection helper.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-            "class": self.__class__.__name__,
-            "id": str(self.id),
-            "descriptor": self.descriptor.qualified_name,
-            "statistics": self.statistics(),
-            "health": self.health(),
-        }
-    # ======================================================
-    # Part 8. Serialization
-    # ======================================================
-
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Serialize this histogram to a dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-            "name": self.name,
-            "metric_type": "histogram",
-            "buckets": list(self._buckets),
-            "bucket_counts": list(self._bucket_counts),
-            "values": list(self._values),
-            "count": self._count,
-            "sum": self._sum,
-            "min": self._min,
-            "max": self._max,
-            "revision": self._revision,
-            "dirty": self._dirty,
-            "enabled": self._enabled,
-            "frozen": self._frozen,
-            "closed": self._closed,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "labels": self.labels.to_dict(),
-            "attributes": self.attributes.to_dict(),
-            "metadata": self.metadata.to_dict(),
-        }
-
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: dict[str, Any],
+        key: str,
+        value: Any,
     ) -> "Histogram":
-        """
-        Restore a Histogram from a dictionary.
+        self._metadata[key] = value
+        return self
 
-        Parameters
-        ----------
-        data
-            Serialized histogram.
+    def get_metadata(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._metadata.get(
+            key,
+            default,
+        )
 
-        Returns
-        -------
-        Histogram
-        """
+    def remove_metadata(
+        self,
+        key: str,
+    ) -> "Histogram":
+        self._metadata.pop(key, None)
+        return self
 
-        from .attributes import MetricAttributes
-        from .descriptor import MetricDescriptor
-        from .labels import MetricLabels
-        from .metadata import MetricMetadata
+    def clear_metadata(self) -> "Histogram":
+        self._metadata.clear()
+        return self
 
-        descriptor = MetricDescriptor(
-            name=data["name"],
-            metric_type="histogram",
-            metadata=MetricMetadata.from_dict(
-                data.get("metadata", {})
+    # ==========================================================================
+    # Annotation operations
+    # ==========================================================================
+
+    def set_annotation(
+        self,
+        key: str,
+        value: Any,
+    ) -> "Histogram":
+        self._annotations[key] = value
+        return self
+
+    def get_annotation(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._annotations.get(
+            key,
+            default,
+        )
+
+    def remove_annotation(
+        self,
+        key: str,
+    ) -> "Histogram":
+        self._annotations.pop(key, None)
+        return self
+
+    def clear_annotations(self) -> "Histogram":
+        self._annotations.clear()
+        return self
+
+    # ==========================================================================
+    # Tag operations
+    # ==========================================================================
+
+    def set_tag(
+        self,
+        key: str,
+        value: Any,
+    ) -> "Histogram":
+        self._tags[key] = value
+        return self
+
+    def get_tag(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._tags.get(
+            key,
+            default,
+        )
+
+    def remove_tag(
+        self,
+        key: str,
+    ) -> "Histogram":
+        self._tags.pop(key, None)
+        return self
+
+    def clear_tags(self) -> "Histogram":
+        self._tags.clear()
+        return self
+
+    # ==========================================================================
+    # Serialization
+    # ==========================================================================
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self._name,
+            "value": self._value,
+            "description": self._description,
+            "unit": self._unit,
+            "buckets": tuple(self._buckets),
+            "observations": list(
+                self._observations
             ),
-        )
-
-        histogram = cls(
-            descriptor=descriptor,
-            buckets=data.get("buckets"),
-            labels=MetricLabels.from_dict(
-                data.get("labels", {})
+            "metadata": deepcopy(
+                self._metadata
             ),
-            attributes=MetricAttributes.from_dict(
-                data.get("attributes", {})
+            "annotations": deepcopy(
+                self._annotations
             ),
-        )
-
-        histogram._bucket_counts = list(
-            data.get("bucket_counts", [])
-        )
-
-        histogram._values = list(
-            data.get("values", [])
-        )
-
-        histogram._count = int(
-            data.get("count", 0)
-        )
-
-        histogram._sum = float(
-            data.get("sum", 0.0)
-        )
-
-        histogram._min = data.get("min")
-
-        histogram._max = data.get("max")
-
-        histogram._revision = int(
-            data.get("revision", 0)
-        )
-
-        histogram._dirty = bool(
-            data.get("dirty", False)
-        )
-
-        histogram._enabled = bool(
-            data.get("enabled", True)
-        )
-
-        histogram._frozen = bool(
-            data.get("frozen", False)
-        )
-
-        histogram._closed = bool(
-            data.get("closed", False)
-        )
-
-        return histogram
-
+            "tags": deepcopy(
+                self._tags
+            ),
+            "state": deepcopy(
+                self._state
+            ),
+        }
 
     def to_json(
         self,
-        *,
-        indent: int | None = 2,
+        **kwargs: Any,
     ) -> str:
-        """
-        Serialize this histogram to JSON.
-
-        Returns
-        -------
-        str
-        """
-
-        import json
-
         return json.dumps(
             self.to_dict(),
-            indent=indent,
-            ensure_ascii=False,
-            sort_keys=True,
+            default=str,
+            **kwargs,
         )
 
+    # ==========================================================================
+    # Snapshot / restore
+    # ==========================================================================
 
-    @classmethod
-    def from_json(
-        cls,
-        payload: str,
+    def snapshot(self) -> dict[str, Any]:
+        return deepcopy(
+            self.to_dict()
+        )
+
+    def restore(
+        self,
+        snapshot: dict[str, Any],
     ) -> "Histogram":
-        """
-        Restore a Histogram from JSON.
+        if not isinstance(snapshot, dict):
+            raise TypeError(
+                "snapshot must be dict."
+            )
 
-        Parameters
-        ----------
-        payload
-            JSON string.
-
-        Returns
-        -------
-        Histogram
-        """
-
-        import json
-
-        return cls.from_dict(
-            json.loads(payload)
+        self._name = snapshot.get(
+            "name",
+            DEFAULT_NAME,
         )
-    # ======================================================
-    # Part 9. Export
-    # ======================================================
 
-    def prometheus(
-        self,
-    ) -> str:
-        """
-        Export histogram in Prometheus exposition format.
+        self._value = snapshot.get(
+            "value",
+            DEFAULT_VALUE,
+        )
 
-        Returns
-        -------
-        str
-        """
+        self._description = snapshot.get(
+            "description",
+            DEFAULT_DESCRIPTION,
+        )
 
-        lines: list[str] = []
+        self._unit = snapshot.get(
+            "unit",
+            DEFAULT_UNIT,
+        )
 
-        metric_name = self.name
+        self._buckets = tuple(
+            snapshot.get(
+                "buckets",
+                DEFAULT_BUCKETS,
+            )
+        )
 
-        label_items = self.labels.to_dict()
+        self._observations = list(
+            snapshot.get(
+                "observations",
+                [],
+            )
+        )
 
-        # Bucket series
-        cumulative = 0
+        self._metadata = deepcopy(
+            snapshot.get(
+                "metadata",
+                DEFAULT_METADATA,
+            )
+        )
 
-        for bound, count in zip(
+        self._annotations = deepcopy(
+            snapshot.get(
+                "annotations",
+                DEFAULT_ANNOTATIONS,
+            )
+        )
+
+        self._tags = deepcopy(
+            snapshot.get(
+                "tags",
+                DEFAULT_TAGS,
+            )
+        )
+
+        # Missing state means "leave current state unchanged".
+        if "state" in snapshot:
+            self._state = deepcopy(
+                snapshot["state"]
+            )
+
+        self.validate()
+
+        return self
+
+    # ==========================================================================
+    # Copy / clone
+    # ==========================================================================
+
+    def copy(self) -> "Histogram":
+        return deepcopy(self)
+
+    def clone(self) -> "Histogram":
+        return self.copy()
+
+    # ==========================================================================
+    # Validation
+    # ==========================================================================
+
+    def validate(self) -> bool:
+        self._validate_basic_configuration()
+
+        if not isinstance(
             self._buckets,
-            self._bucket_counts,
+            tuple,
         ):
-            cumulative += count
-
-            labels = dict(label_items)
-            labels["le"] = str(bound)
-
-            label_str = ",".join(
-                f'{k}="{v}"'
-                for k, v in sorted(labels.items())
+            raise TypeError(
+                "buckets must be tuple."
             )
 
-            lines.append(
-                f'{metric_name}_bucket{{{label_str}}} {cumulative}'
+        for bucket in self._buckets:
+            self._validate_numeric(
+                bucket,
+                "bucket",
             )
 
-        # +Inf bucket
-        labels = dict(label_items)
-        labels["le"] = "+Inf"
+        if (
+            tuple(sorted(self._buckets))
+            != self._buckets
+        ):
+            raise HistogramValidationError(
+                "buckets must be sorted "
+                "in ascending order."
+            )
 
-        label_str = ",".join(
-            f'{k}="{v}"'
-            for k, v in sorted(labels.items())
-        )
+        if (
+            len(set(self._buckets))
+            != len(self._buckets)
+        ):
+            raise HistogramValidationError(
+                "buckets must not contain "
+                "duplicates."
+            )
 
-        lines.append(
-            f'{metric_name}_bucket{{{label_str}}} {self._count}'
-        )
+        if not isinstance(
+            self._metadata,
+            dict,
+        ):
+            raise TypeError(
+                "metadata must be dict."
+            )
 
-        lines.append(
-            f"{metric_name}_sum {self._sum}"
-        )
+        if not isinstance(
+            self._annotations,
+            dict,
+        ):
+            raise TypeError(
+                "annotations must be dict."
+            )
 
-        lines.append(
-            f"{metric_name}_count {self._count}"
-        )
+        if not isinstance(
+            self._tags,
+            dict,
+        ):
+            raise TypeError(
+                "tags must be dict."
+            )
 
-        return "\n".join(lines)
+        if not isinstance(
+            self._observations,
+            list,
+        ):
+            raise TypeError(
+                "observations must be list."
+            )
 
+        for observation in self._observations:
+            self._validate_numeric(
+                observation,
+                "observation",
+            )
 
-    def otel(
+        if (
+            self._state is not None
+            and not isinstance(
+                self._state,
+                MetricState,
+            )
+        ):
+            raise TypeError(
+                "state must be MetricState or None."
+            )
+
+        return True
+
+    # ==========================================================================
+    # Equality / hashing
+    # ==========================================================================
+
+    def __eq__(
         self,
-    ) -> dict[str, Any]:
-        """
-        Export histogram in an OpenTelemetry-friendly format.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-            "name": self.name,
-            "type": "histogram",
-            "count": self._count,
-            "sum": self._sum,
-            "min": self._min,
-            "max": self._max,
-            "boundaries": list(self._buckets),
-            "bucket_counts": list(self._bucket_counts),
-            "attributes": self.attributes.to_dict(),
-            "labels": self.labels.to_dict(),
-            "metadata": self.metadata.to_dict(),
-            "timestamp": self.updated_at.isoformat(),
-        }
-
-
-    def csv(
-        self,
-    ) -> list[Any]:
-        """
-        Export histogram as a CSV row.
-
-        Returns
-        -------
-        list[Any]
-        """
-
-        return [
-            self.name,
-            "histogram",
-            self._count,
-            self._sum,
-            self._min,
-            self._max,
-            self.mean,
-            ";".join(
-                map(str, self._buckets)
-            ),
-            ";".join(
-                map(str, self._bucket_counts)
-            ),
-            self.updated_at.isoformat(),
-        ]
-    # ======================================================
-    # Part 10. Final Polish
-    # ======================================================
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer-friendly representation.
-        """
-
-        return (
-            f"{self.__class__.__name__}("
-            f"name={self.name!r}, "
-            f"count={self._count}, "
-            f"sum={self._sum}, "
-            f"min={self._min}, "
-            f"max={self._max}, "
-            f"buckets={len(self._buckets)}, "
-            f"enabled={self._enabled}, "
-            f"frozen={self._frozen}, "
-            f"closed={self._closed})"
-        )
-
-
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human-readable summary.
-        """
-
-        return (
-            f"{self.name}: "
-            f"count={self._count}, "
-            f"sum={self._sum}, "
-            f"mean={self.mean}"
-        )
-
-
-    def __len__(
-        self,
-    ) -> int:
-        """
-        Number of recorded observations.
-        """
-
-        return self._count
-
-
-    def __bool__(
-        self,
+        other: object,
     ) -> bool:
-        """
-        Histogram is truthy if it contains observations.
-        """
+        if not isinstance(
+            other,
+            Histogram,
+        ):
+            return NotImplemented
 
-        return self._count > 0
+        return (
+            self._name == other._name
+            and self._value == other._value
+            and self._description
+            == other._description
+            and self._unit == other._unit
+            and self._buckets
+            == other._buckets
+            and self._observations
+            == other._observations
+            and self._metadata
+            == other._metadata
+            and self._annotations
+            == other._annotations
+            and self._tags
+            == other._tags
+            and self._state
+            == other._state
+        )
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self._name,
+                self._value,
+                self._description,
+                self._unit,
+                self._buckets,
+                tuple(self._observations),
+                json.dumps(
+                    self._metadata,
+                    sort_keys=True,
+                    default=str,
+                ),
+                json.dumps(
+                    self._annotations,
+                    sort_keys=True,
+                    default=str,
+                ),
+                json.dumps(
+                    self._tags,
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
+        )
 
-    # ======================================================
-    # Compatibility
-    # ======================================================
+    # ==========================================================================
+    # Representation
+    # ==========================================================================
 
-    @property
-    def total(
+    def __repr__(self) -> str:
+        return (
+            "Histogram("
+            f"name={self._name!r}, "
+            f"value={self._value!r}, "
+            f"description={self._description!r}, "
+            f"unit={self._unit!r}, "
+            f"buckets={self._buckets!r}"
+            ")"
+        )
+
+    def __str__(self) -> str:
+        return str(self._value)
+
+    # ==========================================================================
+    # Internal helpers
+    # ==========================================================================
+
+    def _validate_basic_configuration(
         self,
-    ) -> float:
-        """
-        Compatibility alias for sum().
-        """
+    ) -> None:
+        if (
+            self._name is not None
+            and not isinstance(
+                self._name,
+                str,
+            )
+        ):
+            raise TypeError(
+                "name must be str or None."
+            )
 
-        return self._sum
+        self._validate_numeric(
+            self._value,
+            "value",
+        )
+
+        if (
+            self._description is not None
+            and not isinstance(
+                self._description,
+                str,
+            )
+        ):
+            raise TypeError(
+                "description must be str or None."
+            )
+
+        if (
+            self._unit is not None
+            and not isinstance(
+                self._unit,
+                str,
+            )
+        ):
+            raise TypeError(
+                "unit must be str or None."
+            )
+
+    @staticmethod
+    def _validate_numeric(
+        value: Any,
+        field: str,
+    ) -> None:
+        if (
+            isinstance(value, bool)
+            or not isinstance(
+                value,
+                (int, float),
+            )
+        ):
+            raise HistogramValidationError(
+                f"{field} must be int or float."
+            )
+
+    def _apply_state_reset(self) -> None:
+        if self._state is not None:
+            method = getattr(
+                self._state,
+                "reset",
+                None,
+            )
+
+            if callable(method):
+                method()
 
 
-    @property
-    def observations(
-        self,
-    ) -> int:
-        """
-        Compatibility alias for count().
-        """
+# ==============================================================================
+# Part N. Public API
+# ==============================================================================
 
-        return self._count
-
-
-    @property
-    def sample_count(
-        self,
-    ) -> int:
-        """
-        Compatibility alias for count().
-        """
-
-        return self._count
-
-
-    @property
-    def bucket_total(
-        self,
-    ) -> list[int]:
-        """
-        Compatibility alias for bucket_counts().
-        """
-
-        return list(self._bucket_counts)
-
-
-    @property
-    def values(
-        self,
-    ) -> list[float]:
-        """
-        Return a copy of all recorded values.
-        """
-
-        return list(self._values)                                                                                        
+__all__ = [
+    "DEFAULT_VALUE",
+    "DEFAULT_NAME",
+    "DEFAULT_DESCRIPTION",
+    "DEFAULT_UNIT",
+    "DEFAULT_BUCKETS",
+    "DEFAULT_METADATA",
+    "DEFAULT_ANNOTATIONS",
+    "DEFAULT_TAGS",
+    "NumericValue",
+    "BucketValue",
+    "BucketCollection",
+    "Metadata",
+    "Annotation",
+    "Tag",
+    "HistogramValidationError",
+    "Histogram",
+]

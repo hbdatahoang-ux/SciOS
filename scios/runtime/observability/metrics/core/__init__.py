@@ -1,63 +1,44 @@
 """
-SciOS-NG Observability
-======================
+SciOS Runtime Metrics Core
+==========================
 
-Metric Core Package
+Core metric primitives.
 
-Core metric implementations used by the SciOS runtime.
+This package is being rebuilt incrementally.
 
-Available Metrics
------------------
+Only stable modules should be exported here.
 
-- Metric
-- Counter
-- Gauge
-- Histogram
-- Summary
-- Timer
-
-Core Components
----------------
-
-- MetricDescriptor
-- MetricSnapshot
-- MetricMetadata
-- MetricLabels
-- MetricAttributes
-
-These classes form the canonical runtime metric model
-used throughout SciOS Observability.
+Python 3.11+
 """
 
-from .attributes import MetricAttributes
-from .counter import Counter
-from .descriptor import MetricDescriptor
-from .gauge import Gauge
-from .histogram import Histogram
-from .labels import MetricLabels
-from .metadata import MetricMetadata
-from .metric import Metric
-from .snapshot import MetricSnapshot
-from .summary import Summary
-from .timer import Timer
+from __future__ import annotations
 
-__all__ = [
-    # Base
-    "Metric",
-
-    # Metric types
-    "Counter",
-    "Gauge",
-    "Histogram",
-    "Summary",
-    "Timer",
-
-    # Supporting types
-    "MetricDescriptor",
-    "MetricSnapshot",
-    "MetricMetadata",
-    "MetricLabels",
-    "MetricAttributes",
-]
+# ==============================================================================
+# Version
+# ==============================================================================
 
 __version__ = "0.1.0"
+
+__api_version__ = "1.0"
+
+# ==============================================================================
+# Stable Public API
+# ==============================================================================
+
+from .descriptor import (
+    MetricDescriptor,
+    MetricType,
+    MetricUnit,
+)
+
+# ==============================================================================
+# Public API
+# ==============================================================================
+
+__all__ = [
+    "__version__",
+    "__api_version__",
+    "MetricDescriptor",
+    "MetricType",
+    "MetricUnit",
+]

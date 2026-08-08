@@ -1,868 +1,306 @@
-"""
-SciOS Observability
-==================
-
-Counter Metric.
-
-Part 1
-------
-
-Foundation.
-
-Responsibilities
-----------------
-
-- Counter definition
-- Constructor
-- Default value
-- Runtime validation
-
-Notes
------
-A Counter is a monotonic metric.
-
-Its value:
-
-    - starts at zero
-    - may only increase
-    - cannot become negative
-
-Concrete update APIs are implemented in Part 2.
-"""
+# ==============================================================================
+# Counter
+# ==============================================================================
 
 from __future__ import annotations
 
-from typing import Any
 
-from .descriptor import MetricDescriptor
-from .metadata import MetricMetadata
-from .labels import MetricLabels
-from .attributes import MetricAttributes
-from .metric import Metric
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
 
-__all__ = [
-    "Counter",
-]
+import copy
+import json
+from dataclasses import dataclass
+from typing import Any, TypeAlias
+
+from .metric import (
+    Metric,
+    MetricType,
+    MetricUnit,
+    MetricValidationError,
+)
 
 
-# ==========================================================
-# Counter
-# ==========================================================
+
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
+
+DEFAULT_COUNTER_VALUE: int = 0
+
+DEFAULT_COUNTER_TYPE: MetricType = MetricType.COUNTER
+
+DEFAULT_COUNTER_UNIT: MetricUnit = MetricUnit.NONE
 
 
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+CounterValue: TypeAlias = int
+
+
+# ==============================================================================
+# Part 4. Exceptions
+# ==============================================================================
+
+class CounterValidationError(MetricValidationError):
+    """
+    Raised when a Counter violates counter-specific validation rules.
+    """
+
+    pass
+
+
+
+# ==============================================================================
+# Part 5. Dataclass
+# ==============================================================================
+
+@dataclass(
+    slots=True,
+    eq=False,
+    repr=False,
+)
 class Counter(Metric):
-    """
-    Monotonic cumulative metric.
+    """Runtime counter metric."""
 
-    Counter values are always >= 0.
+    value: CounterValue = DEFAULT_COUNTER_VALUE
+    metric_type: MetricType = DEFAULT_COUNTER_TYPE
+    unit: MetricUnit = DEFAULT_COUNTER_UNIT
 
-    Typical examples
+    # ==========================================================================
+    # Part 6. Constructor Validation
+    # ==========================================================================
 
-    - HTTP requests
-    - Errors
-    - Transactions
-    - Messages
-    - Packets
-    """
+    def __post_init__(self) -> None:
+        # IMPORTANT:
+        # Do not use zero-argument super() here because @dataclass(slots=True)
+        # recreates the class and breaks the __class__ closure used by super().
+        Metric.__post_init__(self)
 
-    # ======================================================
-    # Constructor
-    # ======================================================
-
-    def __init__(
-        self,
-        *,
-        descriptor: MetricDescriptor,
-        metadata: MetricMetadata | None = None,
-        labels: MetricLabels | None = None,
-        attributes: MetricAttributes | None = None,
-    ) -> None:
-        """
-        Initialize a Counter.
-        """
-
-        super().__init__(
-            descriptor=descriptor,
-            metadata=metadata,
-            labels=labels,
-            attributes=attributes,
-        )
-
-        # Counter always starts at zero.
-        self._value = self._default_value()
-
-    # ======================================================
-    # Default Value
-    # ======================================================
-
-    def _default_value(self) -> int:
-        """
-        Return the default Counter value.
-
-        Returns
-        -------
-        int
-            Always zero.
-        """
-
-        return 0
-
-    # ======================================================
-    # Runtime Validation
-    # ======================================================
-
-    def validate(self) -> None:
-        """
-        Validate runtime state.
-
-        Raises
-        ------
-        TypeError
-            Invalid value type.
-
-        ValueError
-            Invalid counter value.
-        """
-
-        value = self._value
-
-        if not isinstance(value, (int, float)):
-            raise TypeError(
-                "Counter value must be numeric."
+        if self.metric_type is not MetricType.COUNTER:
+            raise CounterValidationError(
+                "Counter metric_type must be MetricType.COUNTER."
             )
 
-        if value < 0:
-            raise ValueError(
-                "Counter cannot be negative."
-            )
-
-        if self._closed:
-            raise RuntimeError(
-                "Counter is closed."
-            )
-
-    # ======================================================
-    # Metric Identity
-    # ======================================================
-
-    @property
-    def metric_type(self) -> str:
-        """
-        Metric type.
-        """
-
-        return "counter"
-
-    @property
-    def monotonic(self) -> bool:
-        """
-        Counter is monotonic.
-        """
-
-        return True
-
-    @property
-    def cumulative(self) -> bool:
-        """
-        Counter is cumulative.
-        """
-
-        return True
-    # ======================================================
-    # Part 2. Counter API
-    # ======================================================
-
-    def inc(
-        self,
-        amount: int | float = 1,
-    ) -> None:
-        """
-        Increment the counter.
-
-        Parameters
-        ----------
-        amount
-            Increment amount.
-
-        Raises
-        ------
-        ValueError
-            If amount is negative.
-        """
-
-        self.add(amount)
-
-
-    def add(
-        self,
-        amount: int | float,
-    ) -> None:
-        """
-        Add a positive amount.
-
-        Parameters
-        ----------
-        amount
-            Amount to add.
-
-        Raises
-        ------
-        TypeError
-            Invalid amount.
-
-        ValueError
-            Negative increment.
-        """
-
-        self._ensure_mutable()
-
-        if not isinstance(
-            amount,
-            (int, float),
+        if isinstance(self.value, bool) or not isinstance(
+            self.value,
+            int,
         ):
-            raise TypeError(
-                "Counter increment must be numeric."
+            raise CounterValidationError(
+                "Counter value must be an integer."
             )
 
-        if amount < 0:
-            raise ValueError(
-                "Counter cannot decrease."
-            )
-
-        previous = self._value
-
-        self._before_update(
-            previous,
-            previous + amount,
-        )
-
-        self._previous_value = previous
-
-        self._value += amount
-
-        self._update_count += 1
-
-        self._touch()
-
-        self._after_update(
-            previous,
-            self._value,
-        )
-
-
-    def set(
-        self,
-        value: Any,
-    ) -> None:
-        """
-        Direct assignment is not supported.
-
-        Counter values must only increase
-        through add() / inc().
-        """
-
-        raise RuntimeError(
-            "Counter.set() is disabled. "
-            "Use add() or inc() instead."
-        )
-
-
-    def update(
-        self,
-        amount: int | float,
-    ) -> None:
-        """
-        Update counter.
-
-        Alias of add().
-        """
-
-        self.add(amount)
-
-
-    def reset(
-        self,
-    ) -> None:
-        """
-        Reset counter.
-
-        Intended primarily for testing or
-        controlled runtime reinitialization.
-
-        Production monitoring systems
-        typically create a new Counter
-        instead of resetting an existing one.
-        """
-
-        self._ensure_mutable()
-
-        previous = self._value
-
-        self._before_update(
-            previous,
-            0,
-        )
-
-        self._previous_value = previous
-
-        self._value = self._default_value()
-
-        self._update_count += 1
-
-        self._touch()
-
-        self._after_update(
-            previous,
-            self._value,
-        )
-    # ======================================================
-    # Part 3. Properties
-    # ======================================================
-
-    @property
-    def value(
-        self,
-    ) -> int | float:
-        """
-        Current counter value.
-
-        Returns
-        -------
-        int | float
-            Monotonic counter value.
-        """
-
-        return self._value
-
-
-    @property
-    def total(
-        self,
-    ) -> int | float:
-        """
-        Alias of value.
-
-        Returns
-        -------
-        int | float
-        """
-
-        return self._value
-
-
-    @property
-    def count(
-        self,
-    ) -> int:
-        """
-        Number of successful counter updates.
-
-        Returns
-        -------
-        int
-        """
-
-        return self._update_count
-
-
-    @property
-    def created_at(
-        self,
-    ):
-        """
-        Counter creation time.
-
-        Returns
-        -------
-        datetime
-        """
-
-        return self._created_at
-
-
-    @property
-    def updated_at(
-        self,
-    ):
-        """
-        Last successful update time.
-
-        Returns
-        -------
-        datetime
-        """
-
-        return self._updated_at
-    # ======================================================
-    # Part 4. Snapshot
-    # ======================================================
-
-    def snapshot(
-        self,
-    ):
-        """
-        Create an immutable snapshot of this Counter.
-
-        Returns
-        -------
-        MetricSnapshot
-        """
-
-        self.validate()
-
-        return super().snapshot()
-
-
-    def restore(
-        self,
-        snapshot,
-    ) -> None:
-        """
-        Restore Counter state from a snapshot.
-
-        Parameters
-        ----------
-        snapshot
-            MetricSnapshot.
-        """
-
-        super().restore(snapshot)
-
-        self.validate()
-
-
-    def clone(
-        self,
-    ) -> "Counter":
-        """
-        Deep clone this Counter.
-
-        Returns
-        -------
-        Counter
-        """
-
-        clone = super().clone()
-
-        clone.validate()
-
-        return clone
-
-
-    def copy(
-        self,
-    ) -> "Counter":
-        """
-        Alias of clone().
-
-        Returns
-        -------
-        Counter
-        """
-
-        return self.clone()
-    # ======================================================
-    # Part 5. Lifecycle
-    # ======================================================
-
-    def freeze(
-        self,
-    ) -> None:
-        """
-        Freeze this Counter.
-
-        Frozen counters reject all future updates
-        until unfreeze() is called.
-        """
-
-        super().freeze()
-
-
-    def unfreeze(
-        self,
-    ) -> None:
-        """
-        Unfreeze this Counter.
-        """
-
-        super().unfreeze()
-
-
-    def enable(
-        self,
-    ) -> None:
-        """
-        Enable this Counter.
-        """
-
-        super().enable()
-
-
-    def disable(
-        self,
-    ) -> None:
-        """
-        Disable this Counter.
-
-        Disabled counters reject update operations
-        but remain readable.
-        """
-
-        super().disable()
-
-
-    def close(
-        self,
-    ) -> None:
-        """
-        Permanently close this Counter.
-
-        Closed counters become read-only.
-        """
-
-        super().close()
-
-
-    def reopen(
-        self,
-    ) -> None:
-        """
-        Reopen a previously closed Counter.
-
-        Mainly intended for runtime recovery,
-        checkpoint restoration,
-        or testing.
-        """
-
-        super().reopen()
-    # ======================================================
-    # Part 6. Validation
-    # ======================================================
-
-    def validate(
-        self,
-    ) -> None:
-        """
-        Validate the current Counter state.
-
-        This performs Counter-specific validation
-        in addition to the generic Metric validation.
-        """
-
-        # Generic metric validation
-        if hasattr(super(), "validate"):
-            super().validate()
-
-        self.validate_value(
-            self._value,
-        )
-
-
-    def validate_increment(
-        self,
-        amount: int | float,
-    ) -> None:
-        """
-        Validate an increment value.
-
-        Parameters
-        ----------
-        amount
-            Increment amount.
-
-        Raises
-        ------
-        TypeError
-            If the increment is not numeric.
-
-        ValueError
-            If the increment is negative.
-        """
-
-        if not isinstance(
-            amount,
-            (int, float),
-        ):
-            raise TypeError(
-                "Counter increment must be numeric."
-            )
-
-        if amount < 0:
-            raise ValueError(
-                "Counter increment cannot be negative."
-            )
-
-
-    def validate_value(
-        self,
-        value: int | float,
-    ) -> None:
-        """
-        Validate the current Counter value.
-
-        Parameters
-        ----------
-        value
-            Counter value.
-
-        Raises
-        ------
-        TypeError
-            If the value is not numeric.
-
-        ValueError
-            If the value is negative.
-        """
-
-        if not isinstance(
-            value,
-            (int, float),
-        ):
-            raise TypeError(
-                "Counter value must be numeric."
-            )
-
-        if value < 0:
-            raise ValueError(
+        if self.value < 0:
+            raise CounterValidationError(
                 "Counter value cannot be negative."
             )
-    # ======================================================
-    # Part 7. Diagnostics
-    # ======================================================
+
+    # ==========================================================================
+    # Part 7. Properties
+    # ==========================================================================
 
     @property
-    def statistics(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Runtime statistics for this Counter.
-        """
+    def is_counter(self) -> bool:
+        return self.metric_type is MetricType.COUNTER
 
-        base: dict[str, Any] = {}
+    # ==========================================================================
+    # Part 8. Counter Operations
+    # ==========================================================================
 
-        if hasattr(super(), "statistics"):
-            base.update(super().statistics)
-
-        base.update(
-            {
-                "metric_type": "counter",
-                "value": self._value,
-                "total": self._value,
-                "count": self._update_count,
-                "created_at": self._created_at,
-                "updated_at": self._updated_at,
-                "revision": self._revision,
-                "dirty": self._dirty,
-            }
-        )
-
-        return base
-
-
-    @property
-    def health(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Health report for this Counter.
-        """
-
-        base: dict[str, Any] = {}
-
-        if hasattr(super(), "health"):
-            base.update(super().health)
-
-        issues: list[str] = list(
-            base.get("issues", [])
-        )
-
-        if self._value < 0:
-            issues.append(
-                "negative_value"
+    def increment(self, amount: int = 1) -> int:
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            raise CounterValidationError(
+                "Increment amount must be an integer."
             )
 
-        base.update(
-            {
-                "healthy": len(issues) == 0,
-                "issues": issues,
-                "metric_type": "counter",
-                "value": self._value,
-            }
-        )
+        if amount < 0:
+            raise CounterValidationError(
+                "Increment amount cannot be negative."
+            )
 
-        return base
+        self.value += amount
+        return self.value
 
 
-    def dump(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Dump complete runtime state.
-        """
+    def decrement(self, amount: int = 1) -> int:
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            raise CounterValidationError(
+                "Decrement amount must be an integer."
+            )
 
-        return {
-            "id": str(self.id),
-            "name": self.name,
-            "metric_type": "counter",
-            "value": self._value,
-            "total": self.total,
-            "count": self.count,
-            "created_at": self._created_at,
-            "updated_at": self._updated_at,
-            "enabled": self._enabled,
-            "frozen": self._frozen,
-            "closed": self._closed,
-            "revision": self._revision,
-            "dirty": self._dirty,
-            "labels": self.labels.to_dict(),
-            "attributes": self.attributes.to_dict(),
-            "metadata": self.metadata.to_dict(),
-        }
+        if amount < 0:
+            raise CounterValidationError(
+                "Decrement amount cannot be negative."
+            )
+
+        if self.value - amount < 0:
+            raise CounterValidationError(
+                "Counter value cannot be negative."
+            )
+
+        self.value -= amount
+        return self.value
 
 
-    def inspect(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return a comprehensive diagnostic report.
-        """
+    def reset(self) -> int:
+        self.value = DEFAULT_COUNTER_VALUE
+        return self.value
 
-        return {
-            "identity": {
-                "id": str(self.id),
-                "name": self.name,
-                "type": "counter",
-            },
-            "runtime": {
-                "value": self._value,
-                "total": self.total,
-                "count": self.count,
-                "revision": self._revision,
-                "dirty": self._dirty,
-            },
-            "lifecycle": {
-                "enabled": self._enabled,
-                "frozen": self._frozen,
-                "closed": self._closed,
-            },
-            "statistics": self.statistics,
-            "health": self.health,
-        }
-    # ======================================================
-    # Part 8. Serialization
-    # ======================================================
+    # ==========================================================================
+    # Part 9. State / Lifecycle
+    # ==========================================================================
 
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Serialize this Counter to a dictionary.
-        """
+    def enable(self) -> Counter:
+        result = Metric.enable(self)
+        return result if result is not None else self
 
-        return {
-            "id": str(self.id),
-            "metric_type": "counter",
-            "name": self.name,
-            "value": self._value,
-            "revision": self._revision,
-            "enabled": self._enabled,
-            "frozen": self._frozen,
-            "closed": self._closed,
-            "created_at": self._created_at.isoformat(),
-            "updated_at": self._updated_at.isoformat(),
-            "labels": self.labels.to_dict(),
-            "attributes": self.attributes.to_dict(),
-            "metadata": self.metadata.to_dict(),
-        }
+    def disable(self) -> Counter:
+        result = Metric.disable(self)
+        return result if result is not None else self
+
+    def activate(self) -> Counter:
+        result = Metric.activate(self)
+        return result if result is not None else self
+
+    def deactivate(self) -> Counter:
+        result = Metric.deactivate(self)
+        return result if result is not None else self
+
+    def archive(self) -> Counter:
+        result = Metric.archive(self)
+        return result if result is not None else self
+
+    # ==========================================================================
+    # Part 10. Metadata API
+    # ==========================================================================
+
+    @property
+    def labels(self) -> Any:
+        return getattr(self, "_labels", {})
+
+    @property
+    def attributes(self) -> Any:
+        return getattr(self, "_attributes", {})
+
+
+    @property
+    def hooks(self) -> Any:
+        return getattr(self, "_hooks", {})
+
+
+    # ==========================================================================
+    # Part 11. Serialization
+    # ==========================================================================
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = Metric.to_dict(self)
+
+        payload["value"] = self.value
+        payload["metric_type"] = self.metric_type.value
+        payload["unit"] = self.unit.value
+
+        return payload
 
 
     @classmethod
     def from_dict(
         cls,
-        data: dict[str, Any],
-    ) -> "Counter":
-        """
-        Construct a Counter from a dictionary.
-        """
+        payload: dict[str, Any],
+    ) -> Counter:
+        if not isinstance(payload, dict):
+            raise CounterValidationError(
+                "Counter payload must be a dictionary."
+            )
 
-        descriptor = MetricDescriptor(
-            name=data["name"],
-            metric_type="counter",
-            metadata=MetricMetadata.from_dict(
-                data.get(
-                    "metadata",
-                    {},
-                )
-            ),
+        data = copy.deepcopy(payload)
+
+        metric_type = data.pop(
+            "metric_type",
+            DEFAULT_COUNTER_TYPE,
         )
 
-        counter = cls(
-            descriptor=descriptor,
-            labels=MetricLabels.from_dict(
-                data.get(
-                    "labels",
-                    {},
-                )
-            ),
-            attributes=MetricAttributes.from_dict(
-                data.get(
-                    "attributes",
-                    {},
-                )
-            ),
+        if isinstance(metric_type, str):
+            metric_type = MetricType(metric_type)
+
+        if metric_type is not MetricType.COUNTER:
+            raise CounterValidationError(
+                "Counter metric_type must be 'counter'."
+            )
+
+        unit = data.pop(
+            "unit",
+            DEFAULT_COUNTER_UNIT,
         )
 
-        counter._value = data.get(
+        if isinstance(unit, str):
+            unit = MetricUnit(unit)
+
+        constructor_fields = {
+            "name",
             "value",
-            0,
-        )
+            "metric_type",
+            "unit",
+        }
 
-        counter._revision = data.get(
-            "revision",
-            0,
-        )
+        data = {
+            key: value
+            for key, value in data.items()
+            if key in constructor_fields
+        }
 
-        counter._enabled = data.get(
-            "enabled",
-            True,
-        )
+        data["metric_type"] = metric_type
+        data["unit"] = unit
 
-        counter._frozen = data.get(
-            "frozen",
-            False,
-        )
+        counter = cls(**data)
 
-        counter._closed = data.get(
-            "closed",
-            False,
-        )
+        # ------------------------------------------------------------------
+        # Restore Metric metadata after construction.
+        # ------------------------------------------------------------------
 
-        if "created_at" in data:
-            counter._created_at = datetime.fromisoformat(
-                data["created_at"]
-            )
+        metadata = copy.deepcopy(payload)
 
-        if "updated_at" in data:
-            counter._updated_at = datetime.fromisoformat(
-                data["updated_at"]
-            )
+        if "labels" in metadata:
+            counter.labels.clear()
+
+            for key, value in metadata["labels"].items():
+                counter.labels.add(
+                    key,
+                    value,
+                )
+
+        if "attributes" in metadata:
+            counter.attributes.clear()
+
+            for key, value in metadata["attributes"].items():
+                counter.attributes.add(
+                    key,
+                    value,
+                )
+
+        if "annotations" in metadata:
+            counter.annotations.clear()
+
+            for key, value in metadata["annotations"].items():
+                counter.annotations.add(
+                    key,
+                    value,
+                )
+
+        if "tags" in metadata:
+            counter.tags.clear()
+
+            for tag in metadata["tags"]:
+                counter.tags.add(tag)
 
         return counter
 
 
-    def to_json(
-        self,
-        *,
-        indent: int | None = 2,
-    ) -> str:
-        """
-        Serialize this Counter to JSON.
-        """
-
+    def to_json(self) -> str:
         return json.dumps(
             self.to_dict(),
-            indent=indent,
-            ensure_ascii=False,
             sort_keys=True,
         )
 
@@ -871,252 +309,111 @@ class Counter(Metric):
     def from_json(
         cls,
         payload: str,
-    ) -> "Counter":
-        """
-        Construct a Counter from JSON.
-        """
-
-        return cls.from_dict(
-            json.loads(
-                payload,
+    ) -> Counter:
+        if not isinstance(payload, str):
+            raise CounterValidationError(
+                "Counter JSON payload must be a string."
             )
-        )
-    # ======================================================
-    # Part 9. Export
-    # ======================================================
 
-    def prometheus(
-        self,
-    ) -> str:
-        """
-        Export this Counter in Prometheus exposition format.
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise CounterValidationError(
+                "Invalid Counter JSON payload."
+            ) from exc
 
-        Returns
-        -------
-        str
-        """
+        if not isinstance(data, dict):
+            raise CounterValidationError(
+                "Counter JSON payload must decode to a dictionary."
+            )
 
-        labels = self.labels.to_dict()
+        return cls.from_dict(data)
 
-        if labels:
 
-            label_text = ",".join(
 
-                f'{key}="{value}"'
+    # ==========================================================================
+    # Part 12. Copy / Clone
+    # ==========================================================================
 
-                for key, value in sorted(
-                    labels.items()
+    def copy(self) -> Counter:
+        return copy.copy(self)
+
+    def clone(self) -> Counter:
+        return copy.deepcopy(self)
+
+    # ==========================================================================
+    # Part 13. Snapshot
+    # ==========================================================================
+
+    def snapshot(self) -> dict[str, Any]:
+        return copy.deepcopy(self.to_dict())
+
+    # ==========================================================================
+    # Part 14. Restore
+    # ==========================================================================
+
+    def restore(self, snapshot: dict[str, Any]) -> Counter:
+        restored = type(self).from_dict(snapshot)
+
+        for field in (
+            "name",
+            "value",
+            "metric_type",
+            "unit",
+        ):
+            if hasattr(restored, field):
+                setattr(self, field, getattr(restored, field))
+
+        for field in (
+            "_labels",
+            "_attributes",
+            "_annotations",
+            "_tags",
+            "_hooks",
+        ):
+            if hasattr(restored, field):
+                setattr(
+                    self,
+                    field,
+                    copy.deepcopy(getattr(restored, field)),
                 )
 
-            )
+        return self
 
-            return (
-                f"{self.name}"
-                f"{{{label_text}}} "
-                f"{self.value}"
-            )
+    # ==========================================================================
+    # Part 15. Representation
+    # ==========================================================================
 
+    def __repr__(self) -> str:
         return (
-            f"{self.name} "
-            f"{self.value}"
-        )
-
-
-    def otel(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Export as an OpenTelemetry-compatible record.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-
-            "name": self.name,
-
-            "description": self.metadata.description,
-
-            "unit": self.metadata.unit,
-
-            "type": "counter",
-
-            "value": self.value,
-
-            "timestamp": self.updated_at.isoformat(),
-
-            "labels": self.labels.to_dict(),
-
-            "attributes": self.attributes.to_dict(),
-
-            "metadata": self.metadata.to_dict(),
-
-        }
-
-
-    def csv(
-        self,
-    ) -> list[Any]:
-        """
-        Export as a CSV row.
-
-        Returns
-        -------
-        list[Any]
-        """
-
-        return [
-
-            str(self.id),
-
-            self.name,
-
-            "counter",
-
-            self.value,
-
-            self.created_at.isoformat(),
-
-            self.updated_at.isoformat(),
-
-            json.dumps(
-                self.labels.to_dict(),
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-
-            json.dumps(
-                self.attributes.to_dict(),
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-
-            json.dumps(
-                self.metadata.to_dict(),
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-
-        ]
-    # ======================================================
-    # Part 10. Final Polish
-    # ======================================================
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-        """
-
-        return (
-            f"{self.__class__.__name__}("
+            f"Counter("
             f"name={self.name!r}, "
             f"value={self.value!r}, "
-            f"enabled={self.enabled}, "
-            f"frozen={self.frozen}, "
-            f"closed={self.closed})"
+            f"type={self.metric_type.value!r}, "
+            f"unit={self.unit.value!r}"
+            f")"
+        )
+
+    def __str__(self) -> str:
+        return (
+            f"Counter("
+            f"name={self.name}, "
+            f"value={self.value}, "
+            f"type={self.metric_type.value}, "
+            f"unit={self.unit.value}"
+            f")"
         )
 
 
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human-readable representation.
-        """
+# ==============================================================================
+# Part 16. Public API
+# ==============================================================================
 
-        return str(self.value)
-
-
-    def __int__(
-        self,
-    ) -> int:
-        """
-        Convert Counter to integer.
-        """
-
-        return int(self.value)
-
-
-    def __float__(
-        self,
-    ) -> float:
-        """
-        Convert Counter to float.
-        """
-
-        return float(self.value)
-
-
-    def __bool__(
-        self,
-    ) -> bool:
-        """
-        Truth value of this Counter.
-        """
-
-        return self.value > 0
-
-
-    # ======================================================
-    # Compatibility
-    # ======================================================
-
-    @property
-    def total(
-        self,
-    ) -> int:
-        """
-        Compatibility alias for value.
-        """
-
-        return self.value
-
-
-    @property
-    def count(
-        self,
-    ) -> int:
-        """
-        Compatibility alias for value.
-        """
-
-        return self.value
-
-
-    @property
-    def metric_type(
-        self,
-    ) -> str:
-        """
-        Metric type.
-
-        Compatibility helper.
-        """
-
-        return self.descriptor.metric_type
-
-
-    @property
-    def kind(
-        self,
-    ) -> str:
-        """
-        Compatibility alias.
-        """
-
-        return self.descriptor.kind
-
-
-    @property
-    def is_counter(
-        self,
-    ) -> bool:
-        """
-        Convenience type check.
-        """
-
-        return True                                                                            
+__all__ = [
+    "DEFAULT_COUNTER_VALUE",
+    "DEFAULT_COUNTER_TYPE",
+    "DEFAULT_COUNTER_UNIT",
+    "CounterValue",
+    "CounterValidationError",
+    "Counter",
+]

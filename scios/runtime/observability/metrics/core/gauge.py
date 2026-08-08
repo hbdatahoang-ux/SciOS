@@ -1,813 +1,600 @@
+# ==============================================================================
+# Gauge
+# ==============================================================================
+
 """
-SciOS Observability
-==================
+A Gauge represents a metric whose value may increase or decrease freely.
 
-Gauge Metric
-
-Part 1
-------
-
-Foundation
-
-Responsibilities
-----------------
-
-- Gauge metric implementation
-- Runtime construction
-- Default value
-- Runtime validation
-
-A Gauge represents a numeric value that may
-increase or decrease over time.
-
-Examples
---------
-
-CPU Usage
-Memory Usage
-Temperature
-Queue Length
-Battery Level
+Python 3.11+
 """
 
 from __future__ import annotations
 
-from numbers import Real
-from typing import Any
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
 
-from .metric import Metric
-from .descriptor import MetricDescriptor
-from .metadata import MetricMetadata
-from .labels import MetricLabels
-from .attributes import MetricAttributes
+import json
+from collections.abc import Iterator
+from copy import deepcopy
+from typing import Any, Final, TypeAlias
 
-__all__ = [
-    "Gauge",
-]
+from .metric_state import MetricState
+
+# ==============================================================================
+# Part 2. Constants
+# ==============================================================================
+
+__version__: Final[str] = "0.1.0"
+
+DEFAULT_VALUE: Final[float] = 0.0
 
 
-# ==========================================================
-# Gauge
-# ==========================================================
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+Number: TypeAlias = int | float
+
+Metadata: TypeAlias = dict[str, Any]
 
 
-class Gauge(Metric):
+# ==============================================================================
+# Part 4. Exceptions
+# ==============================================================================
+
+class GaugeError(RuntimeError):
     """
-    Numeric metric whose value may both increase
-    and decrease.
-
-    Unlike Counter, Gauge supports arbitrary
-    assignment via set() and update().
+    Base exception for Gauge errors.
     """
 
-    # ======================================================
-    # Constructor
-    # ======================================================
+
+class GaugeValidationError(
+    GaugeError,
+    ValueError,
+):
+    """
+    Raised when Gauge configuration or value is invalid.
+    """
+
+
+# ==============================================================================
+# Part 4B. Annotation / Tag Containers
+# ==============================================================================
+
+
+class _AnnotationStore:
+    """
+    Mutable key-value annotation store.
+    """
 
     def __init__(
         self,
-        *,
-        descriptor: MetricDescriptor,
-        metadata: MetricMetadata | None = None,
-        labels: MetricLabels | None = None,
-        attributes: MetricAttributes | None = None,
-        initial_value: Real = 0,
+        initial: dict[str, Any] | None = None,
     ) -> None:
-        """
-        Initialize a Gauge.
-
-        Parameters
-        ----------
-        descriptor:
-            Metric descriptor.
-
-        metadata:
-            Runtime metadata.
-
-        labels:
-            Metric labels.
-
-        attributes:
-            Runtime attributes.
-
-        initial_value:
-            Initial gauge value.
-        """
-
-        super().__init__(
-            descriptor=descriptor,
-            metadata=metadata,
-            labels=labels,
-            attributes=attributes,
+        self._data: dict[str, Any] = (
+            deepcopy(initial)
+            if initial is not None
+            else {}
         )
 
-        self.validate_value(
-            initial_value,
-        )
-
-        self._value = initial_value
-
-        self._previous_value = None
-
-        self._dirty = False
-
-    # ======================================================
-    # Default Value
-    # ======================================================
-
-    @staticmethod
-    def _default_value() -> int:
-        """
-        Default Gauge value.
-        """
-
-        return 0
-
-    # ======================================================
-    # Runtime Validation
-    # ======================================================
-
-    @staticmethod
-    def validate_value(
+    def add(
+        self,
+        key: str,
         value: Any,
     ) -> None:
-        """
-        Validate a Gauge value.
-
-        Parameters
-        ----------
-        value:
-            Value to validate.
-
-        Raises
-        ------
-        TypeError
-            If value is not numeric.
-        """
-
-        if not isinstance(
-            value,
-            Real,
-        ):
-            raise TypeError(
-                "Gauge value must be numeric."
-            )
-
-    @classmethod
-    def validate_runtime(
-        cls,
-        value: Any,
-    ) -> bool:
-        """
-        Runtime validation helper.
-
-        Returns
-        -------
-        bool
-        """
-
-        try:
-
-            cls.validate_value(
-                value,
-            )
-
-            return True
-
-        except Exception:
-
-            return False
-    # ======================================================
-    # Part 2. Gauge API
-    # ======================================================
+        self._data[key] = value
 
     def get(
         self,
-    ) -> Real:
-        """
-        Return the current Gauge value.
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._data.get(key, default)
 
-        Returns
-        -------
-        Real
-            Current numeric value.
-        """
-
-        return self.value
-
-
-    def set(
+    def remove(
         self,
-        value: Real,
-    ) -> None:
-        """
-        Set the Gauge to a new value.
+        key: str,
+    ) -> Any:
+        return self._data.pop(key)
 
-        Parameters
-        ----------
-        value:
-            New numeric value.
-        """
-
-        self.validate_value(
-            value,
-        )
-
-        super().set(
-            value,
-        )
-
+    def clear(self) -> None:
+        self._data.clear()
 
     def update(
         self,
-        value: Real,
+        values: dict[str, Any],
     ) -> None:
-        """
-        Update the Gauge.
+        self._data.update(values)
 
-        Alias of set().
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
 
-        Parameters
-        ----------
-        value:
-            New numeric value.
-        """
+    def __setitem__(
+        self,
+        key: str,
+        value: Any,
+    ) -> None:
+        self._data[key] = value
 
-        self.set(
+    def __contains__(self, key: str) -> bool:
+        return key in self._data
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def to_dict(self) -> dict[str, Any]:
+        return deepcopy(self._data)
+
+
+class _TagStore:
+    """
+    Mutable tag store.
+
+    Supports both set-like ``add()`` and
+    mapping-style item assignment.
+    """
+
+    def __init__(
+        self,
+        initial: dict[str, Any] | None = None,
+    ) -> None:
+        self._data: dict[str, Any] = (
+            deepcopy(initial)
+            if initial is not None
+            else {}
+        )
+
+    def add(
+        self,
+        value: str,
+    ) -> None:
+        self._data[value] = value
+
+    def get(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        return self._data.get(key, default)
+
+    def remove(
+        self,
+        key: str,
+    ) -> Any:
+        return self._data.pop(key)
+
+    def clear(self) -> None:
+        self._data.clear()
+
+    def update(
+        self,
+        values: dict[str, Any],
+    ) -> None:
+        self._data.update(values)
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def __setitem__(
+        self,
+        key: str,
+        value: Any,
+    ) -> None:
+        self._data[key] = value
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._data
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def to_dict(self) -> dict[str, Any]:
+        return deepcopy(self._data)
+
+# ==============================================================================
+# Part 5. Constructor
+# ==============================================================================
+
+class Gauge:
+    """
+    Runtime Gauge metric.
+
+    A Gauge stores a value that can move freely in either direction.
+
+    Parameters
+    ----------
+    name:
+        Optional metric name.
+
+    value:
+        Initial numeric value.
+
+    description:
+        Optional human-readable description.
+
+    unit:
+        Optional measurement unit.
+
+    metadata:
+        Optional metadata dictionary.
+    """
+
+    def __init__(
+        self,
+        name: str | None = None,
+        value: Number = DEFAULT_VALUE,
+        *,
+        description: str | None = None,
+        unit: str | None = None,
+        metadata: Metadata | None = None,
+    ) -> None:
+
+        if name is not None and not isinstance(
+            name,
+            str,
+        ):
+            raise TypeError(
+                "name must be str or None."
+            )
+
+        if not isinstance(
             value,
+            (int, float),
+        ) or isinstance(value, bool):
+            raise TypeError(
+                "value must be int or float."
+            )
+
+        if description is not None and not isinstance(
+            description,
+            str,
+        ):
+            raise TypeError(
+                "description must be str or None."
+            )
+
+        if unit is not None and not isinstance(
+            unit,
+            str,
+        ):
+            raise TypeError(
+                "unit must be str or None."
+            )
+
+        if metadata is not None and not isinstance(
+            metadata,
+            dict,
+        ):
+            raise TypeError(
+                "metadata must be dict or None."
+            )
+
+        self._name: str | None = name
+
+        self._value: Number = value
+
+        self._description: str | None = description
+
+        self._unit: str | None = unit
+
+        self._metadata: Metadata = (
+            dict(metadata)
+            if metadata is not None
+            else {}
         )
 
+        self._annotations = _AnnotationStore()
 
-    def inc(
-        self,
-        amount: Real = 1,
-    ) -> Real:
-        """
-        Increase the Gauge.
-
-        Parameters
-        ----------
-        amount:
-            Increment amount.
-
-        Returns
-        -------
-        Real
-            Updated value.
-        """
-
-        self.validate_value(
-            amount,
-        )
-
-        new_value = self.value + amount
-
-        self.set(
-            new_value,
-        )
-
-        return self.value
+        self._tags = _TagStore()
 
 
-    def dec(
-        self,
-        amount: Real = 1,
-    ) -> Real:
-        """
-        Decrease the Gauge.
-
-        Parameters
-        ----------
-        amount:
-            Decrement amount.
-
-        Returns
-        -------
-        Real
-            Updated value.
-        """
-
-        self.validate_value(
-            amount,
-        )
-
-        new_value = self.value - amount
-
-        self.set(
-            new_value,
-        )
-
-        return self.value
-
-
-    def reset(
-        self,
-    ) -> None:
-        """
-        Reset the Gauge to its default value.
-        """
-
-        self.set(
-            self._default_value(),
-        )
-    # ======================================================
-    # Part 3. Properties
-    # ======================================================
+        self._state = MetricState()
 
     @property
-    def value(
-        self,
-    ) -> Real:
+    def annotations(self) -> _AnnotationStore:
         """
-        Current Gauge value.
-
-        Returns
-        -------
-        Real
-            Current numeric value.
+        Return mutable metric annotations.
         """
+        return self._annotations
 
+    @property
+    def tags(self) -> _TagStore:
+        """
+        Return mutable metric tags.
+        """
+        return self._tags
+# ==============================================================================
+# Part 6. Properties
+# ==============================================================================
+
+    @property
+    def name(self) -> str | None:
+        """
+        Return the metric name.
+        """
+        return self._name
+
+    @property
+    def value(self) -> Number:
+        """
+        Return the current gauge value.
+        """
         return self._value
 
+    @property
+    def description(self) -> str | None:
+        """
+        Return the metric description.
+        """
+        return self._description
 
     @property
-    def created_at(
-        self,
-    ):
+    def unit(self) -> str | None:
         """
-        Gauge creation timestamp.
-
-        Returns
-        -------
-        datetime
+        Return the metric unit.
         """
-
-        return self._created_at
-
+        return self._unit
 
     @property
-    def updated_at(
-        self,
-    ):
+    def metadata(self) -> Metadata:
         """
-        Last update timestamp.
-
-        Returns
-        -------
-        datetime
+        Return a copy of metric metadata.
         """
-
-        return self._updated_at
-
+        return dict(self._metadata)
 
     @property
-    def revision(
+    def state(self) -> MetricState:
+        """
+        Return the metric runtime state.
+        """
+        return self._state
+
+# ==============================================================================
+# Part 7. Value Operations
+# ==============================================================================
+
+    def set(self, value: Number) -> Number:
+        """
+        Set the gauge value.
+        """
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError("value must be int or float.")
+
+        self._value = value
+        return self._value
+
+    def increment(self, amount: Number = 1) -> Number:
+        """
+        Increase the gauge value.
+        """
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+            raise TypeError("amount must be int or float.")
+
+        self._value += amount
+        return self._value
+
+    def decrement(self, amount: Number = 1) -> Number:
+        """
+        Decrease the gauge value.
+        """
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+            raise TypeError("amount must be int or float.")
+
+        self._value -= amount
+        return self._value
+
+    def add(self, amount: Number) -> Number:
+        """
+        Add a numeric amount to the gauge value.
+        """
+        return self.increment(amount)
+
+    def subtract(self, amount: Number) -> Number:
+        """
+        Subtract a numeric amount from the gauge value.
+        """
+        return self.decrement(amount)
+
+
+# ==============================================================================
+# Part 8. State
+# ==============================================================================
+
+    def enable(self) -> None:
+        """
+        Enable the gauge.
+        """
+        self._state.enable()
+
+    def disable(self) -> None:
+        """
+        Disable the gauge.
+        """
+        self._state.disable()
+
+    def activate(self) -> None:
+        """
+        Activate the gauge.
+        """
+        self._state.activate()
+
+    def deactivate(self) -> None:
+        """
+        Deactivate the gauge.
+        """
+        self._state.deactivate()
+
+    def is_enabled(self) -> bool:
+        """
+        Return whether the gauge is enabled.
+        """
+        return self._state.is_enabled()
+
+    def is_active(self) -> bool:
+        """
+        Return whether the gauge is active.
+        """
+        return self._state.is_active()
+
+    def is_healthy(self) -> bool:
+        """
+        Return whether the gauge is healthy.
+        """
+        return self._state.is_healthy()
+
+    def is_warning(self) -> bool:
+        """
+        Return whether the gauge is in warning state.
+        """
+        return self._state.is_warning()
+
+    def is_error(self) -> bool:
+        """
+        Return whether the gauge is in error state.
+        """
+        return self._state.is_error()
+
+    def is_stale(self) -> bool:
+        """
+        Return whether the gauge is stale.
+        """
+        return self._state.is_stale()
+
+
+# ==============================================================================
+# Part 9. Lifecycle
+# ==============================================================================
+
+    def reset(self) -> None:
+        """
+        Reset the gauge value and runtime state.
+        """
+        self._value = DEFAULT_VALUE
+        self._state.reset()
+
+    def archive(self) -> None:
+        """
+        Archive the gauge.
+        """
+        self._state.archive()
+
+    def restore(self) -> None:
+        """
+        Restore the gauge to active state.
+        """
+        self._state.restore()
+
+
+# ==============================================================================
+# Part 10. Annotations & Tags
+# ==============================================================================
+
+    def set_description(
         self,
-    ) -> int:
-        """
-        Runtime revision number.
-
-        Increased whenever the Gauge state changes.
-        """
-
-        return self._revision
-
-
-    @property
-    def dirty(
-        self,
-    ) -> bool:
-        """
-        Whether the Gauge has been modified since
-        the last checkpoint or snapshot.
-        """
-
-        return self._dirty
-    # ======================================================
-    # Part 4. Snapshot
-    # ======================================================
-
-    def snapshot(
-        self,
-    ) -> MetricSnapshot:
-        """
-        Create an immutable snapshot of this Gauge.
-
-        Returns
-        -------
-        MetricSnapshot
-        """
-
-        return MetricSnapshot.create(
-
-            name=self.name,
-
-            value=self.value,
-
-            metric_type="gauge",
-
-            labels=self.labels.to_dict(),
-
-            attributes=self.attributes.to_dict(),
-
-            metadata=self.metadata.to_dict(),
-
-        )
-
-
-    def restore(
-        self,
-        snapshot: MetricSnapshot,
+        description: str | None,
     ) -> None:
         """
-        Restore Gauge state from a snapshot.
-
-        Parameters
-        ----------
-        snapshot:
-            Source snapshot.
+        Set the metric description.
         """
-
-        if snapshot.metric_type != "gauge":
-            raise TypeError(
-                "Snapshot is not a Gauge snapshot."
-            )
-
-        self.set(
-            snapshot.value,
-        )
-
-        self.labels.clear()
-        self.labels.update(
-            snapshot.labels.to_dict(),
-        )
-
-        self.attributes.clear()
-        self.attributes.update(
-            snapshot.attributes.to_dict(),
-        )
-
-        self.metadata.clear()
-        self.metadata.update(
-            snapshot.metadata.to_dict(),
-        )
-
-
-    def clone(
-        self,
-    ) -> "Gauge":
-        """
-        Deep clone this Gauge.
-
-        Returns
-        -------
-        Gauge
-        """
-
-        clone = self.__class__(
-
-            descriptor=self.descriptor.copy(),
-
-            metadata=self.metadata.copy(),
-
-            labels=self.labels.copy(),
-
-            attributes=self.attributes.copy(),
-
-            initial_value=self.value,
-
-        )
-
-        return clone
-
-
-    def copy(
-        self,
-    ) -> "Gauge":
-        """
-        Alias of clone().
-
-        Returns
-        -------
-        Gauge
-        """
-
-        return self.clone()
-    # ======================================================
-    # Part 5. Lifecycle
-    # ======================================================
-
-    def freeze(
-        self,
-    ) -> None:
-        """
-        Freeze this Gauge.
-
-        A frozen Gauge cannot be modified until
-        unfreeze() is called.
-        """
-
-        super().freeze()
-
-
-    def unfreeze(
-        self,
-    ) -> None:
-        """
-        Unfreeze this Gauge.
-        """
-
-        super().unfreeze()
-
-
-    def enable(
-        self,
-    ) -> None:
-        """
-        Enable this Gauge.
-        """
-
-        super().enable()
-
-
-    def disable(
-        self,
-    ) -> None:
-        """
-        Disable this Gauge.
-
-        Disabled Gauges reject future updates but
-        preserve their runtime state.
-        """
-
-        super().disable()
-
-
-    def close(
-        self,
-    ) -> None:
-        """
-        Permanently close this Gauge.
-
-        Closed Gauges become read-only.
-        """
-
-        super().close()
-
-
-    def reopen(
-        self,
-    ) -> None:
-        """
-        Reopen a previously closed Gauge.
-
-        Mainly used for runtime recovery.
-        """
-
-        super().reopen()
-    # ======================================================
-    # Part 6. Validation
-    # ======================================================
-
-    def validate(
-        self,
-    ) -> None:
-        """
-        Validate the current Gauge state.
-
-        Raises
-        ------
-        TypeError
-            If the value is invalid.
-        """
-
-        self.validate_value(
-            self.value,
-        )
-
-
-    @staticmethod
-    def validate_value(
-        value: Any,
-    ) -> None:
-        """
-        Validate a Gauge value.
-
-        Parameters
-        ----------
-        value:
-            Value to validate.
-
-        Raises
-        ------
-        TypeError
-            If the value is not numeric.
-        """
-
-        if not isinstance(
-            value,
-            Real,
+        if description is not None and not isinstance(
+            description,
+            str,
         ):
             raise TypeError(
-                "Gauge value must be numeric."
+                "description must be str or None."
             )
 
+        self._description = description
 
-    @staticmethod
-    def validate_delta(
-        delta: Any,
+    def set_unit(
+        self,
+        unit: str | None,
     ) -> None:
         """
-        Validate an increment/decrement amount.
-
-        Parameters
-        ----------
-        delta:
-            Increment or decrement value.
-
-        Raises
-        ------
-        TypeError
-            If delta is not numeric.
+        Set the metric unit.
         """
+        if unit is not None and not isinstance(unit, str):
+            raise TypeError("unit must be str or None.")
 
-        if not isinstance(
-            delta,
-            Real,
-        ):
-            raise TypeError(
-                "Gauge delta must be numeric."
-            )
+        self._unit = unit
 
-
-    @staticmethod
-    def validate_numeric(
-        value: Any,
-    ) -> bool:
+    def set_metadata(
+        self,
+        metadata: Metadata | None,
+    ) -> None:
         """
-        Check whether a value is numeric.
-
-        Parameters
-        ----------
-        value:
-            Value to check.
-
-        Returns
-        -------
-        bool
+        Replace metric metadata.
         """
+        if metadata is not None and not isinstance(metadata, dict):
+            raise TypeError("metadata must be dict or None.")
 
-        return isinstance(
-            value,
-            Real,
+        self._metadata = (
+            dict(metadata)
+            if metadata is not None
+            else {}
         )
-    # ======================================================
-    # Part 7. Diagnostics
-    # ======================================================
 
-    def statistics(
+    def update_metadata(
         self,
-    ) -> dict[str, Any]:
+        **values: Any,
+    ) -> None:
         """
-        Return runtime statistics for this Gauge.
-
-        Returns
-        -------
-        dict[str, Any]
+        Update metric metadata.
         """
+        self._metadata.update(values)
 
+
+# ==============================================================================
+# Part 11. Snapshot
+# ==============================================================================
+
+    def snapshot(self) -> dict[str, Any]:
+        """
+        Return an independent Gauge snapshot.
+        """
         return {
-            "name": self.name,
-            "metric_type": "gauge",
-            "value": self.value,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "revision": self.revision,
-            "update_count": self.update_count,
-            "dirty": self.dirty,
-            "enabled": self.enabled,
-            "frozen": self.frozen,
-            "closed": self.closed,
-        }
-
-
-    def health(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime health information.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        issues: list[str] = []
-
-        if self.closed:
-            issues.append("closed")
-
-        if not self.enabled:
-            issues.append("disabled")
-
-        if self.frozen:
-            issues.append("frozen")
-
-        return {
-            "healthy": len(issues) == 0,
-            "status": (
-                "healthy"
-                if not issues
-                else "degraded"
+            "name": self._name,
+            "value": self._value,
+            "description": self._description,
+            "unit": self._unit,
+            "metadata": deepcopy(self._metadata),
+            "annotations": self._annotations.to_dict(),
+            "tags": self._tags.to_dict(),
+            "state": (
+                self._state.to_dict()
+                if hasattr(self._state, "to_dict")
+                else deepcopy(self._state)
             ),
-            "issues": issues,
         }
+# ==============================================================================
+# Part 12. Serialization
+# ==============================================================================
 
-
-    def dump(
-        self,
-    ) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
-        Return a complete runtime dump.
-
-        Returns
-        -------
-        dict[str, Any]
+        Serialize Gauge to a dictionary.
         """
-
         return {
-            "id": str(self.id),
-            "name": self.name,
-            "metric_type": "gauge",
-            "value": self.value,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "revision": self.revision,
-            "update_count": self.update_count,
-            "enabled": self.enabled,
-            "frozen": self.frozen,
-            "closed": self.closed,
-            "labels": self.labels.to_dict(),
-            "attributes": self.attributes.to_dict(),
-            "metadata": self.metadata.to_dict(),
+            "name": self._name,
+            "value": self._value,
+            "description": self._description,
+            "unit": self._unit,
+            "metadata": deepcopy(self._metadata),
+            "annotations": self._annotations.to_dict(),
+            "tags": self._tags.to_dict(),
+            "state": (
+                self._state.to_dict()
+                if hasattr(self._state, "to_dict")
+                else deepcopy(self._state)
+            ),
         }
-
-
-    def inspect(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return a production-friendly inspection report.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-            "descriptor": self.descriptor.name,
-            "statistics": self.statistics(),
-            "health": self.health(),
-            "runtime": {
-                "revision": self.revision,
-                "dirty": self.dirty,
-                "enabled": self.enabled,
-                "frozen": self.frozen,
-                "closed": self.closed,
-            },
-        }
-    # ======================================================
-    # Part 8. Serialization
-    # ======================================================
-
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Serialize this Gauge to a dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-            "id": str(self.id),
-            "type": "gauge",
-            "name": self.name,
-            "value": self.value,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "revision": self.revision,
-            "update_count": self.update_count,
-            "enabled": self.enabled,
-            "frozen": self.frozen,
-            "closed": self.closed,
-            "labels": self.labels.to_dict(),
-            "attributes": self.attributes.to_dict(),
-            "metadata": self.metadata.to_dict(),
-        }
-
 
     @classmethod
     def from_dict(
@@ -815,275 +602,297 @@ class Gauge(Metric):
         data: dict[str, Any],
     ) -> "Gauge":
         """
-        Construct a Gauge from a dictionary.
-
-        Parameters
-        ----------
-        data
-            Serialized Gauge.
-
-        Returns
-        -------
-        Gauge
+        Restore Gauge from a dictionary.
         """
-
-        descriptor = MetricDescriptor(
-            name=data["name"],
-            metric_type="gauge",
-            metadata=MetricMetadata.from_dict(
+        gauge = cls(
+            name=data.get("name"),
+            value=data.get(
+                "value",
+                DEFAULT_VALUE,
+            ),
+            description=data.get("description"),
+            unit=data.get("unit"),
+            metadata=deepcopy(
                 data.get("metadata", {})
             ),
         )
 
-        gauge = cls(
-            descriptor=descriptor,
-            labels=MetricLabels.from_dict(
-                data.get("labels", {})
-            ),
-            attributes=MetricAttributes.from_dict(
-                data.get("attributes", {})
-            ),
+        gauge._annotations = _AnnotationStore(
+            data.get("annotations", {})
         )
 
-        gauge.set(
-            data.get("value", 0.0)
+        gauge._tags = _TagStore(
+            data.get("tags", {})
         )
+
+        state_data = data.get("state")
+
+        if state_data is not None:
+            if hasattr(
+                MetricState,
+                "from_dict",
+            ):
+                gauge._state = MetricState.from_dict(
+                    state_data
+                )
+            elif hasattr(
+                gauge._state,
+                "restore",
+            ):
+                gauge._state.restore(state_data)
 
         return gauge
 
-
-    def to_json(
-        self,
-        *,
-        indent: int | None = 2,
-    ) -> str:
+    def to_json(self) -> str:
         """
         Serialize Gauge to JSON.
-
-        Parameters
-        ----------
-        indent
-            JSON indentation.
-
-        Returns
-        -------
-        str
         """
-
-        import json
-
         return json.dumps(
             self.to_dict(),
-            indent=indent,
-            ensure_ascii=False,
             sort_keys=True,
         )
-
 
     @classmethod
     def from_json(
         cls,
-        payload: str,
+        data: str,
     ) -> "Gauge":
         """
-        Deserialize Gauge from JSON.
-
-        Parameters
-        ----------
-        payload
-            JSON string.
-
-        Returns
-        -------
-        Gauge
+        Restore Gauge from JSON.
         """
-
-        import json
-
         return cls.from_dict(
-            json.loads(payload)
+            json.loads(data)
         )
-    # ======================================================
-    # Part 9. Export
-    # ======================================================
 
-    def prometheus(
-        self,
-    ) -> str:
+
+
+# ==============================================================================
+# Part 13. Copy
+# ==============================================================================
+
+    def copy(self) -> "Gauge":
         """
-        Export this Gauge in Prometheus exposition format.
+        Return an independent copy.
+        """
+        return self.from_dict(
+            self.to_dict()
+        )
+
+    def clone(self) -> "Gauge":
+        """
+        Return an independent clone.
+        """
+        return self.copy()
+
+
+# ==============================================================================
+# Part 14. Validation
+# ==============================================================================
+
+    def validate(self) -> bool:
+        """
+        Validate the current Gauge.
 
         Returns
         -------
-        str
+        bool
+            True when the Gauge is valid.
+
+        Raises
+        ------
+        ValueError
+            If a Gauge value or lifecycle state is invalid.
+        TypeError
+            If an internal field has an invalid type.
         """
 
-        labels = ""
+        # ------------------------------------------------------------------
+        # Name
+        # ------------------------------------------------------------------
 
-        if len(self.labels):
-
-            labels = (
-                "{"
-                + ",".join(
-                    f'{k}="{v}"'
-                    for k, v in sorted(
-                        self.labels.items()
-                    )
-                )
-                + "}"
+        if self._name is not None and not isinstance(
+            self._name,
+            str,
+        ):
+            raise TypeError(
+                "name must be str or None."
             )
 
-        return (
-            f"{self.name}"
-            f"{labels} "
-            f"{self.value}"
-        )
+        # ------------------------------------------------------------------
+        # Value
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self._value,
+            (int, float),
+        ) or isinstance(
+            self._value,
+            bool,
+        ):
+            raise TypeError(
+                "value must be int or float."
+            )
+
+        # ------------------------------------------------------------------
+        # Description
+        # ------------------------------------------------------------------
+
+        if self._description is not None and not isinstance(
+            self._description,
+            str,
+        ):
+            raise TypeError(
+                "description must be str or None."
+            )
+
+        # ------------------------------------------------------------------
+        # Unit
+        # ------------------------------------------------------------------
+
+        if self._unit is not None and not isinstance(
+            self._unit,
+            str,
+        ):
+            raise TypeError(
+                "unit must be str or None."
+            )
+
+        # ------------------------------------------------------------------
+        # Metadata
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self._metadata,
+            dict,
+        ):
+            raise TypeError(
+                "metadata must be dict."
+            )
+
+        # ------------------------------------------------------------------
+        # Annotations
+        #
+        # Do NOT require dict here.
+        # The annotation container has its own API.
+        # ------------------------------------------------------------------
+
+        if self._annotations is None:
+            raise TypeError(
+                "annotations must not be None."
+            )
+
+        # ------------------------------------------------------------------
+        # Tags
+        #
+        # Do NOT require dict here.
+        # The tag container has its own API.
+        # ------------------------------------------------------------------
+
+        if self._tags is None:
+            raise TypeError(
+                "tags must not be None."
+            )
+
+        # ------------------------------------------------------------------
+        # Runtime State
+        # ------------------------------------------------------------------
+
+        if self._state is None:
+            raise ValueError(
+                "state must not be None."
+            )
+
+        # ------------------------------------------------------------------
+        # State type
+        # ------------------------------------------------------------------
+
+        if not isinstance(
+            self._state,
+            MetricState,
+        ):
+            raise TypeError(
+                "state must be MetricState."
+            )
+
+        # ------------------------------------------------------------------
+        # State validation
+        # ------------------------------------------------------------------
+
+        try:
+            state_valid = self._state.validate()
+        except (ValueError, TypeError):
+            raise
+        except Exception as exc:
+            raise ValueError(
+                "invalid Gauge lifecycle state."
+            ) from exc
+
+        if state_valid is False:
+            raise ValueError(
+                "invalid Gauge lifecycle state."
+            )
+
+        return True
 
 
-    def otel(
+# ==============================================================================
+# Part 15. Equality
+# ==============================================================================
+
+    def __eq__(
         self,
-    ) -> dict[str, Any]:
-        """
-        Export this Gauge as an OpenTelemetry-compatible
-        dictionary.
-
-        Returns
-        -------
-        dict[str, Any]
-        """
-
-        return {
-            "name": self.name,
-            "description": self.metadata.description,
-            "unit": self.metadata.unit,
-            "type": "gauge",
-            "value": self.value,
-            "timestamp": self.updated_at.isoformat(),
-            "labels": self.labels.to_dict(),
-            "attributes": self.attributes.to_dict(),
-            "metadata": self.metadata.to_dict(),
-        }
-
-
-    def csv(
-        self,
-    ) -> list[Any]:
-        """
-        Export this Gauge as a CSV row.
-
-        Returns
-        -------
-        list[Any]
-        """
-
-        return [
-            self.name,
-            "gauge",
-            self.value,
-            self.updated_at.isoformat(),
-            self.revision,
-            self.update_count,
-            self.metadata.unit,
-            self.metadata.description,
-        ]
-    # ======================================================
-    # Part 10. Final Polish
-    # ======================================================
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-        """
-
-        return (
-            f"{self.__class__.__name__}("
-            f"name={self.name!r}, "
-            f"value={self.value!r}, "
-            f"revision={self.revision}, "
-            f"enabled={self.enabled}, "
-            f"frozen={self.frozen}, "
-            f"closed={self.closed})"
-        )
-
-
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human-readable representation.
-        """
-
-        return str(self.value)
-
-
-    def __int__(
-        self,
-    ) -> int:
-        """
-        Integer conversion.
-        """
-
-        if self.value is None:
-            return 0
-
-        return int(self.value)
-
-
-    def __float__(
-        self,
-    ) -> float:
-        """
-        Floating-point conversion.
-        """
-
-        if self.value is None:
-            return 0.0
-
-        return float(self.value)
-
-
-    def __bool__(
-        self,
+        other: object,
     ) -> bool:
         """
-        Truthiness.
-
-        Returns False only when the value evaluates
-        to False.
+        Compare two gauges by value and configuration.
         """
+        if not isinstance(other, Gauge):
+            return NotImplemented
 
-        return bool(self.value)
+        return self.to_dict() == other.to_dict()
 
 
-    @property
-    def compatibility(
-        self,
-    ) -> dict[str, bool]:
+# ==============================================================================
+# Part 16. Representation
+# ==============================================================================
+
+    def __repr__(self) -> str:
         """
-        Runtime compatibility information.
-
-        Useful for exporters, registries,
-        collectors and monitoring pipelines.
+        Return an unambiguous Gauge representation.
         """
+        return (
+            "Gauge("
+            f"name={self._name!r}, "
+            f"value={self._value!r}, "
+            f"description={self._description!r}, "
+            f"unit={self._unit!r}, "
+            f"state={self._state!r}"
+            ")"
+        )
 
-        return {
-            "metric": True,
-            "gauge": True,
-            "counter": False,
-            "histogram": False,
-            "summary": False,
-            "timer": False,
-            "snapshot": True,
-            "serialization": True,
-            "prometheus": True,
-            "opentelemetry": True,
-            "csv": True,
-            "thread_safe": True,
-            "mutable": (
-                self.enabled
-                and not self.frozen
-                and not self.closed
-            ),
-        }                                                                            
+    def __str__(self) -> str:
+        """
+        Return the human-readable representation.
+        """
+        if self._name is not None:
+            return (
+                f"{self._name}="
+                f"{self._value}"
+            )
+
+        return str(self._value)
+
+
+# ==============================================================================
+# Part 17. Public API
+# ==============================================================================
+
+__all__ = [
+    "__version__",
+    "DEFAULT_VALUE",
+    "Number",
+    "Metadata",
+    "GaugeError",
+    "GaugeValidationError",
+    "Gauge",
+]                
