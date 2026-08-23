@@ -1,11 +1,18 @@
 """
 SciOS Runtime Observability
 Shared tracing enums.
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
 from enum import Enum
+
+
+# ==============================================================================
+# Execution Phase
+# ==============================================================================
 
 
 class ExecutionPhase(str, Enum):
@@ -22,6 +29,11 @@ class ExecutionPhase(str, Enum):
     CANCELLED = "cancelled"
 
 
+# ==============================================================================
+# Span Kind
+# ==============================================================================
+
+
 class SpanKind(str, Enum):
     """
     Span operation type.
@@ -32,6 +44,11 @@ class SpanKind(str, Enum):
     CLIENT = "client"
     PRODUCER = "producer"
     CONSUMER = "consumer"
+
+
+# ==============================================================================
+# Trace State
+# ==============================================================================
 
 
 class TraceState(str, Enum):
@@ -45,6 +62,11 @@ class TraceState(str, Enum):
     CANCELLED = "cancelled"
 
 
+# ==============================================================================
+# Sampling Decision
+# ==============================================================================
+
+
 class SamplingDecision(str, Enum):
     """
     Trace sampling decision.
@@ -53,6 +75,11 @@ class SamplingDecision(str, Enum):
     DROP = "drop"
     RECORD = "record"
     RECORD_AND_SAMPLE = "record_and_sample"
+
+
+# ==============================================================================
+# Severity
+# ==============================================================================
 
 
 class Severity(str, Enum):
@@ -65,6 +92,11 @@ class Severity(str, Enum):
     WARNING = "warning"
     ERROR = "error"
     CRITICAL = "critical"
+
+
+# ==============================================================================
+# Public API
+# ==============================================================================
 
 
 __all__ = [

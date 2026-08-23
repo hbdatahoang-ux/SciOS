@@ -1,112 +1,774 @@
-"""
-SciOS Observability - OpenTelemetry Exporter
-============================================
-
-Adapter between SciOS tracing models and OpenTelemetry.
-
-Responsibilities
-----------------
-- Convert SciOS Trace -> OTel Span data
-- Convert SciOS Span -> OTel Span
-- Optional integration with OpenTelemetry SDK
-- Graceful fallback if SDK is unavailable
-"""
+# ==============================================================================
+# SciOS Runtime Observability
+# OpenTelemetry Exporter
+# ==============================================================================
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import time
+from typing import Any, Iterable, Mapping, Optional
 
-from .exporter import TraceExporter
-from .trace import Trace
-from .span import Span
+from .exporter import (
+    ExportError,
+    ExportFormat,
+    ExportPayload,
+    ExportResult,
+    Exporter,
+)
+
+
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
+
+# typing
+# time
+# base exporter
+
+
+# ==============================================================================
+# Part 2. Public API
+# ==============================================================================
+
+
+class OTELExportError(
+    ExportError,
+):
+    """
+    Raised when an OpenTelemetry export operation fails.
+    """
+
+    pass
+
 
 __all__ = [
-    "OpenTelemetryExporter",
+    "OTELExporter",
+    "OTELExportError",
 ]
 
 
-class OpenTelemetryExporter(TraceExporter):
+# ==============================================================================
+# Part 3. OTELExporter
+# ==============================================================================
+
+
+class OTELExporter(
+    Exporter,
+):
     """
-    Adapter exporting SciOS traces to OpenTelemetry.
+    OpenTelemetry-compatible trace exporter.
 
-    This exporter intentionally treats the OpenTelemetry SDK
-    as an optional dependency. If the SDK is not installed,
-    export() becomes a no-op rather than raising ImportError.
+    This implementation provides the exporter contract and serialization
+    layer without requiring the OpenTelemetry SDK to be installed.
     """
 
-    def __init__(self) -> None:
-        self._enabled = False
-        self._provider = None
+    def __init__(
+        self,
+        name: str = "otel",
+        *,
+        endpoint: str = "http://localhost:4318",
+        encoding: str = "utf-8",
+        enabled: bool = True,
+        options: Optional[
+            Mapping[str, Any]
+        ] = None,
+    ) -> None:
 
-        try:
-            from opentelemetry import trace as otel_trace  # type: ignore
+        # ------------------------------------------------------------------
+        # Validate endpoint
+        # ------------------------------------------------------------------
 
-            self._provider = otel_trace
-            self._enabled = True
+        if not isinstance(
+            endpoint,
+            str,
+        ):
+            raise TypeError(
+                "endpoint must be a string",
+            )
 
-        except ImportError:
-            self._enabled = False
+        endpoint = endpoint.strip()
+
+        if not endpoint:
+            raise ValueError(
+                "endpoint must not be empty",
+            )
+
+        # ------------------------------------------------------------------
+        # Validate options
+        # ------------------------------------------------------------------
+
+        if options is None:
+            normalized_options: dict[
+                str,
+                Any,
+            ] = {}
+
+        else:
+            if not isinstance(
+                options,
+                Mapping,
+            ):
+                raise TypeError(
+                    "options must be a mapping",
+                )
+
+            normalized_options = dict(
+                options,
+            )
+
+        # ------------------------------------------------------------------
+        # Base exporter
+        # ------------------------------------------------------------------
+
+        super().__init__(
+            name=name,
+            format=ExportFormat.JSON,
+            encoding=encoding,
+            enabled=enabled,
+            options=normalized_options,
+        )
+
+        # ------------------------------------------------------------------
+        # OTEL configuration
+        # ------------------------------------------------------------------
+
+        self._endpoint = endpoint
+
+        # ------------------------------------------------------------------
+        # Runtime state
+        # ------------------------------------------------------------------
+
+        self._last_export: float | None = None
+
+
+# ==============================================================================
+# Part 4. Core Properties
+# ==============================================================================
+
 
     @property
-    def enabled(self) -> bool:
+    def endpoint(
+        self,
+    ) -> str:
         """
-        Whether the OpenTelemetry SDK is available.
+        Return the configured OpenTelemetry endpoint.
         """
-        return self._enabled
 
-    def export_trace(self, trace: Trace) -> bool:
-        """
-        Export a complete trace.
+        return self._endpoint
 
-        Returns
-        -------
-        bool
-            True if export succeeded, False if disabled.
+
+    @property
+    def encoding(
+        self,
+    ) -> str:
         """
+        Return the configured payload encoding.
+        """
+
+        return self._encoding
+
+
+    @property
+    def options(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return OpenTelemetry exporter options.
+        """
+
+        return self._options
+
+
+# ==============================================================================
+# Part 5. OTEL Export
+# ==============================================================================
+
+
+    def serialize(
+        self,
+        payload: ExportPayload,
+    ) -> str:
+        """
+        Serialize a payload into OTEL JSON text.
+
+        The serializer always returns ``str``.
+        """
+
+        if not self.validate_payload(
+            payload,
+        ):
+            raise OTELExportError(
+                "invalid OTEL export payload",
+                exporter=self._name,
+            )
+
+        try:
+            # ------------------------------------------------------------------
+            # Bytes -> decode to text
+            # ------------------------------------------------------------------
+
+            if isinstance(
+                payload,
+                bytes,
+            ):
+                payload = payload.decode(
+                    self._encoding,
+                )
+
+            # ------------------------------------------------------------------
+            # JSON serialization
+            # ------------------------------------------------------------------
+
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=None,
+            )
+
+        except Exception as exc:
+
+            error = OTELExportError(
+                f"failed to serialize OTEL payload: {exc}",
+                exporter=self._name,
+                cause=exc,
+            )
+
+            self._record_error(
+                error,
+            )
+
+            raise error from exc
+
+
+    def export(
+        self,
+        payload: ExportPayload,
+        **options: Any,
+    ) -> ExportResult:
+        """
+        Export one payload using the OpenTelemetry exporter contract.
+        """
+
+        # ------------------------------------------------------------------
+        # Export attempt
+        # ------------------------------------------------------------------
+
+        self._export_count += 1
+
+        # ------------------------------------------------------------------
+        # Lifecycle guards
+        # ------------------------------------------------------------------
+
+        if self._state == "closed":
+
+            error = OTELExportError(
+                "OpenTelemetry exporter is closed",
+                exporter=self._name,
+            )
+
+            self._record_error(
+                error,
+            )
+
+            raise error
+
         if not self._enabled:
+
+            error = OTELExportError(
+                "OpenTelemetry exporter is disabled",
+                exporter=self._name,
+            )
+
+            self._record_error(
+                error,
+            )
+
+            raise error
+
+        try:
+
+            # --------------------------------------------------------------
+            # Validate configuration
+            # --------------------------------------------------------------
+
+            self.validate()
+
+            # --------------------------------------------------------------
+            # Validate payload
+            # --------------------------------------------------------------
+
+            if not self.validate_payload(
+                payload,
+            ):
+                raise OTELExportError(
+                    "invalid OpenTelemetry payload",
+                    exporter=self._name,
+                )
+
+            # --------------------------------------------------------------
+            # Validate options
+            # --------------------------------------------------------------
+
+            if not self.validate_options(
+                options,
+            ):
+                raise OTELExportError(
+                    "invalid OpenTelemetry export options",
+                    exporter=self._name,
+                )
+
+            # --------------------------------------------------------------
+            # Ensure running
+            # --------------------------------------------------------------
+
+            if self._state in {
+                "created",
+                "stopped",
+            }:
+                self.start()
+
+            # --------------------------------------------------------------
+            # Serialize
+            # --------------------------------------------------------------
+
+            serialized = self.serialize(
+                payload,
+            )
+
+            # ``serialize()`` always returns str.
+            exported = serialized
+
+            byte_count = len(
+                serialized.encode(
+                    self._encoding,
+                ),
+            )
+
+            # --------------------------------------------------------------
+            # Statistics
+            # --------------------------------------------------------------
+
+            self._success_count += 1
+            self._bytes_exported += byte_count
+            self._last_export = time.time()
+            self._last_error = None
+
+            # --------------------------------------------------------------
+            # Result
+            # --------------------------------------------------------------
+
+            return ExportResult(
+                success=True,
+                payload=exported,
+                format=self._format,
+                bytes_exported=byte_count,
+                metadata={
+                    "endpoint": self._endpoint,
+                    "encoding": self._encoding,
+                    "transport": "otel",
+                },
+            )
+
+        except OTELExportError as exc:
+
+            # ``serialize()`` may already have recorded the error.
+            # Avoid incrementing the error counter twice.
+            if self._last_error is not exc:
+                self._record_error(
+                    exc,
+                )
+
+            raise
+
+        except ExportError as exc:
+
+            error = OTELExportError(
+                str(exc),
+                exporter=self._name,
+                cause=exc,
+            )
+
+            self._record_error(
+                error,
+            )
+
+            raise error from exc
+
+        except Exception as exc:
+
+            error = OTELExportError(
+                str(exc),
+                exporter=self._name,
+                cause=exc,
+            )
+
+            self._record_error(
+                error,
+            )
+
+            raise error from exc
+
+
+    def export_many(
+        self,
+        payloads: Iterable[
+            ExportPayload
+        ],
+        **options: Any,
+    ) -> list[ExportResult]:
+        """
+        Export multiple OpenTelemetry payloads.
+        """
+
+        return [
+            self.export(
+                payload,
+                **options,
+            )
+            for payload in payloads
+        ]
+
+
+# ==============================================================================
+# Part 6. Validation
+# ==============================================================================
+
+
+    def validate_payload(
+        self,
+        payload: ExportPayload,
+    ) -> bool:
+        """
+        Validate an OpenTelemetry payload.
+        """
+
+        if payload is None:
+            return True
+
+        return isinstance(
+            payload,
+            (
+                Mapping,
+                list,
+                tuple,
+                str,
+                bytes,
+                int,
+                float,
+                bool,
+            ),
+        )
+
+
+    def validate_options(
+        self,
+        options: Optional[
+            Mapping[
+                str,
+                Any,
+            ]
+        ] = None,
+    ) -> bool:
+        """
+        Validate OpenTelemetry export options.
+        """
+
+        if options is None:
+            return True
+
+        if not isinstance(
+            options,
+            Mapping,
+        ):
             return False
 
-        for span in trace.spans:
-            self.export_span(span)
+        for key in options:
+
+            if not isinstance(
+                key,
+                str,
+            ):
+                return False
 
         return True
 
-    def export_span(self, span: Span) -> bool:
+# ==============================================================================
+# Part 7. Lifecycle
+# ==============================================================================
+
+
+    def start(
+        self,
+    ) -> "OTELExporter":
         """
-        Export a single span.
-
-        Current implementation is a compatibility stub.
-        A future version will create real OTel spans.
+        Start the OpenTelemetry exporter.
         """
-        if not self._enabled:
-            return False
 
-        # Placeholder for OTel SDK mapping.
-        return True
+        if self._state == "closed":
+            raise OTELExportError(
+                "cannot start a closed OpenTelemetry exporter",
+                exporter=self._name,
+            )
 
-    def export(self, trace: Trace) -> bool:
+        self._state = "running"
+
+        return self
+
+
+    def stop(
+        self,
+    ) -> "OTELExporter":
         """
-        Alias for export_trace().
+        Stop the OpenTelemetry exporter.
         """
-        return self.export_trace(trace)
 
-    def shutdown(self) -> None:
+        if self._state == "closed":
+            return self
+
+        self._state = "stopped"
+
+        return self
+
+
+    def reset(
+        self,
+    ) -> "OTELExporter":
         """
-        Flush exporter if the SDK supports it.
+        Reset exporter runtime state and statistics.
         """
-        if not self._enabled:
-            return
 
-        provider = getattr(self._provider, "get_tracer_provider", None)
+        if self._state == "closed":
+            raise OTELExportError(
+                "cannot reset a closed OpenTelemetry exporter",
+                exporter=self._name,
+            )
 
-        if callable(provider):
-            tracer_provider = provider()
+        self._export_count = 0
+        self._success_count = 0
+        self._error_count = 0
+        self._bytes_exported = 0
 
-            shutdown = getattr(tracer_provider, "shutdown", None)
+        self._last_export = None
+        self._last_error = None
 
-            if callable(shutdown):
-                shutdown()
+        self._state = "created"
 
-    def __repr__(self) -> str:
-        state = "enabled" if self._enabled else "disabled"
-        return f"{self.__class__.__name__}({state})"
+        return self
+
+
+    def close(
+        self,
+    ) -> "OTELExporter":
+        """
+        Permanently close the exporter.
+        """
+
+        if self._state == "closed":
+            return self
+
+        self._state = "closed"
+
+        return self
+
+
+# ==============================================================================
+# Part 8. Error Handling
+# ==============================================================================
+
+
+    def _handle_error(
+        self,
+        error: OTELExportError,
+    ) -> ExportResult:
+        """
+        Convert an OpenTelemetry exporter error into an ExportResult.
+        """
+
+        self._record_error(
+            error,
+        )
+
+        return ExportResult(
+            success=False,
+            payload=None,
+            format=ExportFormat.JSON,
+            bytes_exported=0,
+            error=error,
+            metadata={
+                "endpoint": self._endpoint,
+                "transport": "otel",
+            },
+        )
+
+
+    def _record_error(
+        self,
+        error: ExportError,
+    ) -> None:
+        """
+        Record exporter error state.
+        """
+
+        self._error_count += 1
+        self._last_error = error
+
+
+# ==============================================================================
+# Part 9. Statistics
+# ==============================================================================
+
+
+    @property
+    def export_count(
+        self,
+    ) -> int:
+        """
+        Return total number of export attempts.
+        """
+
+        return self._export_count
+
+
+    @property
+    def success_count(
+        self,
+    ) -> int:
+        """
+        Return total number of successful exports.
+        """
+
+        return self._success_count
+
+
+    @property
+    def error_count(
+        self,
+    ) -> int:
+        """
+        Return total number of failed exports.
+        """
+
+        return self._error_count
+
+
+    @property
+    def bytes_exported(
+        self,
+    ) -> int:
+        """
+        Return total number of exported bytes.
+        """
+
+        return self._bytes_exported
+
+
+# ==============================================================================
+# Part 10. Diagnostics
+# ==============================================================================
+
+
+    def health(
+        self,
+    ) -> bool:
+        """
+        Return whether the exporter is healthy.
+        """
+
+        return (
+            self._state != "closed"
+            and self._state != "failed"
+            and self._enabled
+        )
+
+
+    def diagnostics(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return detailed OpenTelemetry exporter diagnostics.
+        """
+
+        return {
+            "name": self._name,
+            "endpoint": self._endpoint,
+            "encoding": self._encoding,
+            "enabled": self._enabled,
+            "state": self._state,
+            "healthy": self.health(),
+            "export_count": self._export_count,
+            "success_count": self._success_count,
+            "error_count": self._error_count,
+            "bytes_exported": self._bytes_exported,
+            "last_export": self._last_export,
+            "last_error": (
+                str(self._last_error)
+                if self._last_error is not None
+                else None
+            ),
+            "transport": "otel",
+        }
+
+
+    def summary(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return a compact OpenTelemetry exporter summary.
+        """
+
+        return {
+            "name": self._name,
+            "endpoint": self._endpoint,
+            "state": self._state,
+            "enabled": self._enabled,
+            "healthy": self.health(),
+            "export_count": self._export_count,
+            "success_count": self._success_count,
+            "error_count": self._error_count,
+            "bytes_exported": self._bytes_exported,
+        }
+
+
+# ==============================================================================
+# Part 11. Representation
+# ==============================================================================
+
+
+    def __repr__(
+        self,
+    ) -> str:
+        """
+        Return the developer representation.
+        """
+
+        return (
+            f"{type(self).__name__}("
+            f"name={self._name!r}, "
+            f"endpoint={self._endpoint!r}, "
+            f"encoding={self._encoding!r}, "
+            f"enabled={self._enabled!r}, "
+            f"state={self._state!r}"
+            f")"
+        )
+
+
+    def __str__(
+        self,
+    ) -> str:
+        """
+        Return the human-readable representation.
+        """
+
+        return (
+            f"{self._name}("
+            f"endpoint={self._endpoint}, "
+            f"state={self._state}, "
+            f"enabled={self._enabled}"
+            f")"
+        )
+
+
+# ==============================================================================
+# Part 12. End
+# ==============================================================================

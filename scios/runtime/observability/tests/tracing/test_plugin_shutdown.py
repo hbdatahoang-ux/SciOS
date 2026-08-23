@@ -227,14 +227,22 @@ def test_cleanup_disabled_plugin(disabled_plugin):
 
 def test_shutdown_after_exception(plugin):
 
-    plugin.before_runtime(runtime_name="Runtime")
+    plugin.before_runtime(
+        runtime_name="Runtime",
+    )
+
+    plugin.before_stage(
+        stage_name="Runtime",
+    )
 
     try:
         raise RuntimeError("boom")
 
     except RuntimeError as exc:
 
-        plugin.manager.record_exception(exc)
+        plugin.manager.record_exception(
+            exc,
+        )
 
     plugin.shutdown()
 

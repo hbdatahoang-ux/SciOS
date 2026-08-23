@@ -7,54 +7,38 @@ Trace baggage container.
 Baggage stores contextual metadata propagated
 across tracing boundaries.
 
-Responsibilities
-----------------
-- Store distributed tracing context.
-- Maintain validated key/value metadata.
-- Support serialization and snapshot lifecycle.
-- Provide stable tracing context propagation API.
-
 Python 3.11+
 """
 
 from __future__ import annotations
+
+import json
+
+from collections.abc import Iterator, Mapping
+from copy import deepcopy
+from typing import Any, ClassVar, TypeAlias
 
 
 # ==============================================================================
 # Part 1. Foundation
 # ==============================================================================
 
-import json
-
-from collections.abc import Mapping
-from copy import deepcopy
-from typing import Any, ClassVar, TypeAlias
-
-
-__all__: list[str]
-
+__all__: list[str] = []
 
 
 # ==============================================================================
 # Part 2. Constants & Type Aliases
 # ==============================================================================
 
-
 DEFAULT_BAGGAGE: dict[str, Any] = {}
-
 
 BAGGAGE_VERSION = "1.0.0"
 
-
 BAGGAGE_API_VERSION = "1"
-
-
 
 BaggageMap: TypeAlias = dict[str, Any]
 
-
 BaggageJSON: TypeAlias = dict[str, Any]
-
 
 
 # ==============================================================================
@@ -68,19 +52,16 @@ class BaggageError(Exception):
     """
 
 
-
 class BaggageValidationError(BaggageError):
     """
     Raised when baggage validation fails.
     """
 
 
-
 class BaggageSerializationError(BaggageError):
     """
     Raised when baggage serialization fails.
     """
-
 
 
 # ==============================================================================
@@ -95,35 +76,16 @@ class Baggage:
     Baggage carries contextual metadata across
     distributed tracing boundaries.
 
-    Typical keys
-    ------------
-
-    - service.name
-    - service.version
-    - trace.id
-    - user.id
-    - tenant.id
-    - workflow.id
-
-
-    Notes
-    -----
-
     Keys are normalized and validated.
-
-    Values should preferably remain JSON compatible.
     """
-
 
     VERSION: ClassVar[str] = BAGGAGE_VERSION
 
     API_VERSION: ClassVar[str] = BAGGAGE_API_VERSION
 
-
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # Constructor
-    # ------------------------------------------------------------------
-
+    # --------------------------------------------------------------------------
 
     def __init__(
         self,
@@ -131,20 +93,12 @@ class Baggage:
     ) -> None:
         """
         Create a baggage container.
-
-        Parameters
-        ----------
-        initial:
-            Optional initial baggage mapping.
         """
-
 
         self._items: BaggageMap = {}
 
-
         if initial is None:
             return
-
 
         if not isinstance(
             initial,
@@ -154,38 +108,37 @@ class Baggage:
                 "initial must be a mapping."
             )
 
-
         self.update(
             dict(initial)
         )
 
-# ==============================================================================
-# Part 5. Constructor & Properties
-# ==============================================================================
+    # --------------------------------------------------------------------------
+    # Properties
+    # --------------------------------------------------------------------------
 
     @property
     def data(
         self,
     ) -> BaggageMap:
         """
-        Return deep copy of baggage data.
+        Return a deep copy of baggage data.
         """
+
         return deepcopy(
             self._items
         )
-
 
     @property
     def empty(
         self,
     ) -> bool:
         """
-        Return True if baggage has no items.
+        Return True if baggage is empty.
         """
+
         return not bool(
             self._items
         )
-
 
     @property
     def size(
@@ -194,56 +147,52 @@ class Baggage:
         """
         Return number of baggage items.
         """
+
         return len(
             self._items
         )
-
 
     def count(
         self,
     ) -> int:
         """
         Return number of baggage items.
-
-        Alias of size.
         """
+
         return len(
             self._items
         )
-
 
     def keys(
         self,
     ):
         """
-        Return baggage keys view.
+        Return baggage keys.
         """
-        return self._items.keys()
 
+        return self._items.keys()
 
     def values(
         self,
     ):
         """
-        Return baggage values view.
+        Return baggage values.
         """
-        return self._items.values()
 
+        return self._items.values()
 
     def items(
         self,
     ):
         """
-        Return baggage items view.
+        Return baggage items.
         """
+
         return self._items.items()
 
-
-
-# ==============================================================================
-# Part 6. Core API
-# ==============================================================================
-
+    # --------------------------------------------------------------------------
+    # Core API
+    # --------------------------------------------------------------------------
 
     def set(
         self,
@@ -261,8 +210,6 @@ class Baggage:
         self._items[key] = value
 
         return self
-
-
 
     def get(
         self,
@@ -282,8 +229,6 @@ class Baggage:
             default,
         )
 
-
-
     def get_or_set(
         self,
         key: str,
@@ -302,14 +247,12 @@ class Baggage:
             default,
         )
 
-
-
     def exists(
         self,
         key: str,
     ) -> bool:
         """
-        Check whether key exists.
+        Check whether a key exists.
         """
 
         key = self._validate_key(
@@ -317,8 +260,6 @@ class Baggage:
         )
 
         return key in self._items
-
-
 
     def remove(
         self,
@@ -336,8 +277,6 @@ class Baggage:
             key,
             None,
         )
-
-
 
     def pop(
         self,
@@ -357,8 +296,6 @@ class Baggage:
             default,
         )
 
-
-
     def clear(
         self,
     ) -> "Baggage":
@@ -369,8 +306,6 @@ class Baggage:
         self._items.clear()
 
         return self
-
-
 
     def update(
         self,
@@ -384,38 +319,29 @@ class Baggage:
             other,
             Baggage,
         ):
-
             source = other._items
 
         elif isinstance(
             other,
             dict,
         ):
-
             source = other
 
         else:
-
             raise TypeError(
                 "Expected dict or Baggage."
             )
-
 
         self._validate_mapping(
             source
         )
 
-
         for key, value in source.items():
-
             self._items[key] = deepcopy(
                 value
             )
 
-
         return self
-
-
 
     def merge(
         self,
@@ -425,86 +351,71 @@ class Baggage:
     ) -> "Baggage":
         """
         Merge baggage values.
+
+        Existing values are preserved unless
+        overwrite=True.
         """
 
         if isinstance(
             other,
             Baggage,
         ):
-
             source = other._items
 
         elif isinstance(
             other,
             dict,
         ):
-
             source = other
 
         else:
-
             raise TypeError(
                 "Expected dict or Baggage."
             )
-
 
         self._validate_mapping(
             source
         )
 
-
         for key, value in source.items():
-
             if (
                 overwrite
                 or key not in self._items
             ):
-
                 self._items[key] = deepcopy(
                     value
                 )
 
-
         return self
 
-
-
-# ==============================================================================
-# Part 7. Validation
-# ==============================================================================
-
+    # ==============================================================================
+    # Part 5. Validation
+    # ==============================================================================
 
     @staticmethod
     def _validate_key(
         key: Any,
     ) -> str:
         """
-        Validate baggage key.
+        Validate and normalize baggage key.
         """
 
         if not isinstance(
             key,
             str,
         ):
-
             raise BaggageValidationError(
                 "Baggage key must be string."
             )
 
-
         key = key.strip()
 
-
         if not key:
-
             raise BaggageValidationError(
                 "Baggage key cannot be empty."
             )
 
-
         return key
-
-
 
     @classmethod
     def _validate_mapping(
@@ -519,25 +430,20 @@ class Baggage:
             mapping,
             dict,
         ):
-
             raise BaggageValidationError(
                 "Expected dictionary."
             )
 
-
         for key in mapping:
-
             cls._validate_key(
                 key
             )
-
-
 
     def validate(
         self,
     ) -> bool:
         """
-        Validate current baggage.
+        Validate current baggage state.
         """
 
         self._validate_mapping(
@@ -546,25 +452,20 @@ class Baggage:
 
         return True
 
-
-
-# ==============================================================================
-# Part 8. Serialization
-# ==============================================================================
-
+    # ==============================================================================
+    # Part 6. Serialization
+    # ==============================================================================
 
     def to_dict(
         self,
     ) -> BaggageMap:
         """
-        Convert baggage into dictionary.
+        Convert baggage to dictionary.
         """
 
         return deepcopy(
             self._items
         )
-
-
 
     @classmethod
     def from_dict(
@@ -583,8 +484,6 @@ class Baggage:
             deepcopy(data)
         )
 
-
-
     def to_json(
         self,
         *,
@@ -593,11 +492,10 @@ class Baggage:
         ensure_ascii: bool = False,
     ) -> str:
         """
-        Serialize baggage into JSON.
+        Serialize baggage to JSON.
         """
 
         try:
-
             return json.dumps(
                 self._items,
                 indent=indent,
@@ -607,12 +505,9 @@ class Baggage:
             )
 
         except Exception as exc:
-
             raise BaggageSerializationError(
                 "Failed to serialize baggage."
             ) from exc
-
-
 
     @classmethod
     def from_json(
@@ -624,49 +519,41 @@ class Baggage:
         """
 
         try:
-
             data = json.loads(
                 value
             )
 
         except Exception as exc:
-
             raise BaggageSerializationError(
                 "Invalid JSON."
             ) from exc
-
 
         if not isinstance(
             data,
             dict,
         ):
-
             raise BaggageSerializationError(
                 "JSON must decode to dictionary."
             )
-
 
         return cls.from_dict(
             data
         )
 
-# ==============================================================================
-# Part 9. Snapshot / Clone
-# ==============================================================================
-
+    # ==============================================================================
+    # Part 7. Snapshot / Clone
+    # ==============================================================================
 
     def snapshot(
         self,
     ) -> BaggageJSON:
         """
-        Create immutable-style baggage snapshot.
+        Create a deep baggage snapshot.
         """
 
         return deepcopy(
             self._items
         )
-
-
 
     @classmethod
     def restore(
@@ -681,13 +568,11 @@ class Baggage:
             snapshot
         )
 
-
-
     def copy(
         self,
     ) -> "Baggage":
         """
-        Create independent baggage copy.
+        Create an independent baggage copy.
         """
 
         return self.__class__(
@@ -695,8 +580,6 @@ class Baggage:
                 self._items
             )
         )
-
-
 
     def clone(
         self,
@@ -707,8 +590,6 @@ class Baggage:
 
         return self.copy()
 
-
-
     def __copy__(
         self,
     ) -> "Baggage":
@@ -717,8 +598,6 @@ class Baggage:
         """
 
         return self.copy()
-
-
 
     def __deepcopy__(
         self,
@@ -731,7 +610,6 @@ class Baggage:
         if id(self) in memo:
             return memo[id(self)]
 
-
         result = self.__class__(
             deepcopy(
                 self._items,
@@ -739,59 +617,36 @@ class Baggage:
             )
         )
 
-
         memo[id(self)] = result
-
 
         return result
 
-
-
-# ==============================================================================
-# Part 10. Diagnostics
-# ==============================================================================
-
+    # ==============================================================================
+    # Part 8. Diagnostics
+    # ==============================================================================
 
     def diagnostics(
         self,
     ) -> dict[str, Any]:
         """
-        Return full diagnostic information.
+        Return detailed diagnostic information.
         """
 
-        valid = self.validate()
-
-
         return {
-
-            "valid":
-                valid,
-
-            "count":
-                self.count(),
-
-            "size":
-                self.size,
-
-            "empty":
-                self.empty,
-
-            "keys":
-                list(
-                    self._items.keys()
-                ),
-
-            "types":
-                {
-                    key:
-                    type(value).__name__
-
-                    for key, value
-                    in self._items.items()
-                },
+            "valid": self.validate(),
+            "version": BAGGAGE_VERSION,
+            "api_version": BAGGAGE_API_VERSION,
+            "count": self.count(),
+            "size": self.size,
+            "empty": self.empty,
+            "keys": list(
+                self._items.keys()
+            ),
+            "types": {
+                key: type(value).__name__
+                for key, value in self._items.items()
+            },
         }
-
-
 
     def summary(
         self,
@@ -801,31 +656,18 @@ class Baggage:
         """
 
         return {
-
-            "count":
-                self.count(),
-
-            "size":
-                self.size,
-
-            "empty":
-                self.empty,
-
-            "valid":
-                self.validate(),
-
-            "keys":
-                list(
-                    self._items.keys()
-                ),
+            "valid": self.validate(),
+            "count": self.count(),
+            "size": self.size,
+            "empty": self.empty,
+            "keys": list(
+                self._items.keys()
+            ),
         }
 
-
-
-# ==============================================================================
-# Part 11. Python Protocols
-# ==============================================================================
-
+    # ==============================================================================
+    # Part 9. Python Protocols
+    # ==============================================================================
 
     def __repr__(
         self,
@@ -839,13 +681,11 @@ class Baggage:
             f"({self._items!r})"
         )
 
-
-
     def __str__(
         self,
     ) -> str:
         """
-        Human readable representation.
+        Human-readable representation.
         """
 
         return (
@@ -854,8 +694,6 @@ class Baggage:
             f"empty={self.empty}"
             f")"
         )
-
-
 
     def __len__(
         self,
@@ -866,20 +704,16 @@ class Baggage:
 
         return self.size
 
-
-
     def __iter__(
         self,
     ) -> Iterator[str]:
         """
-        Iterate baggage keys.
+        Iterate over baggage keys.
         """
 
         return iter(
             self._items
         )
-
-
 
     def __contains__(
         self,
@@ -891,14 +725,12 @@ class Baggage:
 
         return key in self._items
 
-
-
     def __getitem__(
         self,
         key: str,
     ) -> Any:
         """
-        Dictionary style access.
+        Dictionary-style access.
         """
 
         key = self._validate_key(
@@ -907,15 +739,13 @@ class Baggage:
 
         return self._items[key]
 
-
-
     def __setitem__(
         self,
         key: str,
         value: Any,
     ) -> None:
         """
-        Dictionary style assignment.
+        Dictionary-style assignment.
         """
 
         self.set(
@@ -923,34 +753,28 @@ class Baggage:
             value,
         )
 
-
-
     def __delitem__(
         self,
         key: str,
     ) -> None:
         """
-        Dictionary style deletion.
+        Dictionary-style deletion.
         """
 
         self.remove(
             key
         )
 
-
-
     def __bool__(
         self,
     ) -> bool:
         """
-        True when baggage contains data.
+        Return True when baggage contains data.
         """
 
         return bool(
             self._items
         )
-
-
 
     def __eq__(
         self,
@@ -966,14 +790,11 @@ class Baggage:
         ):
             return NotImplemented
 
-
         return (
             self._items
             ==
             other._items
         )
-
-
 
     def __hash__(
         self,
@@ -992,36 +813,18 @@ class Baggage:
         )
 
 
-
 # ==============================================================================
-# Part 12. Public API
+# Part 10. Public API
 # ==============================================================================
-
 
 __all__ = [
-
-    # Constants
-
     "DEFAULT_BAGGAGE",
     "BAGGAGE_VERSION",
     "BAGGAGE_API_VERSION",
-
-
-    # Type aliases
-
     "BaggageMap",
     "BaggageJSON",
-
-
-    # Exceptions
-
     "BaggageError",
     "BaggageValidationError",
     "BaggageSerializationError",
-
-
-    # Main class
-
     "Baggage",
-
 ]

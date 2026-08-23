@@ -1,1445 +1,1962 @@
-"""
-SciOS-NG Observability
-Tracing Tests - Span
+﻿from __future__ import annotations
 
-Tests:
-
-- Span creation
-- Identity
-- Constructor
-- Defaults
-- UUID generation
-- Parent relationship
-"""
-
-from __future__ import annotations
-
-import copy
-import json
-import time
+from datetime import datetime
+from typing import get_args, get_origin
 
 import pytest
 
 from scios.runtime.observability.tracing.span import (
+    SPAN_VERSION,
+    SPAN_API_VERSION,
+    DEFAULT_SPAN_NAME,
+    DEFAULT_SPAN_KIND,
+    DEFAULT_SPAN_STATUS,
+    DEFAULT_SPAN_AUTO_START,
+    DEFAULT_SPAN_AUTO_FINISH,
     Span,
-    SpanCapability,
-    SpanKind,
-    SpanState,
-    SpanStatus,
+    SpanError,
+    SpanValidationError,
+    SpanStateError,
+    SpanClosedError,
+    SpanAlreadyStartedError,
+    SpanAlreadyFinishedError,
+    SpanNotStartedError,
+    SpanNotFinishedError,
+    SpanFrozenError,
+    SpanCancelledError,
+    SpanId,
+    TraceId,
+    ParentSpanId,
+    SpanName,
+    SpanAttributeKey,
+    SpanAttributeValue,
+    SpanAttributes,
+    Timestamp,
 )
 
 
 # ==============================================================================
-# Part 1. Fixtures
+# Public Test API
 # ==============================================================================
 
 
 @pytest.fixture
-def span() -> Span:
+def span():
     """
-    Default standalone span.
+    Return a default Span instance.
     """
-
-    return Span(
-        name="test.span",
-    )
+    return Span()
 
 
 @pytest.fixture
-def trace_span() -> Span:
+def custom_span():
     """
-    Span with predefined trace id.
+    Return a Span with explicit identity information.
     """
-
     return Span(
-        name="runtime.execute",
+        name="test-span",
         trace_id="trace-001",
+        parent_id="parent-001",
     )
 
 
-@pytest.fixture
-def child_span() -> Span:
-    """
-    Child span.
-    """
+# ==============================================================================
+# Part 1. Constants
+# ==============================================================================
 
-    return Span(
-        name="child.operation",
+
+def test_span_version():
+    assert isinstance(
+        SPAN_VERSION,
+        str,
+    )
+
+    assert SPAN_VERSION == "1.0.0"
+
+
+def test_span_api_version():
+    assert isinstance(
+        SPAN_API_VERSION,
+        str,
+    )
+
+    assert SPAN_API_VERSION == "1"
+
+
+def test_default_span_name():
+    assert isinstance(
+        DEFAULT_SPAN_NAME,
+        str,
+    )
+
+    assert DEFAULT_SPAN_NAME == "Span"
+
+
+def test_default_span_kind():
+    assert isinstance(
+        DEFAULT_SPAN_KIND,
+        str,
+    )
+
+    assert DEFAULT_SPAN_KIND == "internal"
+
+
+def test_default_span_status():
+    assert isinstance(
+        DEFAULT_SPAN_STATUS,
+        str,
+    )
+
+    assert DEFAULT_SPAN_STATUS == "unset"
+
+
+def test_default_span_auto_start():
+    assert isinstance(
+        DEFAULT_SPAN_AUTO_START,
+        bool,
+    )
+
+    assert DEFAULT_SPAN_AUTO_START is False
+
+
+def test_default_span_auto_finish():
+    assert isinstance(
+        DEFAULT_SPAN_AUTO_FINISH,
+        bool,
+    )
+
+    assert DEFAULT_SPAN_AUTO_FINISH is True
+
+
+# ==============================================================================
+# Part 2. Exceptions
+# ==============================================================================
+
+
+def test_span_error():
+    assert issubclass(
+        SpanError,
+        RuntimeError,
+    )
+
+
+def test_span_validation_error():
+    assert issubclass(
+        SpanValidationError,
+        SpanError,
+    )
+
+
+def test_span_state_error():
+    assert issubclass(
+        SpanStateError,
+        SpanError,
+    )
+
+
+def test_span_closed_error():
+    assert issubclass(
+        SpanClosedError,
+        SpanStateError,
+    )
+
+
+def test_span_already_started_error():
+    assert issubclass(
+        SpanAlreadyStartedError,
+        SpanStateError,
+    )
+
+
+def test_span_already_finished_error():
+    assert issubclass(
+        SpanAlreadyFinishedError,
+        SpanStateError,
+    )
+
+
+def test_span_not_started_error():
+    assert issubclass(
+        SpanNotStartedError,
+        SpanStateError,
+    )
+
+
+def test_span_not_finished_error():
+    assert issubclass(
+        SpanNotFinishedError,
+        SpanStateError,
+    )
+
+
+def test_span_frozen_error():
+    assert issubclass(
+        SpanFrozenError,
+        SpanStateError,
+    )
+
+
+def test_span_cancelled_error():
+    assert issubclass(
+        SpanCancelledError,
+        SpanStateError,
+    )
+
+
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+
+def test_span_id_alias():
+    assert SpanId is str
+
+
+def test_trace_id_alias():
+    assert TraceId is str
+
+
+def test_parent_span_id_alias():
+    args = get_args(
+        ParentSpanId,
+    )
+
+    assert str in args
+    assert type(None) in args
+
+
+def test_span_name_alias():
+    assert SpanName is str
+
+
+def test_span_attribute_key_alias():
+    assert SpanAttributeKey is str
+
+
+def test_span_attribute_value_alias():
+    args = get_args(
+        SpanAttributeValue,
+    )
+
+    assert len(args) > 0
+
+    assert (
+        str in args
+        or int in args
+        or float in args
+        or bool in args
+        or bytes in args
+    )
+
+
+def test_span_attributes_alias():
+    origin = get_origin(
+        SpanAttributes,
+    )
+
+    assert origin is dict
+
+
+def test_timestamp_alias():
+    assert Timestamp is datetime
+
+
+# ==============================================================================
+# Part 4. Constructor
+# ==============================================================================
+
+
+def test_span_constructor_defaults():
+    value = Span()
+
+    assert isinstance(
+        value,
+        Span,
+    )
+
+    assert value.name == DEFAULT_SPAN_NAME
+    assert value.kind == DEFAULT_SPAN_KIND
+    assert value.status == DEFAULT_SPAN_STATUS
+
+    assert value.started is False
+    assert value.finished is False
+    assert value.cancelled is False
+    assert value.closed is False
+
+
+def test_span_constructor_custom_name():
+    value = Span(
+        name="custom-span",
+    )
+
+    assert value.name == "custom-span"
+
+
+def test_span_constructor_identity():
+    value = Span(
+        name="identity-span",
         trace_id="trace-001",
-        parent_span_id="parent-001",
+        parent_id="parent-001",
     )
 
-
-@pytest.fixture
-def started_span() -> Span:
-    """
-    Started span.
-    """
-
-    s = Span(
-        name="started.span",
-    )
-
-    s.start()
-
-    return s
+    assert value.id is not None
+    assert value.trace_id == "trace-001"
+    assert value.parent_id == "parent-001"
+    assert value.name == "identity-span"
 
 
-@pytest.fixture
-def finished_span() -> Span:
-    """
-    Finished span.
-    """
-
-    s = Span(
-        name="finished.span",
-    )
-
-    s.start()
-    s.finish()
-
-    return s
-
-
-# ==============================================================================
-# Part 2. Creation
-# ==============================================================================
-
-
-def test_create_default_span():
-
-    span = Span()
-
-    assert span is not None
-    assert span.trace_id is not None
-    assert span.span_id is not None
-
-
-def test_create_named_span():
-
-    span = Span(
-        name="kernel.execute",
-    )
-
-    assert span.name == "kernel.execute"
-
-
-def test_trace_id_assignment():
-
-    span = Span(
+def test_span_constructor_trace_id():
+    value = Span(
         trace_id="trace-123",
     )
 
-    assert span.trace_id == "trace-123"
+    assert value.trace_id == "trace-123"
 
 
-def test_parent_span_assignment():
-
-    span = Span(
-        parent_span_id="parent-001",
+def test_span_constructor_parent_id():
+    value = Span(
+        parent_id="parent-123",
     )
 
-    assert span.parent_span_id == "parent-001"
+    assert value.parent_id == "parent-123"
 
 
-def test_kind_assignment():
-
-    span = Span(
-        kind=SpanKind.CLIENT,
+def test_span_constructor_kind():
+    value = Span(
+        kind="server",
     )
 
-    assert span.kind is SpanKind.CLIENT
+    assert value.kind == "server"
 
 
-def test_default_kind(span):
-
-    assert span.kind is SpanKind.INTERNAL
-
-
-def test_default_state(span):
-
-    assert span.state is SpanState.INITIALIZED
-
-
-def test_default_status(span):
-
-    assert span.status is SpanStatus.UNSET
-
-
-def test_default_duration(span):
-
-    assert span.duration == 0.0
-
-
-def test_default_attributes(span):
-
-    assert span.attributes == {}
-
-
-def test_default_events(span):
-
-    assert span.events == []
-
-
-def test_default_links(span):
-
-    assert span.links == []
-
-
-def test_default_metadata(span):
-
-    assert span.metadata == {}
-
-
-def test_default_tags(span):
-
-    assert span.tags == []
-
-
-def test_default_statistics(span):
-
-    assert span.statistics is not None
-
-
-def test_default_capabilities(span):
-
-    assert span.capabilities == SpanCapability.ALL
-
-
-def test_enabled_default(span):
-
-    assert span.enabled is True
-
-
-def test_auto_start_false():
-
-    span = Span(
-        auto_start=False,
-    )
-
-    assert span.started is False
-
-
-def test_auto_start_true():
-
-    span = Span(
-        auto_start=True,
-    )
-
-    assert span.started is True
-
-
-def test_unique_span_ids():
-
-    first = Span(
-        name="first",
-    )
-
-    second = Span(
-        name="second",
-    )
-
-    assert first.span_id != second.span_id
-
-
-def test_unique_trace_ids():
-
-    first = Span()
-
-    second = Span()
-
-    assert first.trace_id != second.trace_id
-
-
-def test_constructor_attributes():
-
-    span = Span(
+def test_span_constructor_attributes():
+    value = Span(
         attributes={
-            "model": "SciOS",
-            "version": 1,
+            "service": "scios",
+            "version": "1.0",
         },
     )
 
-    assert span.attributes["model"] == "SciOS"
-    assert span.attributes["version"] == 1
+    assert value.get_attribute(
+        "service",
+    ) == "scios"
+
+    assert value.get_attribute(
+        "version",
+    ) == "1.0"
 
 
-def test_constructor_metadata():
-
-    span = Span(
-        metadata={
-            "runtime": "python",
-        },
-    )
-
-    assert span.metadata["runtime"] == "python"
-
-
-def test_constructor_tags():
-
-    span = Span(
-        tags=[
-            "kernel",
-            "runtime",
-        ],
-    )
-
-    assert span.tags == [
-        "kernel",
-        "runtime",
-    ]
-
-
-def test_created_timestamp(span):
-
-    assert span.created_at > 0
-
-
-def test_updated_timestamp(span):
-
-    assert span.updated_at >= span.created_at
-
-
-def test_invalid_empty_name():
-
-    with pytest.raises(Exception):
-
+def test_span_constructor_invalid_name():
+    with pytest.raises(
+        SpanValidationError,
+    ):
         Span(
             name="",
         )
-# ==============================================================================
-# Part 3. Lifecycle
-# ==============================================================================
-
-
-def test_start(span):
-
-    span.start()
-
-    assert span.started is True
-    assert span.state is SpanState.RUNNING
-    assert span.started_at is not None
-
-
-def test_start_twice(span):
-
-    span.start()
-
-    first = span.started_at
-
-    span.start()
-
-    assert span.started_at == first
-    assert span.started is True
-
-
-def test_finish(span):
-
-    span.start()
-    span.finish()
-
-    assert span.finished is True
-    assert span.state is SpanState.FINISHED
-    assert span.finished_at is not None
-
-
-def test_finish_without_start(span):
-
-    span.finish()
-
-    assert span.finished is True
-
-
-def test_finish_error_status(span):
-
-    span.start()
-    span.finish(
-        status=SpanStatus.ERROR,
-    )
-
-    assert span.status is SpanStatus.ERROR
-
-
-def test_end(span):
-
-    span.start()
-    span.end()
-
-    assert span.finished is True
-
-
-def test_cancel(span):
-
-    span.start()
-    span.cancel()
-
-    assert span.finished is True
-
-
-def test_duration(span):
-
-    span.start()
-
-    time.sleep(0.01)
-
-    span.finish()
-
-    assert span.duration >= 0.0
-
-
-def test_reset(span):
-
-    span.start()
-
-    span.set_attribute(
-        "a",
-        1,
-    )
-
-    span.add_event(
-        "start",
-    )
-
-    span.finish()
-
-    span.reset()
-
-    assert span.state is SpanState.INITIALIZED
-    assert span.status is SpanStatus.UNSET
-    assert span.duration == 0.0
-    assert span.attributes == {}
-    assert span.events == []
-
-
-def test_enable_disable(span):
-
-    span.disable()
-
-    assert span.enabled is False
-
-    span.enable()
-
-    assert span.enabled is True
-
-
-def test_freeze_unfreeze(span):
-
-    span.freeze()
-
-    assert span.state is SpanState.FROZEN
-
-    span.unfreeze()
-
-    assert span.state is SpanState.RUNNING
-
-
-def test_context_manager():
-
-    with Span(
-        name="context",
-    ) as span:
-
-        assert span.started is True
-
-    assert span.finished is True
 
 
 # ==============================================================================
-# Part 4. Attributes
+# Part 5. Identity
 # ==============================================================================
 
 
-def test_set_attribute(span):
+def test_span_id():
+    value = Span()
 
-    span.set_attribute(
-        "model",
-        "SciOS",
+    assert value.id is not None
+    assert isinstance(
+        value.id,
+        str,
+    )
+    assert value.id
+
+
+def test_span_trace_id():
+    value = Span(
+        trace_id="trace-001",
     )
 
-    assert span.attributes["model"] == "SciOS"
+    assert value.trace_id == "trace-001"
 
 
-def test_get_attribute(span):
+def test_span_parent_id():
+    value = Span(
+        parent_id="parent-001",
+    )
 
-    span.set_attribute(
+    assert value.parent_id == "parent-001"
+
+
+def test_span_name():
+    value = Span(
+        name="test-span",
+    )
+
+    assert value.name == "test-span"
+
+
+def test_span_identity_is_stable():
+    value = Span(
+        name="stable-span",
+        trace_id="trace-001",
+        parent_id="parent-001",
+    )
+
+    span_id = value.id
+    trace_id = value.trace_id
+    parent_id = value.parent_id
+    name = value.name
+
+    assert value.id == span_id
+    assert value.trace_id == trace_id
+    assert value.parent_id == parent_id
+    assert value.name == name
+
+# ==============================================================================
+# Part 6. Lifecycle
+# ==============================================================================
+
+
+def test_span_start():
+    value = Span()
+
+    result = value.start()
+
+    assert result is value
+    assert value.started is True
+    assert value.finished is False
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is True
+    assert value.start_time is not None
+
+
+def test_span_start_twice():
+    value = Span()
+
+    value.start()
+
+    with pytest.raises(
+        SpanAlreadyStartedError,
+    ):
+        value.start()
+
+
+def test_span_finish():
+    value = Span()
+
+    value.start()
+
+    result = value.finish()
+
+    assert result is value
+    assert value.started is True
+    assert value.finished is True
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is False
+    assert value.end_time is not None
+
+
+def test_span_finish_twice():
+    value = Span()
+
+    value.start()
+    value.finish()
+
+    with pytest.raises(
+        SpanAlreadyFinishedError,
+    ):
+        value.finish()
+
+
+def test_span_reset():
+    value = Span(
+        name="reset-span",
+        trace_id="trace-001",
+        parent_id="parent-001",
+        attributes={
+            "key": "value",
+        },
+    )
+
+    value.start()
+    value.finish()
+    value.reset()
+
+    assert value.started is False
+    assert value.finished is False
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is False
+    assert value.start_time is None
+    assert value.end_time is None
+    assert value.duration == 0
+
+
+def test_span_restart():
+    value = Span()
+
+    value.start()
+    value.finish()
+
+    result = value.restart()
+
+    assert result is value
+    assert value.started is True
+    assert value.finished is False
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is True
+    assert value.start_time is not None
+
+
+def test_span_cancel():
+    value = Span()
+
+    value.start()
+
+    result = value.cancel()
+
+    assert result is value
+    assert value.cancelled is True
+    assert value.finished is False
+    assert value.closed is False
+    assert value.active is False
+
+
+def test_span_close():
+    value = Span()
+
+    value.start()
+
+    result = value.close()
+
+    assert result is value
+    assert value.closed is True
+    assert value.active is False
+
+
+def test_span_freeze():
+    value = Span()
+
+    result = value.freeze()
+
+    assert result is value
+    assert value.frozen is True
+
+
+def test_span_unfreeze():
+    value = Span()
+
+    value.freeze()
+
+    result = value.unfreeze()
+
+    assert result is value
+    assert value.frozen is False
+
+
+# ==============================================================================
+# Part 7. State
+# ==============================================================================
+
+
+def test_span_status():
+    value = Span()
+
+    assert value.status == DEFAULT_SPAN_STATUS
+
+
+def test_span_state():
+    value = Span()
+
+    assert value.state is not None
+
+
+def test_span_started():
+    value = Span()
+
+    assert value.started is False
+
+    value.start()
+
+    assert value.started is True
+
+
+def test_span_finished():
+    value = Span()
+
+    assert value.finished is False
+
+    value.start()
+    value.finish()
+
+    assert value.finished is True
+
+
+def test_span_cancelled():
+    value = Span()
+
+    assert value.cancelled is False
+
+    value.start()
+    value.cancel()
+
+    assert value.cancelled is True
+
+
+def test_span_closed():
+    value = Span()
+
+    assert value.closed is False
+
+    value.close()
+
+    assert value.closed is True
+
+
+def test_span_active():
+    value = Span()
+
+    assert value.active is False
+
+    value.start()
+
+    assert value.active is True
+
+    value.finish()
+
+    assert value.active is False
+
+
+def test_span_state_transitions():
+    value = Span()
+
+    assert value.started is False
+    assert value.finished is False
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is False
+
+    value.start()
+
+    assert value.started is True
+    assert value.finished is False
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is True
+
+    value.finish()
+
+    assert value.started is True
+    assert value.finished is True
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is False
+
+
+# ==============================================================================
+# Part 8. Timing
+# ==============================================================================
+
+
+def test_span_start_time():
+    value = Span()
+
+    assert value.start_time is None
+
+    value.start()
+
+    assert value.start_time is not None
+    assert isinstance(
+        value.start_time,
+        datetime,
+    )
+
+
+def test_span_end_time():
+    value = Span()
+
+    assert value.end_time is None
+
+    value.start()
+    value.finish()
+
+    assert value.end_time is not None
+    assert isinstance(
+        value.end_time,
+        datetime,
+    )
+
+
+def test_span_duration():
+    value = Span()
+
+    assert value.duration == 0
+
+    value.start()
+    value.finish()
+
+    assert value.duration >= 0
+
+
+def test_span_elapsed():
+    value = Span()
+
+    assert value.elapsed == 0
+
+    value.start()
+
+    assert value.elapsed >= 0
+
+    value.finish()
+
+    assert value.elapsed >= 0
+
+
+def test_span_timing_after_reset():
+    value = Span()
+
+    value.start()
+    value.finish()
+
+    assert value.start_time is not None
+    assert value.end_time is not None
+
+    value.reset()
+
+    assert value.start_time is None
+    assert value.end_time is None
+    assert value.duration == 0
+    assert value.elapsed == 0
+
+
+# ==============================================================================
+# Part 9. Attributes
+# ==============================================================================
+
+
+def test_span_attributes():
+    value = Span()
+
+    assert isinstance(
+        value.attributes,
+        dict,
+    )
+
+    assert value.attributes == {}
+
+
+def test_set_attribute():
+    value = Span()
+
+    result = value.set_attribute(
+        "service",
+        "scios",
+    )
+
+    assert result is value
+    assert value.get_attribute(
+        "service",
+    ) == "scios"
+
+
+def test_get_attribute():
+    value = Span(
+        attributes={
+            "service": "scios",
+        },
+    )
+
+    assert value.get_attribute(
+        "service",
+    ) == "scios"
+
+    assert value.get_attribute(
+        "missing",
+    ) is None
+
+
+def test_has_attribute():
+    value = Span()
+
+    value.set_attribute(
+        "service",
+        "scios",
+    )
+
+    assert value.has_attribute(
+        "service",
+    ) is True
+
+    assert value.has_attribute(
+        "missing",
+    ) is False
+
+
+def test_remove_attribute():
+    value = Span()
+
+    value.set_attribute(
+        "service",
+        "scios",
+    )
+
+    result = value.remove_attribute(
+        "service",
+    )
+
+    assert result is value
+    assert value.has_attribute(
+        "service",
+    ) is False
+
+
+def test_clear_attributes():
+    value = Span(
+        attributes={
+            "service": "scios",
+            "version": "1.0",
+        },
+    )
+
+    result = value.clear_attributes()
+
+    assert result is value
+    assert value.attributes == {}
+
+
+def test_attribute_mutation_rules():
+    value = Span()
+
+    value.set_attribute(
+        "service",
+        "scios",
+    )
+
+    assert value.get_attribute(
+        "service",
+    ) == "scios"
+
+    value.freeze()
+
+    with pytest.raises(
+        SpanFrozenError,
+    ):
+        value.set_attribute(
+            "service",
+            "other",
+        )
+
+    value.unfreeze()
+
+    value.set_attribute(
+        "service",
+        "other",
+    )
+
+    assert value.get_attribute(
+        "service",
+    ) == "other"
+
+
+# ==============================================================================
+# Part 10. Tags
+# ==============================================================================
+
+
+def test_span_tags():
+    value = Span()
+
+    assert isinstance(
+        value.tags,
+        dict,
+    )
+
+    assert value.tags == {}
+
+
+def test_set_tag():
+    value = Span()
+
+    result = value.set_tag(
+        "environment",
+        "test",
+    )
+
+    assert result is value
+    assert value.get_tag(
+        "environment",
+    ) == "test"
+
+
+def test_get_tag():
+    value = Span()
+
+    value.set_tag(
+        "environment",
+        "test",
+    )
+
+    assert value.get_tag(
+        "environment",
+    ) == "test"
+
+    assert value.get_tag(
+        "missing",
+    ) is None
+
+
+def test_has_tag():
+    value = Span()
+
+    value.set_tag(
+        "environment",
+        "test",
+    )
+
+    assert value.has_tag(
+        "environment",
+    ) is True
+
+    assert value.has_tag(
+        "missing",
+    ) is False
+
+
+def test_remove_tag():
+    value = Span()
+
+    value.set_tag(
+        "environment",
+        "test",
+    )
+
+    result = value.remove_tag(
+        "environment",
+    )
+
+    assert result is value
+    assert value.has_tag(
+        "environment",
+    ) is False
+
+
+def test_clear_tags():
+    value = Span()
+
+    value.set_tag(
+        "environment",
+        "test",
+    )
+
+    value.set_tag(
         "version",
-        1,
+        "1.0",
     )
 
-    assert span.get_attribute(
-        "version",
+    result = value.clear_tags()
+
+    assert result is value
+    assert value.tags == {}
+
+
+# ==============================================================================
+# Part 11. Baggage
+# ==============================================================================
+
+
+def test_span_baggage():
+    value = Span()
+
+    assert isinstance(
+        value.baggage,
+        dict,
+    )
+
+    assert value.baggage == {}
+
+
+def test_set_baggage():
+    value = Span()
+
+    result = value.set_baggage(
+        "request-id",
+        "req-001",
+    )
+
+    assert result is value
+    assert value.get_baggage(
+        "request-id",
+    ) == "req-001"
+
+
+def test_get_baggage():
+    value = Span()
+
+    value.set_baggage(
+        "request-id",
+        "req-001",
+    )
+
+    assert value.get_baggage(
+        "request-id",
+    ) == "req-001"
+
+    assert value.get_baggage(
+        "missing",
+    ) is None
+
+
+def test_has_baggage():
+    value = Span()
+
+    value.set_baggage(
+        "request-id",
+        "req-001",
+    )
+
+    assert value.has_baggage(
+        "request-id",
+    ) is True
+
+    assert value.has_baggage(
+        "missing",
+    ) is False
+
+
+def test_remove_baggage():
+    value = Span()
+
+    value.set_baggage(
+        "request-id",
+        "req-001",
+    )
+
+    result = value.remove_baggage(
+        "request-id",
+    )
+
+    assert result is value
+    assert value.has_baggage(
+        "request-id",
+    ) is False
+
+
+def test_clear_baggage():
+    value = Span()
+
+    value.set_baggage(
+        "request-id",
+        "req-001",
+    )
+
+    value.set_baggage(
+        "trace-state",
+        "active",
+    )
+
+    result = value.clear_baggage()
+
+    assert result is value
+    assert value.baggage == {}
+
+
+# ==============================================================================
+# Part 12. Events
+# ==============================================================================
+
+
+def test_span_events():
+    value = Span()
+
+    assert isinstance(
+        value.events,
+        list,
+    )
+
+    assert value.events == []
+
+
+def test_add_event():
+    value = Span()
+
+    result = value.add_event(
+        "started",
+        attributes={
+            "source": "test",
+        },
+    )
+
+    assert result is value
+    assert len(
+        value.events,
     ) == 1
 
 
-def test_get_missing_attribute(span):
+def test_get_event():
+    value = Span()
 
-    assert (
-        span.get_attribute(
-            "missing",
-        )
-        is None
+    value.add_event(
+        "started",
     )
 
-
-def test_get_attribute_default(span):
-
-    assert (
-        span.get_attribute(
-            "missing",
-            "default",
-        )
-        == "default"
-    )
-
-
-def test_has_attribute(span):
-
-    span.set_attribute(
-        "enabled",
-        True,
-    )
-
-    assert span.has_attribute(
-        "enabled",
-    )
-
-
-def test_remove_attribute(span):
-
-    span.set_attribute(
-        "temp",
-        1,
-    )
-
-    assert span.remove_attribute(
-        "temp",
-    ) is True
-
-    assert "temp" not in span.attributes
-
-
-def test_remove_missing_attribute(span):
-
-    assert (
-        span.remove_attribute(
-            "missing",
-        )
-        is False
-    )
-
-
-def test_clear_attributes(span):
-
-    span.set_attribute(
-        "a",
-        1,
-    )
-
-    span.set_attribute(
-        "b",
-        2,
-    )
-
-    span.clear_attributes()
-
-    assert span.attributes == {}
-
-
-def test_set_attributes(span):
-
-    span.set_attributes(
-        {
-            "a": 1,
-            "b": 2,
-            "c": 3,
-        }
-    )
-
-    assert len(span.attributes) == 3
-
-
-def test_update_attributes(span):
-
-    span.update_attributes(
-        {
-            "x": 10,
-            "y": 20,
-        }
-    )
-
-    assert span.attributes["x"] == 10
-    assert span.attributes["y"] == 20
-
-
-def test_copy_attributes(span):
-
-    span.set_attribute(
-        "name",
-        "runtime",
-    )
-
-    copied = span.copy_attributes()
-
-    assert copied == span.attributes
-    assert copied is not span.attributes
-
-
-def test_attribute_count(span):
-
-    span.set_attribute(
-        "a",
-        1,
-    )
-
-    span.set_attribute(
-        "b",
-        2,
-    )
-
-    assert span.attribute_count == 2
-
-
-def test_setitem_attribute(span):
-
-    span["service"] = "planner"
-
-    assert span.attributes["service"] == "planner"
-
-
-def test_getitem_attribute(span):
-
-    span["runtime"] = "kernel"
-
-    assert span["runtime"] == "kernel"
-
-
-def test_contains_attribute(span):
-
-    span["model"] = "SciOS"
-
-    assert "model" in span
-
-
-def test_iter_attributes(span):
-
-    span["a"] = 1
-    span["b"] = 2
-
-    keys = list(iter(span))
-
-    assert "a" in keys
-    assert "b" in keys
-# ==============================================================================
-# Part 5. Events
-# ==============================================================================
-
-
-def test_add_event(span):
-
-    event = span.add_event(
-        "runtime.start",
+    event = value.get_event(
+        "started",
     )
 
     assert event is not None
-    assert span.event_count == 1
 
 
-def test_add_event_with_attributes(span):
+def test_clear_events():
+    value = Span()
 
-    span.add_event(
-        "request",
-        {
-            "method": "GET",
-            "status": 200,
+    value.add_event(
+        "first",
+    )
+
+    value.add_event(
+        "second",
+    )
+
+    result = value.clear_events()
+
+    assert result is value
+    assert value.events == []
+
+
+def test_event_order():
+    value = Span()
+
+    value.add_event(
+        "first",
+    )
+
+    value.add_event(
+        "second",
+    )
+
+    value.add_event(
+        "third",
+    )
+
+    events = value.events
+
+    assert len(
+        events,
+    ) == 3
+
+    names = [
+        getattr(
+            event,
+            "name",
+            None,
+        )
+        for event in events
+    ]
+
+    assert names == [
+        "first",
+        "second",
+        "third",
+    ]
+
+# ==============================================================================
+# Part 13. Links
+# ==============================================================================
+
+
+def test_span_links():
+    value = Span()
+
+    assert isinstance(
+        value.links,
+        list,
+    )
+
+    assert value.links == []
+
+
+def test_add_link():
+    value = Span()
+
+    result = value.add_link(
+        "trace-001",
+    )
+
+    assert result is value
+    assert len(
+        value.links,
+    ) == 1
+
+
+def test_clear_links():
+    value = Span()
+
+    value.add_link(
+        "trace-001",
+    )
+
+    value.add_link(
+        "trace-002",
+    )
+
+    result = value.clear_links()
+
+    assert result is value
+    assert value.links == []
+
+
+def test_link_order():
+    value = Span()
+
+    value.add_link(
+        "trace-001",
+    )
+
+    value.add_link(
+        "trace-002",
+    )
+
+    value.add_link(
+        "trace-003",
+    )
+
+    links = value.links
+
+    assert len(
+        links,
+    ) == 3
+
+    assert links[0] == "trace-001"
+    assert links[1] == "trace-002"
+    assert links[2] == "trace-003"
+
+
+# ==============================================================================
+# Part 14. Context
+# ==============================================================================
+
+
+def test_span_context():
+    value = Span()
+
+    assert value.context is None
+
+
+def test_span_context_id():
+    value = Span()
+
+    assert value.context_id is None
+
+
+def test_context_assignment():
+    value = Span()
+
+    context = {
+        "trace_id": "trace-001",
+        "span_id": "span-001",
+    }
+
+    value.context = context
+
+    assert value.context == context
+    assert value.context_id is not None
+
+
+def test_context_propagation():
+    parent = Span(
+        name="parent",
+        trace_id="trace-001",
+    )
+
+    context = {
+        "trace_id": parent.trace_id,
+        "span_id": parent.id,
+    }
+
+    parent.context = context
+
+    child = Span(
+        name="child",
+        trace_id=parent.trace_id,
+        parent_id=parent.id,
+    )
+
+    child.context = parent.context
+
+    assert child.context == parent.context
+    assert child.trace_id == parent.trace_id
+    assert child.parent_id == parent.id
+
+
+# ==============================================================================
+# Part 15. Parent / Children
+# ==============================================================================
+
+
+def test_span_parent():
+    value = Span()
+
+    assert value.parent is None
+
+
+def test_span_parent_id():
+    value = Span(
+        parent_id="parent-001",
+    )
+
+    assert value.parent_id == "parent-001"
+
+
+def test_span_children():
+    value = Span()
+
+    assert isinstance(
+        value.children,
+        list,
+    )
+
+    assert value.children == []
+
+
+def test_span_child_count():
+    value = Span()
+
+    assert value.child_count == 0
+
+
+def test_add_child():
+    parent = Span(
+        name="parent",
+        trace_id="trace-001",
+    )
+
+    child = Span(
+        name="child",
+        trace_id="trace-001",
+        parent_id=parent.id,
+    )
+
+    result = parent.add_child(
+        child,
+    )
+
+    assert result is parent
+    assert child in parent.children
+    assert parent.child_count == 1
+
+
+def test_parent_child_relationship():
+    parent = Span(
+        name="parent",
+        trace_id="trace-001",
+    )
+
+    child = Span(
+        name="child",
+        trace_id="trace-001",
+        parent_id=parent.id,
+    )
+
+    parent.add_child(
+        child,
+    )
+
+    assert child.parent is parent
+    assert child.parent_id == parent.id
+    assert child in parent.children
+    assert parent.child_count == 1
+
+
+# ==============================================================================
+# Part 16. Error / Exception
+# ==============================================================================
+
+
+def test_span_exception():
+    value = Span()
+
+    assert value.exception is None
+
+
+def test_attach_exception():
+    value = Span()
+
+    error = ValueError(
+        "test error",
+    )
+
+    result = value.attach_exception(
+        error,
+    )
+
+    assert result is value
+    assert value.exception is error
+
+
+def test_exception_state():
+    value = Span()
+
+    error = RuntimeError(
+        "runtime failure",
+    )
+
+    value.attach_exception(
+        error,
+    )
+
+    assert value.exception is error
+    assert value.status != DEFAULT_SPAN_STATUS
+
+
+def test_error_status():
+    value = Span()
+
+    error = ValueError(
+        "invalid value",
+    )
+
+    value.attach_exception(
+        error,
+    )
+
+    assert value.status in {
+        "error",
+        "ERROR",
+        "Error",
+    }
+
+
+def test_error_transition():
+    value = Span()
+
+    assert value.status == DEFAULT_SPAN_STATUS
+
+    value.attach_exception(
+        ValueError(
+            "failure",
+        ),
+    )
+
+    assert value.exception is not None
+    assert value.status in {
+        "error",
+        "ERROR",
+        "Error",
+    }
+
+
+# ==============================================================================
+# Part 17. Diagnostics
+# ==============================================================================
+
+
+def test_span_summary():
+    value = Span(
+        name="summary-span",
+        trace_id="trace-001",
+    )
+
+    result = value.summary()
+
+    assert isinstance(
+        result,
+        dict,
+    )
+
+    assert result["name"] == "summary-span"
+
+
+def test_span_diagnostics():
+    value = Span(
+        name="diagnostic-span",
+    )
+
+    result = value.diagnostics()
+
+    assert isinstance(
+        result,
+        dict,
+    )
+
+
+def test_span_validate():
+    value = Span(
+        name="valid-span",
+    )
+
+    result = value.validate()
+
+    assert result is True
+
+
+def test_span_health():
+    value = Span(
+        name="healthy-span",
+    )
+
+    result = value.health()
+
+    assert result is True
+
+
+# ==============================================================================
+# Part 18. Serialization
+# ==============================================================================
+
+
+def test_span_to_dict():
+    value = Span(
+        name="serialized-span",
+        trace_id="trace-001",
+        parent_id="parent-001",
+    )
+
+    result = value.to_dict()
+
+    assert isinstance(
+        result,
+        dict,
+    )
+
+    assert result["id"] == value.id
+    assert result["trace_id"] == value.trace_id
+    assert result["parent_id"] == value.parent_id
+    assert result["name"] == value.name
+
+
+def test_span_snapshot():
+    value = Span(
+        name="snapshot-span",
+        trace_id="trace-001",
+    )
+
+    result = value.snapshot()
+
+    assert isinstance(
+        result,
+        dict,
+    )
+
+    assert result["id"] == value.id
+    assert result["trace_id"] == value.trace_id
+    assert result["name"] == value.name
+
+
+def test_span_clone():
+    value = Span(
+        name="clone-span",
+        trace_id="trace-001",
+    )
+
+    result = value.clone()
+
+    assert isinstance(
+        result,
+        Span,
+    )
+
+    assert result is not value
+    assert result.id == value.id
+    assert result.trace_id == value.trace_id
+    assert result.name == value.name
+
+
+def test_snapshot_preserves_identity():
+    value = Span(
+        name="identity-span",
+        trace_id="trace-001",
+        parent_id="parent-001",
+    )
+
+    snapshot = value.snapshot()
+
+    assert snapshot["id"] == value.id
+    assert snapshot["trace_id"] == value.trace_id
+    assert snapshot["parent_id"] == value.parent_id
+    assert snapshot["name"] == value.name
+
+
+def test_clone_is_independent():
+    value = Span(
+        name="original-span",
+        trace_id="trace-001",
+        attributes={
+            "key": "original",
         },
     )
 
-    event = span.events[0]
+    clone = value.clone()
 
-    assert event["name"] == "request"
-    assert event["attributes"]["method"] == "GET"
-    assert event["attributes"]["status"] == 200
+    assert clone is not value
 
-
-def test_multiple_events(span):
-
-    span.add_event("start")
-    span.add_event("running")
-    span.add_event("finish")
-
-    assert span.event_count == 3
-
-
-def test_get_event(span):
-
-    event = span.add_event(
-        "checkpoint",
+    clone.set_attribute(
+        "key",
+        "clone",
     )
 
-    restored = span.get_event(
-        event["id"],
-    )
+    assert value.get_attribute(
+        "key",
+    ) == "original"
 
-    assert restored is not None
-    assert restored["name"] == "checkpoint"
-
-
-def test_get_events(span):
-
-    span.add_event("a")
-    span.add_event("b")
-
-    events = span.get_events()
-
-    assert isinstance(events, list)
-    assert len(events) == 2
-
-
-def test_remove_event(span):
-
-    event = span.add_event(
-        "temporary",
-    )
-
-    assert span.remove_event(
-        event["id"],
-    ) is True
-
-    assert span.event_count == 0
-
-
-def test_remove_missing_event(span):
-
-    assert (
-        span.remove_event(
-            "missing",
-        )
-        is False
-    )
-
-
-def test_clear_events(span):
-
-    span.add_event("a")
-    span.add_event("b")
-
-    span.clear_events()
-
-    assert span.event_count == 0
-    assert span.events == []
-
-
-def test_record_exception(span):
-
-    try:
-        raise RuntimeError(
-            "runtime failure",
-        )
-
-    except Exception as exc:
-
-        span.record_exception(
-            exc,
-        )
-
-    assert span.status is SpanStatus.ERROR
-    assert span.statistics.error_count == 1
-    assert span.event_count == 1
-
-
-def test_record_exception_attributes(span):
-
-    try:
-        raise ValueError(
-            "invalid",
-        )
-
-    except Exception as exc:
-
-        span.record_exception(
-            exc,
-            attributes={
-                "stage": "planner",
-            },
-        )
-
-    event = span.events[0]
-
-    assert (
-        event["attributes"]["stage"]
-        == "planner"
-    )
+    assert clone.get_attribute(
+        "key",
+    ) == "clone"
 
 
 # ==============================================================================
-# Part 6. Links
+# Part 19. Python Protocols
 # ==============================================================================
 
 
-def test_add_link(span):
-
-    span.add_link(
-        trace_id="trace-001",
-        span_id="span-001",
+def test_span_repr():
+    value = Span(
+        name="repr-span",
     )
 
-    assert len(span.links) == 1
-
-
-def test_add_multiple_links(span):
-
-    span.add_link(
-        "trace-1",
-        "span-1",
+    result = repr(
+        value,
     )
-
-    span.add_link(
-        "trace-2",
-        "span-2",
-    )
-
-    assert len(span.links) == 2
-
-
-def test_link_content(span):
-
-    span.add_link(
-        trace_id="trace-x",
-        span_id="span-x",
-    )
-
-    link = span.links[0]
-
-    assert link["trace_id"] == "trace-x"
-    assert link["span_id"] == "span-x"
-
-
-def test_remove_link(span):
-
-    link = span.add_link(
-        "trace-remove",
-        "span-remove",
-    )
-
-    assert span.remove_link(
-        link["span_id"],
-    ) is True
-
-    assert len(span.links) == 0
-
-
-def test_remove_missing_link(span):
-
-    assert (
-        span.remove_link(
-            "missing",
-        )
-        is False
-    )
-
-
-def test_clear_links(span):
-
-    span.add_link(
-        "trace-1",
-        "span-1",
-    )
-
-    span.add_link(
-        "trace-2",
-        "span-2",
-    )
-
-    span.clear_links()
-
-    assert span.links == []
-
-
-def test_link_count(span):
-
-    span.add_link(
-        "trace-1",
-        "span-1",
-    )
-
-    span.add_link(
-        "trace-2",
-        "span-2",
-    )
-
-    assert len(span.links) == 2
-
-
-def test_link_with_metadata(span):
-
-    span.add_link(
-        trace_id="trace-meta",
-        span_id="span-meta",
-        service="planner",
-        node="worker-1",
-    )
-
-    link = span.links[0]
-
-    assert link["service"] == "planner"
-    assert link["node"] == "worker-1"
-# ==============================================================================
-# Part 7. Serialization
-# ==============================================================================
-
-
-def test_to_dict(span):
-
-    data = span.to_dict()
-
-    assert isinstance(data, dict)
-    assert data["name"] == span.name
-    assert data["trace_id"] == span.trace_id
-    assert data["span_id"] == span.span_id
-
-
-def test_to_dict_contains_attributes(span):
-
-    span.set_attribute(
-        "model",
-        "SciOS",
-    )
-
-    data = span.to_dict()
-
-    assert (
-        data["attributes"]["model"]
-        == "SciOS"
-    )
-
-
-def test_from_dict(span):
-
-    data = span.to_dict()
-
-    restored = Span.from_dict(
-        data,
-    )
-
-    assert restored.name == span.name
-    assert restored.trace_id == span.trace_id
-    assert restored.span_id == span.span_id
-
-
-def test_to_json(span):
-
-    payload = span.to_json()
 
     assert isinstance(
-        payload,
+        result,
         str,
     )
 
+    assert "Span" in result
+    assert "repr-span" in result
 
-    data = json.loads(
-        payload,
+
+def test_span_str():
+    value = Span(
+        name="string-span",
     )
 
-    assert (
-        data["name"]
-        == span.name
+    result = str(
+        value,
+    )
+
+    assert isinstance(
+        result,
+        str,
+    )
+
+    assert "string-span" in result
+
+
+def test_span_bool():
+    value = Span()
+
+    assert bool(
+        value,
+    ) is True
+
+
+def test_span_eq():
+    value = Span(
+        name="equal-span",
+        trace_id="trace-001",
+    )
+
+    clone = value.clone()
+
+    assert value == clone
+
+
+def test_span_hash():
+    value = Span()
+
+    result = hash(
+        value,
+    )
+
+    assert isinstance(
+        result,
+        int,
     )
 
 
-def test_from_json(span):
+def test_span_len():
+    value = Span()
 
-    payload = span.to_json()
-
-    restored = Span.from_json(
-        payload,
+    result = len(
+        value,
     )
 
-    assert restored.name == span.name
-    assert restored.trace_id == span.trace_id
-    assert restored.span_id == span.span_id
+    assert isinstance(
+        result,
+        int,
+    )
+
+    assert result >= 0
 
 
-def test_snapshot(span):
-
-    snapshot = span.snapshot()
-
-    assert snapshot is not None
+# ==============================================================================
+# Part 20. Lifecycle Integration
+# ==============================================================================
 
 
-    if isinstance(snapshot, dict):
+def test_start_finish_cycle():
+    value = Span(
+        name="cycle-span",
+    )
 
-        assert (
-            snapshot["name"]
-            == span.name
-        )
+    assert value.active is False
 
-    else:
+    value.start()
 
-        assert (
-            snapshot.name
-            == span.name
-        )
+    assert value.active is True
+    assert value.started is True
+
+    value.finish()
+
+    assert value.active is False
+    assert value.finished is True
 
 
-def test_restore_from_snapshot(span):
+def test_start_cancel_cycle():
+    value = Span(
+        name="cancel-cycle",
+    )
 
-    span.set_attribute(
+    value.start()
+
+    assert value.active is True
+
+    value.cancel()
+
+    assert value.cancelled is True
+    assert value.active is False
+
+
+def test_start_close_cycle():
+    value = Span(
+        name="close-cycle",
+    )
+
+    value.start()
+
+    assert value.active is True
+
+    value.close()
+
+    assert value.closed is True
+    assert value.active is False
+
+
+def test_restart_cycle():
+    value = Span(
+        name="restart-cycle",
+    )
+
+    value.start()
+    value.finish()
+
+    assert value.finished is True
+
+    value.restart()
+
+    assert value.started is True
+    assert value.finished is False
+    assert value.cancelled is False
+    assert value.closed is False
+    assert value.active is True
+
+
+def test_freeze_unfreeze_cycle():
+    value = Span(
+        name="freeze-cycle",
+    )
+
+    assert value.frozen is False
+
+    value.freeze()
+
+    assert value.frozen is True
+
+    value.unfreeze()
+
+    assert value.frozen is False
+
+
+# ==============================================================================
+# Part 21. Final Integration
+# ==============================================================================
+
+
+def test_span_complete_workflow():
+    value = Span(
+        name="workflow-span",
+        trace_id="trace-001",
+        attributes={
+            "service": "scios",
+        },
+    )
+
+    value.start()
+
+    value.set_tag(
+        "environment",
+        "test",
+    )
+
+    value.set_baggage(
+        "request-id",
+        "req-001",
+    )
+
+    value.add_event(
+        "processing",
+    )
+
+    value.add_link(
+        "trace-002",
+    )
+
+    assert value.started is True
+    assert value.active is True
+    assert value.get_attribute(
         "service",
-        "planner",
+    ) == "scios"
+    assert value.get_tag(
+        "environment",
+    ) == "test"
+    assert value.get_baggage(
+        "request-id",
+    ) == "req-001"
+    assert len(
+        value.events,
+    ) == 1
+    assert len(
+        value.links,
+    ) == 1
+
+    value.finish()
+
+    assert value.finished is True
+    assert value.active is False
+
+
+def test_span_parent_child_workflow():
+    parent = Span(
+        name="parent",
+        trace_id="trace-001",
     )
 
-    snapshot = span.snapshot()
+    child = Span(
+        name="child",
+        trace_id=parent.trace_id,
+        parent_id=parent.id,
+    )
 
-    restored = Span.restore(
+    parent.add_child(
+        child,
+    )
+
+    parent.start()
+    child.start()
+
+    assert parent.active is True
+    assert child.active is True
+    assert child.parent is parent
+    assert child.parent_id == parent.id
+    assert parent.child_count == 1
+
+    child.finish()
+    parent.finish()
+
+    assert child.finished is True
+    assert parent.finished is True
+
+
+def test_span_error_workflow():
+    value = Span(
+        name="error-workflow",
+        trace_id="trace-001",
+    )
+
+    value.start()
+
+    error = RuntimeError(
+        "processing failure",
+    )
+
+    value.attach_exception(
+        error,
+    )
+
+    assert value.exception is error
+    assert value.status in {
+        "error",
+        "ERROR",
+        "Error",
+    }
+
+    value.finish()
+
+    assert value.finished is True
+    assert value.active is False
+
+
+def test_span_snapshot_restore():
+    value = Span(
+        name="snapshot-workflow",
+        trace_id="trace-001",
+        parent_id="parent-001",
+        attributes={
+            "service": "scios",
+        },
+    )
+
+    value.start()
+
+    snapshot = value.snapshot()
+
+    restored = Span.from_snapshot(
         snapshot,
     )
 
-    assert restored is not None
+    assert restored.id == value.id
+    assert restored.trace_id == value.trace_id
+    assert restored.parent_id == value.parent_id
+    assert restored.name == value.name
+    assert restored.get_attribute(
+        "service",
+    ) == "scios"
 
 
-def test_serialization_roundtrip(span):
-
-    span.set_attribute(
-        "framework",
-        "SciOS",
+def test_span_clone_workflow():
+    value = Span(
+        name="clone-workflow",
+        trace_id="trace-001",
+        attributes={
+            "service": "scios",
+        },
     )
 
-    span.add_event(
-        "created",
+    value.start()
+
+    clone = value.clone()
+
+    assert clone is not value
+    assert clone.id == value.id
+    assert clone.trace_id == value.trace_id
+    assert clone.name == value.name
+    assert clone.get_attribute(
+        "service",
+    ) == "scios"
+
+    clone.set_attribute(
+        "service",
+        "clone",
     )
 
-    payload = span.to_json()
-
-    restored = Span.from_json(
-        payload,
-    )
-
-    assert restored.name == span.name
-    assert (
-        restored.attributes["framework"]
-        == "SciOS"
-    )
-
-
-# ==============================================================================
-# Part 8. Validation
-# ==============================================================================
-
-
-def test_validate(span):
-
-    assert (
-        span.validate()
-        is True
-    )
-
-
-def test_valid_property(span):
-
-    assert (
-        span.valid
-        is True
-    )
-
-
-def test_invalid_empty_name():
-
-    with pytest.raises(
-        Exception,
-    ):
-
-        Span(
-            name="",
-        )
-
-
-def test_invalid_attribute_key(span):
-
-    with pytest.raises(
-        Exception,
-    ):
-
-        span.set_attribute(
-            "",
-            1,
-        )
-
-
-def test_invalid_event_name(span):
-
-    with pytest.raises(
-        Exception,
-    ):
-
-        span.add_event(
-            "",
-        )
-
-
-def test_invalid_state_transition(span):
-
-    span.finish()
-
-    assert (
-        span.finished
-        is True
-    )
-
-
-def test_closed_span_cannot_modify(span):
-
-    span.close()
-
-    with pytest.raises(
-        Exception,
-    ):
-
-        span.set_attribute(
-            "x",
-            1,
-        )
-
-
-def test_health(span):
-
-    assert (
-        span.health()
-        is True
-    )
-
-
-def test_summary(span):
-
-    summary = span.summary()
-
-    assert isinstance(
-        summary,
-        dict,
-    )
-
-
-def test_diagnostics(span):
-
-    diagnostics = span.diagnostics()
-
-    assert isinstance(
-        diagnostics,
-        dict,
-    )
-# ==============================================================================
-# Part 9. Diagnostics
-# ==============================================================================
-
-
-def test_runtime_statistics(span):
-
-    stats = span.runtime_statistics()
-
-    assert isinstance(
-        stats,
-        dict,
-    )
-
-    assert (
-        stats["identity"]["span_id"]
-        == span.span_id
-    )
-
-
-def test_report(span):
-
-    report = span.report()
-
-    assert report is not None
-
-    if hasattr(
-        report,
-        "name",
-    ):
-
-        assert (
-            report.name
-            == span.name
-        )
-
-    else:
-
-        assert (
-            report["name"]
-            == span.name
-        )
-
-
-def test_summary(span):
-
-    summary = span.summary()
-
-    assert isinstance(
-        summary,
-        dict,
-    )
-
-    assert (
-        summary["name"]
-        == span.name
-    )
-
-
-def test_diagnostics(span):
-
-    result = span.diagnostics()
-
-    assert isinstance(
-        result,
-        dict,
-    )
-
-    assert (
-        "summary"
-        in result
-    )
-
-
-def test_success_rate(span):
-
-    span.start()
-
-    span.finish()
-
-    assert (
-        0.0
-        <=
-        span.success_rate()
-        <=
-        1.0
-    )
-
-
-def test_failure_rate(span):
-
-    rate = span.failure_rate()
-
-    assert (
-        0.0
-        <=
-        rate
-        <=
-        1.0
-    )
-
-
-def test_duration_statistics(span):
-
-    span.start()
-
-    time.sleep(
-        0.01,
-    )
-
-    span.finish()
-
-    stats = (
-        span.duration_statistics()
-    )
-
-    assert isinstance(
-        stats,
-        dict,
-    )
-
-    assert (
-        stats["current"]
-        >= 0
-    )
-
-
-def test_throughput(span):
-
-    span.start()
-
-    span.add_event(
-        "event",
-    )
-
-    time.sleep(
-        0.01,
-    )
-
-    span.finish()
-
-    assert (
-        span.throughput()
-        >= 0.0
-    )
-
-
-def test_health(span):
-
-    assert (
-        span.health()
-        is True
-    )
-
-
-# ==============================================================================
-# Part 10. Python Protocols
-# ==============================================================================
-
-
-def test_repr(span):
-
-    result = repr(
-        span,
-    )
-
-    assert isinstance(
-        result,
-        str,
-    )
-
-    assert (
-        "TraceSpan"
-        in result
-    )
-
-
-def test_str(span):
-
-    result = str(
-        span,
-    )
-
-    assert isinstance(
-        result,
-        str,
-    )
-
-
-def test_len(span):
-
-    span.set_attribute(
-        "a",
-        1,
-    )
-
-    span.add_event(
-        "created",
-    )
-
-    span.add_link(
-        "trace-1",
-        "span-1",
-    )
-
-    assert (
-        len(span)
-        == 3
-    )
-
-
-def test_contains(span):
-
-    span["service"] = "planner"
-
-    assert (
-        "service"
-        in span
-    )
-
-
-def test_getitem(span):
-
-    span["mode"] = "runtime"
-
-    assert (
-        span["mode"]
-        == "runtime"
-    )
-
-
-def test_setitem(span):
-
-    span["enabled"] = True
-
-    assert (
-        span.attributes["enabled"]
-        is True
-    )
-
-
-def test_iter(span):
-
-    span["a"] = 1
-    span["b"] = 2
-
-    keys = list(
-        iter(span),
-    )
-
-    assert (
-        "a"
-        in keys
-    )
-
-    assert (
-        "b"
-        in keys
-    )
-
-
-def test_bool(span):
-
-    assert bool(
-        span,
-    ) is True
-
-
-def test_copy(span):
-
-    cloned = copy.copy(
-        span,
-    )
-
-    assert (
-        cloned.name
-        == span.name
-    )
-
-    assert (
-        cloned.span_id
-        == span.span_id
-    )
-
-
-def test_deepcopy(span):
-
-    cloned = copy.deepcopy(
-        span,
-    )
-
-    assert (
-        cloned.name
-        == span.name
-    )
-
-    assert (
-        cloned.span_id
-        == span.span_id
-    )
-
-
-def test_context_manager():
-
-    with Span(
-        name="context",
-    ) as span:
-
-        span.set_attribute(
-            "active",
-            True,
-        )
-
-    assert (
-        span.finished
-        is True
-    )                    
+    assert value.get_attribute(
+        "service",
+    ) == "scios"
+
+    assert clone.get_attribute(
+        "service",
+    ) == "clone"

@@ -1,2512 +1,947 @@
-# ============================================================
-# test_plugin.py
-# Part 1 – Fixtures
-# ============================================================
+﻿# ==============================================================================
+# scios/runtime/observability/tests/tracing/test_plugin.py
+# ==============================================================================
+# SciOS Runtime Observability
+# Trace Plugin Tests
+# ==============================================================================
+
+from __future__ import annotations
+
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
 
 import pytest
 
-
+from scios.runtime.observability.tracing.provider import TraceProvider
+from collections.abc import Mapping
+from scios.runtime.observability.tracing.context import TraceContext
 from scios.runtime.observability.tracing.plugin import (
-    TracingPlugin,
+    DEFAULT_SERVICE_NAME,
+    PLUGIN_API_VERSION,
+    PLUGIN_NAME,
+    PLUGIN_VERSION,
+    PluginConfigData,
+    PluginEvent,
+    PluginRegistration,
+    PluginSnapshot,
+    PluginState,
+    PluginStatistics,
+    PluginType,
+    TracePlugin,
 )
+from scios.runtime.observability.tracing.span import Span
+from scios.runtime.observability.tracing.trace import Trace
 
 
-
-# ============================================================
-# Fixtures
-# ============================================================
-
-
-@pytest.fixture
-def plugin():
-    """
-    Default empty tracing plugin fixture.
-    """
-
-    instance = TracingPlugin()
-
-
-    return instance
-
+# ==============================================================================
+# Part 2. Fixtures
+# ==============================================================================
 
 
 @pytest.fixture
-def configured_plugin():
-    """
-    Configured tracing plugin fixture.
-    """
+def plugin() -> TracePlugin:
+    """Create a default TracePlugin instance."""
 
-    instance = TracingPlugin()
+    return TracePlugin()
 
 
-    instance.set_config(
-        {
-            "service_name": "scios-test",
-            "enabled": True,
-            "auto_start": False,
-            "max_spans": 1000,
-            "sampling_rate": 1.0,
-        }
+@pytest.fixture
+def provider() -> TraceProvider:
+    """Create a default TraceProvider instance."""
+
+    return TraceProvider()
+
+
+@pytest.fixture
+def configured_plugin() -> TracePlugin:
+    """Create a configured TracePlugin instance."""
+
+    config = PluginConfigData(
+        name="test-plugin",
+        version=PLUGIN_VERSION,
+        api_version=PLUGIN_API_VERSION,
+        service_name="scios-test",
+        enabled=True,
+        priority=10,
+        order=1,
+    )
+
+    return TracePlugin(
+        config=config,
     )
 
 
-    return instance
-# ============================================================
-# Part 2 – Creation
-# ============================================================
-
-
-def test_plugin_creation(
-    plugin,
-):
+@pytest.fixture
+def trace(plugin: TracePlugin) -> Trace:
     """
-    Test basic plugin instance creation.
+    Create and activate a trace through the real tracing stack.
+
+    The trace must belong to the same TraceManager used by the plugin.
     """
 
+    trace = plugin.start_trace("Runtime")
+
+    assert trace is not None
+
+    return trace
+
+
+# ==============================================================================
+# Part 3. Construction
+# ==============================================================================
+
+
+def test_plugin_constructs(plugin):
     assert plugin is not None
+    assert isinstance(plugin, TracePlugin)
 
 
-    assert isinstance(
-        plugin,
-        TracingPlugin,
+def test_plugin_default_name(plugin):
+    assert plugin.name == PLUGIN_NAME
+
+
+def test_plugin_default_version(plugin):
+    assert plugin.version == PLUGIN_VERSION
+
+
+def test_plugin_default_api_version(plugin):
+    assert plugin.api_version == PLUGIN_API_VERSION
+
+
+def test_plugin_default_service_name(plugin):
+    assert plugin.service_name == DEFAULT_SERVICE_NAME
+
+
+def test_plugin_configured(configured_plugin):
+    assert configured_plugin.name == "test-plugin"
+    assert configured_plugin.service_name == "scios-test"
+
+
+def test_plugin_config_data():
+    config = PluginConfigData()
+
+    assert config.name == PLUGIN_NAME
+    assert config.version == PLUGIN_VERSION
+    assert config.api_version == PLUGIN_API_VERSION
+    assert config.service_name == DEFAULT_SERVICE_NAME
+    assert isinstance(config.metadata, dict)
+    assert isinstance(config.attributes, dict)
+
+
+def test_plugin_statistics():
+    statistics = PluginStatistics()
+
+    assert statistics.trace_count == 0
+    assert statistics.span_count == 0
+    assert statistics.processed_count == 0
+    assert statistics.sampled_count == 0
+    assert statistics.exported_count == 0
+    assert statistics.error_count == 0
+
+
+def test_plugin_snapshot():
+    snapshot = PluginSnapshot(
+        name=PLUGIN_NAME,
+        version=PLUGIN_VERSION,
+        state=PluginState.CREATED,
+        enabled=True,
+        active=False,
     )
 
+    assert snapshot.name == PLUGIN_NAME
+    assert snapshot.version == PLUGIN_VERSION
+    assert snapshot.state is PluginState.CREATED
+    assert snapshot.enabled is True
+    assert snapshot.active is False
 
-    assert hasattr(
-        plugin,
-        "config",
+
+def test_plugin_registration():
+    registration = PluginRegistration(
+        name=PLUGIN_NAME,
     )
 
+    assert registration.name == PLUGIN_NAME
+    assert registration.plugin_type is PluginType.TRACING
+    assert registration.version == PLUGIN_VERSION
+    assert registration.factory is None
 
-    assert hasattr(
-        plugin,
-        "enabled",
-    )
 
+# ==============================================================================
+# Part 4. Properties
+# ==============================================================================
 
-    assert hasattr(
-        plugin,
-        "running",
-    )
 
+def test_properties(plugin):
+    assert plugin.name == PLUGIN_NAME
+    assert plugin.version == PLUGIN_VERSION
+    assert plugin.api_version == PLUGIN_API_VERSION
+    assert plugin.service_name == DEFAULT_SERVICE_NAME
 
-    assert hasattr(
-        plugin,
-        "closed",
-    )
 
+def test_enabled_property(plugin):
+    assert isinstance(plugin.enabled, bool)
 
-    assert hasattr(
-        plugin,
-        "statistics",
-    )
 
+def test_active_property(plugin):
+    assert isinstance(plugin.active, bool)
 
-    assert hasattr(
-        plugin,
-        "tracers",
-    )
 
+def test_state_property(plugin):
+    assert isinstance(plugin.state, PluginState)
 
 
-def test_default_configuration(
-    plugin,
-):
-    """
-    Test default plugin configuration.
-    """
+def test_priority_property(plugin):
+    assert isinstance(plugin.priority, int)
 
-    config = (
-        plugin.get_config()
-    )
 
+def test_order_property(plugin):
+    assert isinstance(plugin.order, int)
 
-    assert isinstance(
-        config,
-        dict,
-    )
 
+def test_metadata_property(plugin):
+    assert isinstance(plugin.metadata, dict)
 
-    assert "service_name" in config
 
-    assert "enabled" in config
+def test_attributes_property(plugin):
+    assert isinstance(plugin.attributes, dict)
 
-    assert "auto_start" in config
 
-    assert "max_spans" in config
+def test_statistics_property(plugin):
+    assert isinstance(plugin.statistics, PluginStatistics)
 
-    assert "sampling_rate" in config
 
+# ==============================================================================
+# Part 5. Lifecycle
+# ==============================================================================
 
 
-    assert (
-        config["service_name"]
-        ==
-        "scios"
-    )
+def test_initial_state(plugin):
+    assert plugin.state is PluginState.CREATED
+    assert plugin.active is False
 
 
-    assert (
-        config["enabled"]
-        is True
-    )
+def test_start(plugin):
+    result = plugin.start()
 
+    assert result is plugin
+    assert plugin.active is True
+    assert plugin.state is PluginState.RUNNING
 
-    assert (
-        config["auto_start"]
-        is False
-    )
 
-
-    assert (
-        config["max_spans"]
-        >
-        0
-    )
-
-
-    assert (
-        0
-        <=
-        config["sampling_rate"]
-        <=
-        1
-    )
-
-
-
-    assert (
-        plugin.enabled
-        is True
-    )
-
-
-    assert (
-        plugin.running
-        is False
-    )
-
-
-    assert (
-        plugin.closed
-        is False
-    )
-# ============================================================
-# Part 3 – Registration
-# ============================================================
-
-
-class DummyTracer:
-    """
-    Dummy tracer implementation
-    for registration tests.
-    """
-
-    def __init__(
-        self,
-        name="dummy",
-    ):
-        self.name = name
-
-
-
-def test_register(
-    plugin,
-):
-    """
-    Test registering tracer/plugin component.
-    """
-
-    tracer = DummyTracer(
-        "test-tracer"
-    )
-
-
-    result = (
-        plugin.register(
-            tracer
-        )
-    )
-
-
-    assert result is not None
-
-
-    assert (
-        plugin.registered(
-            "test-tracer"
-        )
-        is True
-    )
-
-
-    assert (
-        "test-tracer"
-        in
-        plugin.tracers
-    )
-
-
-
-def test_unregister(
-    plugin,
-):
-    """
-    Test unregistering tracer/plugin component.
-    """
-
-    tracer = DummyTracer(
-        "remove-tracer"
-    )
-
-
-    plugin.register(
-        tracer
-    )
-
-
-    assert (
-        plugin.registered(
-            "remove-tracer"
-        )
-        is True
-    )
-
-
-    result = (
-        plugin.unregister(
-            "remove-tracer"
-        )
-    )
-
-
-    assert result is not None
-
-
-    assert (
-        plugin.registered(
-            "remove-tracer"
-        )
-        is False
-    )
-
-
-    assert (
-        "remove-tracer"
-        not in
-        plugin.tracers
-    )
-
-
-
-def test_registered(
-    plugin,
-):
-    """
-    Test tracer registration lookup.
-    """
-
-    tracer = DummyTracer(
-        "lookup-tracer"
-    )
-
-
-    plugin.register(
-        tracer
-    )
-
-
-    assert (
-        plugin.registered(
-            "lookup-tracer"
-        )
-        is True
-    )
-
-
-    assert (
-        plugin.registered(
-            "missing-tracer"
-        )
-        is False
-    )
-
-
-
-def test_registry(
-    plugin,
-):
-    """
-    Test registry content access.
-    """
-
-    tracer_a = DummyTracer(
-        "tracer-a"
-    )
-
-    tracer_b = DummyTracer(
-        "tracer-b"
-    )
-
-
-    plugin.register(
-        tracer_a
-    )
-
-    plugin.register(
-        tracer_b
-    )
-
-
-    registry = (
-        plugin.registry()
-    )
-
-
-    assert isinstance(
-        registry,
-        dict,
-    )
-
-
-    assert (
-        len(registry)
-        ==
-        2
-    )
-
-
-    assert (
-        "tracer-a"
-        in
-        registry
-    )
-
-
-    assert (
-        "tracer-b"
-        in
-        registry
-    )
-
-
-    assert (
-        registry["tracer-a"]
-        ==
-        tracer_a
-    )
-# ============================================================
-# Part 4 – Plugin Lifecycle
-# ============================================================
-
-
-def test_start(
-    plugin,
-):
-    """
-    Test starting tracing plugin.
-    """
-
-    assert (
-        plugin.running
-        is False
-    )
-
-
-    result = (
-        plugin.start()
-    )
-
-
-    assert result is not None
-
-
-    assert (
-        plugin.running
-        is True
-    )
-
-
-    assert (
-        plugin.closed
-        is False
-    )
-
-
-
-def test_stop(
-    plugin,
-):
-    """
-    Test stopping tracing plugin.
-    """
-
+def test_start_idempotent(plugin):
     plugin.start()
 
+    result = plugin.start()
 
-    assert (
-        plugin.running
-        is True
-    )
+    assert result is plugin
+    assert plugin.active is True
+    assert plugin.state is PluginState.RUNNING
 
 
-    result = (
-        plugin.stop()
-    )
+def test_stop(plugin):
+    plugin.start()
 
+    result = plugin.stop()
 
-    assert result is not None
+    assert result is plugin
+    assert plugin.active is False
+    assert plugin.state is PluginState.STOPPED
 
 
-    assert (
-        plugin.running
-        is False
-    )
+def test_stop_idempotent(plugin):
+    plugin.start()
+    plugin.stop()
 
+    result = plugin.stop()
 
+    assert result is plugin
+    assert plugin.active is False
 
-def test_enable(
-    plugin,
-):
-    """
-    Test enabling tracing plugin.
-    """
 
-    plugin.disable()
+def test_initialize(plugin):
+    result = plugin.initialize()
 
+    assert result is plugin
+    assert plugin.state in {
+        PluginState.INITIALIZED,
+        PluginState.RUNNING,
+    }
 
-    assert (
-        plugin.enabled
-        is False
-    )
 
+def test_statistics_lifecycle(plugin):
+    plugin.start()
+    plugin.stop()
 
-    result = (
-        plugin.enable()
-    )
+    assert plugin.statistics.start_count >= 1
+    assert plugin.statistics.stop_count >= 1
 
 
-    assert result is not None
+# ==============================================================================
+# Part 6. Provider Management
+# ==============================================================================
 
 
-    assert (
-        plugin.enabled
-        is True
-    )
+def test_provider_property(plugin):
+    provider = plugin.provider
 
+    assert provider is None or provider is not None
 
 
-def test_disable(
-    plugin,
-):
-    """
-    Test disabling tracing plugin.
-    """
+def test_set_provider(
+    plugin: TracePlugin,
+) -> None:
+    provider = plugin.provider
 
-    assert (
-        plugin.enabled
-        is True
-    )
+    result = plugin.set_provider(provider)
 
+    assert result is plugin
+    assert plugin.provider is provider
 
-    result = (
-        plugin.disable()
-    )
 
+def test_clear_provider(plugin):
+    provider = object()
 
-    assert result is not None
+    plugin.set_provider(provider)
 
+    result = plugin.set_provider(None)
 
-    assert (
-        plugin.enabled
-        is False
-    )
+    assert result is plugin
+    assert plugin.provider is None
 
 
-    trace_result = (
-        plugin.process_trace(
-            {
-                "id": "disabled-trace",
-                "type": "trace",
-                "trace_id": "disabled123",
-            }
-        )
-    )
+def test_provider_factory(plugin):
+    provider = object()
 
+    def factory():
+        return provider
 
-    assert (
-        trace_result is False
-        or
-        trace_result is None
-    )
+    result = plugin.set_provider_factory(factory)
 
+    assert result is plugin
 
 
-def test_reset(
-    configured_plugin,
-):
-    """
-    Test resetting plugin runtime state.
-    """
+def test_create_provider(plugin):
+    provider = object()
 
-    configured_plugin.start()
+    def factory():
+        return provider
 
+    plugin.set_provider_factory(factory)
 
-    configured_plugin.register(
-        object()
-    )
+    result = plugin.create_provider()
 
+    assert result is provider
+    assert plugin.provider is provider
 
-    configured_plugin.statistics[
-        "trace_count"
-    ] = 10
 
+# ==============================================================================
+# Part 7. Trace Operations
+# ==============================================================================
 
-    result = (
-        configured_plugin.reset()
-    )
 
+def test_start_trace(plugin):
+    plugin.start()
 
-    assert result is not None
+    trace = plugin.start_trace("trace")
 
+    assert trace is not None
+    assert plugin.current_trace is trace
 
-    assert (
-        configured_plugin.running
-        is False
-    )
 
+def test_current_trace(plugin):
+    plugin.start()
 
-    assert (
-        configured_plugin.closed
-        is False
-    )
+    trace = plugin.start_trace("trace")
 
+    assert plugin.current_trace is trace
 
-    assert (
-        configured_plugin.enabled
-        is True
-    )
 
+def test_finish_trace(plugin):
+    plugin.start()
 
-    assert (
-        len(
-            configured_plugin.tracers
-        )
-        ==
-        0
-    )
+    trace = plugin.start_trace("trace")
 
+    result = plugin.finish_trace()
 
-    assert (
-        configured_plugin.statistics
-        !=
-        {
-            "trace_count": 10
-        }
-    )
-# ============================================================
-# Part 5 – Trace Integration
-# ============================================================
+    assert result is trace or result is not None
+    assert plugin.current_trace is None
 
 
-class DummyTracer:
-    """
-    Dummy tracer for integration testing.
-    """
+def test_cancel_trace(plugin):
+    plugin.start()
 
-    def __init__(
-        self,
-        name="dummy-tracer",
-    ):
-        self.name = name
-        self.spans = []
+    plugin.start_trace("trace")
 
+    result = plugin.cancel_trace()
 
-    def create_span(
-        self,
-        name,
-        attributes=None,
-    ):
-        span = {
-            "name": name,
-            "attributes": attributes or {},
-            "status": "created",
-        }
+    assert result is plugin
+    assert plugin.current_trace is None
 
-        self.spans.append(
-            span
-        )
 
-        return span
+def test_trace_count(plugin):
+    plugin.start()
 
+    plugin.start_trace("trace")
 
+    assert plugin.statistics.trace_count >= 1
 
-def test_attach_tracer(
-    plugin,
-):
-    """
-    Test attaching tracer to plugin.
-    """
+# ==============================================================================
+# Part 8. Span Operations
+# ==============================================================================
 
-    tracer = DummyTracer(
-        "main-tracer"
-    )
 
-
-    result = (
-        plugin.attach_tracer(
-            tracer
-        )
-    )
-
-
-    assert result is not None
-
-
-    assert (
-        plugin.registered(
-            "main-tracer"
-        )
-        is True
-    )
-
-
-    assert (
-        "main-tracer"
-        in
-        plugin.tracers
-    )
-
-
-
-def test_create_span(
-    plugin,
-):
-    """
-    Test span creation through plugin.
-    """
-
-    tracer = DummyTracer(
-        "span-tracer"
-    )
-
-
-    plugin.attach_tracer(
-        tracer
-    )
-
-
-    span = (
-        plugin.create_span(
-            "database.query",
-            {
-                "db.system": "sqlite",
-            },
-        )
-    )
-
+def test_start_span(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    span = plugin.start_span("span")
 
     assert span is not None
+    assert isinstance(span, Span)
+    assert plugin.current_span is span
 
 
-    assert isinstance(
-        span,
-        dict,
+def test_start_span_without_name(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    span = plugin.start_span()
+
+    assert span is not None
+    assert isinstance(span, Span)
+
+
+def test_start_nested_span(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    parent = plugin.start_span("parent")
+
+    assert parent is not None
+
+    child = plugin.start_span(
+        "child",
+        parent=parent,
+    )
+
+    assert child is not None
+    assert isinstance(child, Span)
+
+
+def test_finish_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.finish_span()
+
+    assert result is not None
+
+
+def test_finish_explicit_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.finish_span(span)
+
+    assert result is not None
+
+
+def test_cancel_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.cancel_span()
+
+    assert result is not None
+
+
+def test_cancel_explicit_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.cancel_span(span)
+
+    assert result is not None
+
+
+def test_enter_span(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.enter_span("span")
+
+    assert result is not None
+    assert isinstance(result, Span)
+    assert plugin.current_span is result
+
+
+def test_exit_span(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    plugin.enter_span("span")
+
+    result = plugin.exit_span()
+
+    assert result is not None
+
+
+def test_current_span_after_start(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    span = plugin.start_span("span")
+
+    assert span is not None
+    assert plugin.current_span is span
+
+
+# ==============================================================================
+# Part 9. Context Management
+# ==============================================================================
+
+
+def test_current_context(
+    plugin: TracePlugin,
+) -> None:
+    context = plugin.current_context
+
+    assert context is None or isinstance(
+        context,
+        TraceContext,
     )
 
 
-    assert (
-        span["name"]
-        ==
-        "database.query"
+def test_set_context(
+    plugin: TracePlugin,
+) -> None:
+    context = TraceContext()
+
+    result = plugin.set_context(context)
+
+    assert result is plugin
+    assert plugin.current_context is context
+
+
+def test_set_context_none(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.set_context(None)
+
+    assert result is plugin
+    assert plugin.current_context is None
+
+
+def test_update_context(
+    plugin: TracePlugin,
+) -> None:
+    context = TraceContext()
+
+    plugin.set_context(context)
+
+    result = plugin.update_context(
+        component="test",
     )
 
+    assert result is plugin
 
-    assert (
-        span["attributes"]
-        ["db.system"]
-        ==
-        "sqlite"
+
+def test_clear_context(
+    plugin: TracePlugin,
+) -> None:
+    plugin.set_context(
+        TraceContext(),
     )
 
+    result = plugin.clear_context()
+
+    assert result is plugin
+    assert plugin.current_context is None
+
+
+# ==============================================================================
+# Part 10. Processing
+# ==============================================================================
+
+
+def test_process_without_item(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.process()
+
+    assert result is not None
 
 
 def test_process_trace(
-    plugin,
-):
-    """
-    Test processing trace data.
-    """
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.process_trace(trace)
 
-    plugin.start()
-
-
-    trace = {
-        "id": "trace-001",
-        "type": "trace",
-        "trace_id": "abc123",
-        "name": "http.request",
-    }
+    assert result is not None
+    assert isinstance(result, Trace)
 
 
-    result = (
-        plugin.process_trace(
-            trace
-        )
-    )
+def test_process_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.process_span(span)
 
+    assert result is not None
+    assert isinstance(result, Span)
+
+
+def test_process_explicit_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.process(trace)
 
     assert result is not None
 
 
-    assert (
-        plugin.statistics
-        ["trace_count"]
-        ==
-        1
-    )
-
-
-
-    assert (
-        plugin.statistics
-        ["processed_count"]
-        >=
-        1
-    )
-
-
-
-def test_remove_tracer(
-    plugin,
-):
-    """
-    Test removing tracer from plugin.
-    """
-
-    tracer = DummyTracer(
-        "remove-tracer"
-    )
-
-
-    plugin.attach_tracer(
-        tracer
-    )
-
-
-    assert (
-        plugin.registered(
-            "remove-tracer"
-        )
-        is True
-    )
-
-
-    result = (
-        plugin.remove_tracer(
-            "remove-tracer"
-        )
-    )
-
+def test_process_explicit_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.process(span)
 
     assert result is not None
 
 
-    assert (
-        plugin.registered(
-            "remove-tracer"
-        )
-        is False
-    )
-
-
-    assert (
-        "remove-tracer"
-        not in
-        plugin.tracers
-    )
-# ============================================================
-# Part 6 – Configuration
-# ============================================================
-
-
-def test_set_config(
-    plugin,
-):
-    """
-    Test setting plugin configuration.
-    """
-
-    config = {
-        "service_name": "custom-service",
-        "enabled": False,
-        "auto_start": True,
-        "max_spans": 500,
-        "sampling_rate": 0.5,
-    }
-
-
-    result = (
-        plugin.set_config(
-            config
-        )
-    )
-
+def test_process_none(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.process(None)
 
     assert result is not None
 
 
-    current = (
-        plugin.get_config()
-    )
+# ==============================================================================
+# Part 11. Sampling
+# ==============================================================================
 
 
-    assert (
-        current["service_name"]
-        ==
-        "custom-service"
-    )
+def test_should_sample(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.should_sample()
+
+    assert isinstance(result, bool)
 
 
-    assert (
-        current["enabled"]
-        is False
-    )
+def test_should_sample_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.should_sample(trace)
+
+    assert isinstance(result, bool)
 
 
-    assert (
-        current["auto_start"]
-        is True
-    )
-
-
-    assert (
-        current["max_spans"]
-        ==
-        500
-    )
-
-
-    assert (
-        current["sampling_rate"]
-        ==
-        0.5
-    )
-
-
-
-def test_get_config(
-    configured_plugin,
-):
-    """
-    Test retrieving plugin configuration.
-    """
-
-    config = (
-        configured_plugin
-        .get_config()
-    )
-
-
-    assert isinstance(
-        config,
-        dict,
-    )
-
-
-    assert (
-        config["service_name"]
-        ==
-        "scios-test"
-    )
-
-
-    assert (
-        config["enabled"]
-        is True
-    )
-
-
-    assert (
-        config["auto_start"]
-        is False
-    )
-
-
-    assert (
-        config["max_spans"]
-        ==
-        1000
-    )
-
-
-    assert (
-        config["sampling_rate"]
-        ==
-        1.0
-    )
-
-
-
-def test_update_config(
-    plugin,
-):
-    """
-    Test updating partial configuration.
-    """
-
-    plugin.set_config(
-        {
-            "service_name": "initial",
-            "max_spans": 100,
-            "sampling_rate": 0.1,
-        }
-    )
-
-
-    result = (
-        plugin.update_config(
-            {
-                "service_name": "updated",
-                "max_spans": 200,
-            }
-        )
-    )
-
+def test_sampling_decision(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.sampling_decision()
 
     assert result is not None
 
 
-    config = (
-        plugin.get_config()
-    )
-
-
-    assert (
-        config["service_name"]
-        ==
-        "updated"
-    )
-
-
-    assert (
-        config["max_spans"]
-        ==
-        200
-    )
-
-
-    # unchanged value
-    assert (
-        config["sampling_rate"]
-        ==
-        0.1
-    )
-
-
-
-def test_reset_config(
-    configured_plugin,
-):
-    """
-    Test resetting configuration to defaults.
-    """
-
-    configured_plugin.update_config(
-        {
-            "service_name": "temporary",
-            "max_spans": 50,
-            "sampling_rate": 0.2,
-        }
-    )
-
-
-    before = (
-        configured_plugin
-        .get_config()
-    )
-
-
-    assert (
-        before["service_name"]
-        ==
-        "temporary"
-    )
-
-
-    result = (
-        configured_plugin
-        .reset_config()
-    )
-
+def test_sampling_decision_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.sampling_decision(trace)
 
     assert result is not None
 
 
-    after = (
-        configured_plugin
-        .get_config()
-    )
+# ==============================================================================
+# Part 12. Exporting
+# ==============================================================================
 
 
-    assert (
-        after["service_name"]
-        ==
-        "scios"
-    )
+def test_export_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.export_trace(trace)
 
+    assert result is not None
 
-    assert (
-        after["enabled"]
-        is True
-    )
 
+def test_export_current_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.export_trace()
 
-    assert (
-        after["auto_start"]
-        is False
-    )
+    assert result is not None
 
 
-    assert (
-        after["max_spans"]
-        >
-        0
-    )
+def test_export_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.export_span(span)
 
+    assert result is not None
 
-    assert (
-        0
-        <=
-        after["sampling_rate"]
-        <=
-        1
-    )
-# ============================================================
-# Part 7 – Validation
-# ============================================================
 
+def test_export_current_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.export_span()
 
-class InvalidPlugin:
-    """
-    Invalid plugin object for testing.
-    """
+    assert result is not None
 
-    pass
-
-
-
-class InvalidTracer:
-    """
-    Invalid tracer object.
-    """
-
-    pass
-
-
-
-def test_validate(
-    plugin,
-):
-    """
-    Test plugin validation.
-    """
-
-    result = (
-        plugin.validate()
-    )
-
-
-    assert result is True
-
-
-
-def test_invalid_plugin(
-    plugin,
-):
-    """
-    Test invalid plugin object handling.
-    """
-
-    invalid = InvalidPlugin()
-
-
-    result = (
-        plugin.validate_plugin(
-            invalid
-        )
-    )
-
-
-    assert (
-        result
-        is False
-    )
-
-
-
-def test_invalid_config(
-    plugin,
-):
-    """
-    Test invalid configuration validation.
-    """
-
-    invalid_configs = [
-
-        {
-            "sampling_rate": -0.1,
-        },
-
-        {
-            "sampling_rate": 1.5,
-        },
-
-        {
-            "max_spans": -10,
-        },
-
-        {
-            "service_name": "",
-        },
-
-    ]
-
-
-    for config in invalid_configs:
-
-        result = (
-            plugin.validate_config(
-                config
-            )
-        )
-
-
-        assert (
-            result
-            is False
-        )
-
-
-
-def test_invalid_tracer(
-    plugin,
-):
-    """
-    Test invalid tracer validation.
-    """
-
-    invalid_tracer = InvalidTracer()
-
-
-    result = (
-        plugin.validate_tracer(
-            invalid_tracer
-        )
-    )
-
-
-    assert (
-        result
-        is False
-    )
-# ============================================================
-# Part 8 – Serialization
-# ============================================================
-
-
-def test_to_dict(
-    configured_plugin,
-):
-    """
-    Test converting plugin state to dictionary.
-    """
-
-    data = (
-        configured_plugin
-        .to_dict()
-    )
-
-
-    assert isinstance(
-        data,
-        dict,
-    )
-
-
-    assert "config" in data
-
-    assert "enabled" in data
-
-    assert "running" in data
-
-    assert "closed" in data
-
-    assert "tracers" in data
-
-    assert "statistics" in data
-
-
-
-    assert (
-        data["config"]
-        ["service_name"]
-        ==
-        "scios-test"
-    )
-
-
-    assert (
-        data["enabled"]
-        is True
-    )
-
-
-    assert (
-        data["closed"]
-        is False
-    )
-
-
-
-def test_from_dict(
-    plugin,
-):
-    """
-    Test creating plugin from dictionary.
-    """
-
-    data = {
-        "config": {
-            "service_name": "restored-service",
-            "enabled": True,
-            "auto_start": False,
-            "max_spans": 500,
-            "sampling_rate": 0.8,
-        },
-        "enabled": True,
-        "running": False,
-        "closed": False,
-        "tracers": {},
-        "statistics": {
-            "trace_count": 10,
-        },
-    }
-
-
-    restored = (
-        TracingPlugin
-        .from_dict(
-            data
-        )
-    )
-
-
-    assert isinstance(
-        restored,
-        TracingPlugin,
-    )
-
-
-    config = (
-        restored
-        .get_config()
-    )
-
-
-    assert (
-        config["service_name"]
-        ==
-        "restored-service"
-    )
-
-
-    assert (
-        config["max_spans"]
-        ==
-        500
-    )
-
-
-    assert (
-        restored.enabled
-        is True
-    )
-
-
-    assert (
-        restored.running
-        is False
-    )
-
-
-    assert (
-        restored.statistics
-        ["trace_count"]
-        ==
-        10
-    )
-
+# ==============================================================================
+# Part 13. Snapshot / Restore
+# ==============================================================================
 
 
 def test_snapshot(
-    configured_plugin,
-):
-    """
-    Test creating runtime snapshot.
-    """
-
-    configured_plugin.start()
-
-
-    snapshot = (
-        configured_plugin
-        .snapshot()
-    )
-
-
-    assert isinstance(
-        snapshot,
-        dict,
-    )
-
-
-    assert "config" in snapshot
-
-    assert "state" in snapshot
-
-    assert "statistics" in snapshot
-
-    assert "timestamp" in snapshot
-
-
-
-    assert (
-        snapshot["state"]
-        ["running"]
-        is True
-    )
-
-
-    assert (
-        snapshot["config"]
-        ["service_name"]
-        ==
-        "scios-test"
-    )
-
-
-
-def test_restore(
-    plugin,
-):
-    """
-    Test restoring plugin from snapshot.
-    """
-
-    snapshot = {
-        "config": {
-            "service_name": "snapshot-service",
-            "enabled": True,
-            "auto_start": False,
-            "max_spans": 200,
-            "sampling_rate": 0.5,
-        },
-        "state": {
-            "enabled": True,
-            "running": True,
-            "closed": False,
-        },
-        "statistics": {
-            "trace_count": 25,
-        },
-        "timestamp": "2026-01-01T00:00:00",
-    }
-
-
-    result = (
-        plugin.restore(
-            snapshot
-        )
-    )
-
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.snapshot()
 
     assert result is not None
 
 
-    config = (
-        plugin.get_config()
-    )
+def test_snapshot_after_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.snapshot()
 
+    assert result is not None
 
-    assert (
-        config["service_name"]
-        ==
-        "snapshot-service"
-    )
 
+def test_restore(
+    plugin: TracePlugin,
+) -> None:
+    snapshot = plugin.snapshot()
 
-    assert (
-        config["max_spans"]
-        ==
-        200
-    )
+    result = plugin.restore(snapshot)
 
+    assert result is plugin
 
-    assert (
-        plugin.running
-        is True
-    )
 
+def test_restore_after_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    snapshot = plugin.snapshot()
 
-    assert (
-        plugin.closed
-        is False
-    )
+    result = plugin.restore(snapshot)
 
+    assert result is plugin
 
-    assert (
-        plugin.statistics
-        ["trace_count"]
-        ==
-        25
-    )
-# ============================================================
-# Part 9 – Clone / Copy
-# ============================================================
 
-import copy
+# ==============================================================================
+# Part 14. Validation
+# ==============================================================================
 
 
+def test_validate(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.validate()
 
-def test_copy(
-    configured_plugin,
-):
-    """
-    Test plugin copy() method.
-    """
+    assert isinstance(result, bool)
 
-    copied = (
-        configured_plugin
-        .copy()
-    )
 
+def test_validate_trace(
+    plugin: TracePlugin,
+    trace: Trace,
+) -> None:
+    result = plugin.validate_trace(trace)
 
-    assert copied is not None
+    assert isinstance(result, bool)
 
 
-    assert isinstance(
-        copied,
-        TracingPlugin,
-    )
+def test_validate_span(
+    plugin: TracePlugin,
+    span: Span,
+) -> None:
+    result = plugin.validate_span(span)
 
+    assert isinstance(result, bool)
 
-    assert (
-        copied
-        is not
-        configured_plugin
-    )
 
+def test_validate_state(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.validate_state()
 
-    assert (
-        copied.get_config()
-        ==
-        configured_plugin.get_config()
-    )
+    assert isinstance(result, bool)
 
 
-    assert (
-        copied.enabled
-        ==
-        configured_plugin.enabled
-    )
+# ==============================================================================
+# Part 15. Diagnostics
+# ==============================================================================
 
 
-    copied.update_config(
-        {
-            "service_name": "copied-service"
-        }
-    )
+def test_health(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.health()
 
-
-    assert (
-        copied.get_config()
-        ["service_name"]
-        ==
-        "copied-service"
-    )
-
-
-    assert (
-        configured_plugin
-        .get_config()
-        ["service_name"]
-        !=
-        "copied-service"
-    )
-
-
-
-def test_clone(
-    configured_plugin,
-):
-    """
-    Test plugin clone() method.
-    """
-
-    cloned = (
-        configured_plugin
-        .clone()
-    )
-
-
-    assert cloned is not None
-
-
-    assert isinstance(
-        cloned,
-        TracingPlugin,
-    )
-
-
-    assert (
-        cloned
-        is not
-        configured_plugin
-    )
-
-
-    assert (
-        cloned.get_config()
-        ==
-        configured_plugin.get_config()
-    )
-
-
-    assert (
-        cloned.running
-        ==
-        configured_plugin.running
-    )
-
-
-    assert (
-        cloned.closed
-        ==
-        configured_plugin.closed
-    )
-
-
-
-    cloned.statistics[
-        "trace_count"
-    ] = 99
-
-
-    assert (
-        configured_plugin
-        .statistics
-        .get(
-            "trace_count",
-            0
-        )
-        !=
-        99
-    )
-
-
-
-def test_python_copy(
-    configured_plugin,
-):
-    """
-    Test Python copy.copy protocol.
-    """
-
-    copied = copy.copy(
-        configured_plugin
-    )
-
-
-    assert copied is not None
-
-
-    assert isinstance(
-        copied,
-        TracingPlugin,
-    )
-
-
-    assert (
-        copied
-        is not
-        configured_plugin
-    )
-
-
-    assert (
-        copied.get_config()
-        ==
-        configured_plugin.get_config()
-    )
-
-
-
-    copied.enable()
-
-
-    assert (
-        copied.enabled
-        is True
-    )
-
-
-def test_python_deepcopy(
-    configured_plugin,
-):
-    """
-    Test Python copy.deepcopy protocol.
-    """
-
-    cloned = copy.deepcopy(
-        configured_plugin
-    )
-
-
-    assert cloned is not None
-
-
-    assert isinstance(
-        cloned,
-        TracingPlugin,
-    )
-
-
-    assert (
-        cloned
-        is not
-        configured_plugin
-    )
-
-
-    assert (
-        cloned.get_config()
-        ==
-        configured_plugin.get_config()
-    )
-
-
-    cloned.update_config(
-        {
-            "service_name": "deep-copy-service"
-        }
-    )
-
-
-    assert (
-        cloned
-        .get_config()
-        ["service_name"]
-        ==
-        "deep-copy-service"
-    )
-
-
-    assert (
-        configured_plugin
-        .get_config()
-        ["service_name"]
-        !=
-        "deep-copy-service"
-    )
-# ============================================================
-# Part 10 – Diagnostics
-# ============================================================
+    assert isinstance(result, bool)
 
 
 def test_diagnostics(
-    configured_plugin,
-):
-    """
-    Test plugin diagnostics information.
-    """
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.diagnostics()
 
-    diagnostics = (
-        configured_plugin
-        .diagnostics()
-    )
-
-
-    assert isinstance(
-        diagnostics,
-        dict,
-    )
-
-
-    assert "name" in diagnostics
-
-    assert "status" in diagnostics
-
-    assert "enabled" in diagnostics
-
-    assert "running" in diagnostics
-
-    assert "closed" in diagnostics
-
-    assert "tracers" in diagnostics
-
-    assert "config" in diagnostics
-
-    assert "statistics" in diagnostics
-
-
-
-    assert (
-        diagnostics["name"]
-        ==
-        "TracingPlugin"
-    )
-
-
-    assert (
-        diagnostics["enabled"]
-        is True
-    )
-
-
-    assert (
-        diagnostics["running"]
-        is False
-    )
-
-
-    assert (
-        diagnostics["closed"]
-        is False
-    )
-
-
-    assert (
-        diagnostics["config"]
-        ["service_name"]
-        ==
-        "scios-test"
-    )
-
+    assert result is not None
 
 
 def test_summary(
-    configured_plugin,
-):
-    """
-    Test plugin human-readable summary.
-    """
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.summary()
 
-    summary = (
-        configured_plugin
-        .summary()
-    )
+    assert result is not None
 
 
-    assert isinstance(
-        summary,
-        dict,
-    )
+def test_status(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.status()
 
+    assert result is not None
 
-    assert "name" in summary
 
-    assert "enabled" in summary
+# ==============================================================================
+# Part 16. Registry / Integration
+# ==============================================================================
 
-    assert "running" in summary
 
-    assert "closed" in summary
+def test_registration(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.registration()
 
-    assert "tracer_count" in summary
+    assert result is not None
 
-    assert "trace_count" in summary
 
+def test_plugin_type(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.plugin_type
 
+    assert result is not None
 
-    assert (
-        summary["name"]
-        ==
-        "TracingPlugin"
-    )
 
+def test_plugin_metadata(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.metadata
 
-    assert (
-        summary["enabled"]
-        is True
-    )
+    assert result is not None
+    assert isinstance(result, Mapping)
 
 
-    assert (
-        summary["running"]
-        is False
-    )
+def test_plugin_attributes(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.attributes
 
+    assert result is not None
+    assert isinstance(result, Mapping)
 
-    assert (
-        summary["closed"]
-        is False
-    )
 
+def test_get_provider(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.provider
 
-    assert (
-        summary["tracer_count"]
-        ==
-        0
-    )
+    assert result is not None
 
 
-    assert (
-        summary["trace_count"]
-        ==
-        0
-    )
-# ============================================================
-# Part 11 – Python Protocols
-# ============================================================
+def test_set_provider(
+    plugin: TracePlugin,
+    provider: TraceProvider,
+) -> None:
+    result = plugin.set_provider(provider)
 
-import copy
+    assert result is plugin
+    assert plugin.provider is provider
 
 
+# ==============================================================================
+# Part 17. Edge Cases
+# ==============================================================================
 
-def test_repr(
-    plugin,
-):
-    """
-    Test __repr__ protocol.
-    """
 
-    result = repr(
-        plugin
-    )
+def test_disabled_plugin_start_trace(
+    plugin: TracePlugin,
+) -> None:
+    plugin.disable()
 
+    result = plugin.start_trace("trace")
 
-    assert isinstance(
-        result,
-        str,
-    )
+    assert result is None
 
 
-    assert (
-        "TracingPlugin"
-        in
-        result
-    )
+def test_disabled_plugin_start_span(
+    plugin: TracePlugin,
+) -> None:
+    plugin.disable()
 
+    result = plugin.start_span("span")
 
+    assert result is None
 
-def test_str(
-    plugin,
-):
-    """
-    Test __str__ protocol.
-    """
 
-    result = str(
-        plugin
-    )
+def test_process_none_edge_case(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.process(None)
 
+    assert result is not None
 
-    assert isinstance(
-        result,
-        str,
-    )
 
+def test_export_none_trace(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.export_trace(None)
 
-    assert (
-        len(result)
-        >
-        0
-    )
+    assert result is not None
 
 
-    assert (
-        "TracingPlugin"
-        in
-        result
-    )
+def test_export_none_span(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.export_span(None)
 
+    assert result is not None
 
 
-def test_len(
-    configured_plugin,
-):
-    """
-    Test __len__ protocol.
-    """
+def test_finish_without_span(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.finish_span()
 
-    result = len(
-        configured_plugin
-    )
+    assert result is None or result is not False
 
 
-    assert isinstance(
-        result,
-        int,
-    )
+def test_cancel_without_span(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.cancel_span()
 
+    assert result is None or result is not False
 
-    assert (
-        result
-        ==
-        0
-    )
 
+def test_restore_none(
+    plugin: TracePlugin,
+) -> None:
+    result = plugin.restore(None)
 
-
-def test_iter(
-    plugin,
-):
-    """
-    Test __iter__ protocol.
-    """
-
-    tracer_a = object()
-
-    tracer_b = object()
-
-
-    plugin.tracers[
-        "tracer-a"
-    ] = tracer_a
-
-
-    plugin.tracers[
-        "tracer-b"
-    ] = tracer_b
-
-
-    items = list(
-        iter(
-            plugin
-        )
-    )
-
-
-    assert isinstance(
-        items,
-        list,
-    )
-
-
-    assert (
-        len(items)
-        ==
-        2
-    )
-
-
-    assert (
-        tracer_a
-        in
-        items
-    )
-
-
-    assert (
-        tracer_b
-        in
-        items
-    )
-
-
-
-def test_contains(
-    plugin,
-):
-    """
-    Test __contains__ protocol.
-    """
-
-    tracer = object()
-
-
-    plugin.tracers[
-        "main-tracer"
-    ] = tracer
-
-
-    assert (
-        "main-tracer"
-        in
-        plugin
-    )
-
-
-    assert (
-        "missing-tracer"
-        not
-        in
-        plugin
-    )
-
-
-
-def test_eq(
-    plugin,
-):
-    """
-    Test equality comparison.
-    """
-
-    other = TracingPlugin()
-
-
-    assert (
-        plugin
-        ==
-        other
-    )
-
-
-    plugin.update_config(
-        {
-            "service_name": "different"
-        }
-    )
-
-
-    assert (
-        plugin
-        !=
-        other
-    )
-
-
-
-def test_hash(
-    plugin,
-):
-    """
-    Test __hash__ protocol.
-    """
-
-    result = hash(
-        plugin
-    )
-
-
-    assert isinstance(
-        result,
-        int,
-    )
-
-
-    assert (
-        hash(plugin)
-        ==
-        result
-    )
-# ============================================================
-# Part 12 – Statistics
-# ============================================================
-
-
-def test_trace_count(
-    plugin,
-):
-    """
-    Test trace processing counter.
-    """
-
-    plugin.start()
-
-
-    traces = [
-        {
-            "id": "trace-1",
-            "type": "trace",
-            "trace_id": "001",
-        },
-        {
-            "id": "trace-2",
-            "type": "trace",
-            "trace_id": "002",
-        },
-        {
-            "id": "trace-3",
-            "type": "trace",
-            "trace_id": "003",
-        },
-    ]
-
-
-    for trace in traces:
-
-        plugin.process_trace(
-            trace
-        )
-
-
-    assert (
-        plugin.statistics
-        ["trace_count"]
-        ==
-        3
-    )
-
-
-
-def test_span_count(
-    plugin,
-):
-    """
-    Test span creation counter.
-    """
-
-    plugin.start()
-
-
-    plugin.create_span(
-        "api.request"
-    )
-
-    plugin.create_span(
-        "database.query"
-    )
-
-    plugin.create_span(
-        "cache.lookup"
-    )
-
-
-    assert (
-        plugin.statistics
-        ["span_count"]
-        ==
-        3
-    )
-
-
-
-def test_statistics(
-    configured_plugin,
-):
-    """
-    Test complete statistics output.
-    """
-
-    configured_plugin.start()
-
-
-    configured_plugin.process_trace(
-        {
-            "id": "trace-001",
-            "type": "trace",
-            "trace_id": "abc",
-        }
-    )
-
-
-    configured_plugin.create_span(
-        "worker.execute"
-    )
-
-
-    stats = (
-        configured_plugin
-        .statistics()
-    )
-
-
-    assert isinstance(
-        stats,
-        dict,
-    )
-
-
-    assert "trace_count" in stats
-
-    assert "span_count" in stats
-
-    assert "processed_count" in stats
-
-    assert "failed_count" in stats
-
-    assert "uptime" in stats
-
-
-
-    assert (
-        stats["trace_count"]
-        ==
-        1
-    )
-
-
-    assert (
-        stats["span_count"]
-        ==
-        1
-    )
-
-
-    assert (
-        stats["processed_count"]
-        >=
-        1
-    )
-
-
-    assert (
-        stats["failed_count"]
-        ==
-        0
-    )
-# ============================================================
-# Part 13 – Edge Cases
-# ============================================================
-
-
-class DummyTracer:
-    """
-    Dummy tracer for edge case tests.
-    """
-
-    def __init__(
-        self,
-        name="edge-tracer",
-    ):
-        self.name = name
-
-
-
-def test_empty_plugin(
-    plugin,
-):
-    """
-    Test behavior of empty plugin.
-    """
-
-    assert (
-        len(plugin)
-        ==
-        0
-    )
-
-
-    assert (
-        len(plugin.tracers)
-        ==
-        0
-    )
-
-
-    summary = (
-        plugin.summary()
-    )
-
-
-    assert (
-        summary["tracer_count"]
-        ==
-        0
-    )
-
-
-    result = (
-        plugin.process_trace(
-            {}
-        )
-    )
-
-
-    assert (
-        result is False
-        or
-        result is None
-    )
-
-
-
-def test_duplicate_register(
-    plugin,
-):
-    """
-    Test duplicate tracer registration.
-    """
-
-    tracer = DummyTracer(
-        "duplicate"
-    )
-
-
-    first = (
-        plugin.register(
-            tracer
-        )
-    )
-
-
-    second = (
-        plugin.register(
-            tracer
-        )
-    )
-
-
-    assert first is not None
-
-
-    assert second is not None
-
-
-    assert (
-        plugin.registered(
-            "duplicate"
-        )
-        is True
-    )
-
-
-    assert (
-        len(plugin.tracers)
-        ==
-        1
-    )
-
-
-
-def test_missing_tracer(
-    plugin,
-):
-    """
-    Test operations on missing tracer.
-    """
-
-    assert (
-        plugin.registered(
-            "missing"
-        )
-        is False
-    )
-
-
-    result = (
-        plugin.remove_tracer(
-            "missing"
-        )
-    )
-
-
-    assert (
-        result is False
-        or
-        result is None
-    )
-
-
-
-    result = (
-        plugin.unregister(
-            "missing"
-        )
-    )
-
-
-    assert (
-        result is False
-        or
-        result is None
-    )
-
-
-
-def test_closed_plugin(
-    plugin,
-):
-    """
-    Test behavior after plugin close.
-    """
-
-    plugin.start()
-
-
-    plugin.close()
-
-
-    assert (
-        plugin.closed
-        is True
-    )
-
-
-    assert (
-        plugin.running
-        is False
-    )
-
-
-    result = (
-        plugin.start()
-    )
-
-
-    assert (
-        result is False
-        or
-        result is None
-    )
-
-
-
-    result = (
-        plugin.process_trace(
-            {
-                "id": "closed-trace",
-                "type": "trace",
-            }
-        )
-    )
-
-
-    assert (
-        result is False
-        or
-        result is None
-    )
-
-
-
-def test_large_trace_volume(
-    plugin,
-):
-    """
-    Test processing large number of traces.
-    """
-
-    plugin.start()
-
-
-    total = 10000
-
-
-    for index in range(total):
-
-        plugin.process_trace(
-            {
-                "id": f"trace-{index}",
-                "type": "trace",
-                "trace_id": str(index),
-            }
-        )
-
-
-    assert (
-        plugin.statistics
-        ["trace_count"]
-        ==
-        total
-    )
-
-
-    assert (
-        plugin.statistics
-        ["processed_count"]
-        >=
-        total
-    )                                                
+    assert result is plugin

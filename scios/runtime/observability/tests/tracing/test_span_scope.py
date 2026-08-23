@@ -339,20 +339,27 @@ def test_span_scope_repr():
 
 
 def test_span_scope_without_trace():
+    """
+    SpanScope creates an implicit trace when entered without
+    an already active trace, and closes that trace when the
+    scope exits.
+    """
 
     manager = TraceManager()
 
-    with pytest.raises(RuntimeError):
+    assert manager.current_trace is None
 
-        with SpanScope(
+    with SpanScope(
+        manager,
+        "Planner",
+    ) as span:
 
-            manager,
+        assert span is not None
+        assert span.name == "Planner"
 
-            "Planner",
+        assert manager.current_trace is not None
 
-        ):
-
-            pass
+    assert manager.current_trace is None
 
 
 # ==========================================================

@@ -1,4855 +1,2527 @@
 """
-SciOS Runtime Observability
+Tracing Span Entity.
 
-Trace Span Runtime
+Defines the foundational Span entity API, constants,
+exceptions, and type aliases.
 
-File:
-    scios/runtime/observability/tracing/span.py
+Dependency order:
 
-Description:
-    Core implementation of the SciOS runtime tracing span.
+    status.py
+        â†“
+    enums.py
+        â†“
+    attributes.py
+        â†“
+    baggage.py
+        â†“
+    context.py / link.py / event.py
+        â†“
+    span.py
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
 
 # ==============================================================================
-# Imports
+# Standard Library
 # ==============================================================================
 
 import copy
-import json
-import time
-import uuid
 
-from abc import (
-    ABC,
-    abstractmethod,
-)
-
-from collections import (
-    deque,
-)
-
-from dataclasses import (
-    asdict,
-    dataclass,
-    field,
-)
-
-from enum import (
-    Enum,
-    IntFlag,
-    auto,
-)
-
-from pathlib import (
-    Path,
-)
-
-from threading import (
-    RLock,
-)
-
-from types import (
-    TracebackType,
-)
+from datetime import datetime
 
 from typing import (
     Any,
-    Callable,
-    Deque,
     Mapping,
-    Optional,
+    MutableMapping,
     Sequence,
     TypeAlias,
 )
 
-# ==============================================================================
-# Part 1.1 – Constants
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# Module Metadata
-# ------------------------------------------------------------------------------
-
-MODULE_NAME: str = "TraceSpan"
-
-MODULE_DESCRIPTION: str = (
-    "SciOS Runtime Trace Span"
-)
-
-MODULE_VERSION: str = "0.1.0"
-
-
-# ------------------------------------------------------------------------------
-# Default Configuration
-# ------------------------------------------------------------------------------
-
-DEFAULT_SPAN_NAME: str = "span"
-
-DEFAULT_SPAN_KIND: str = "internal"
-
-DEFAULT_SPAN_STATUS: str = "unset"
-
-DEFAULT_ENABLED: bool = True
-
-DEFAULT_AUTO_START: bool = False
-
-DEFAULT_AUTO_FINISH: bool = False
-
-DEFAULT_TIMEOUT: float = 30.0
-
-
-# ------------------------------------------------------------------------------
-# Runtime Limits
-# ------------------------------------------------------------------------------
-
-DEFAULT_ATTRIBUTES_LIMIT: int = 128
-
-DEFAULT_EVENTS_LIMIT: int = 512
-
-DEFAULT_LINKS_LIMIT: int = 64
-
-DEFAULT_TAGS_LIMIT: int = 64
-
-DEFAULT_HISTORY_LIMIT: int = 1024
-
-DEFAULT_CACHE_SIZE: int = 256
-
-
-# ------------------------------------------------------------------------------
-# Serialization
-# ------------------------------------------------------------------------------
-
-DEFAULT_ENCODING: str = "utf-8"
-
-DEFAULT_INDENT: int = 2
-
-# Alias for compatibility with older code
-DEFAULT_JSON_INDENT: int = DEFAULT_INDENT
-
-DEFAULT_JSON_SORT_KEYS: bool = True
-
-DEFAULT_JSON_ENSURE_ASCII: bool = False
-
-DEFAULT_JSON_ALLOW_NAN: bool = False
-
-
-# ------------------------------------------------------------------------------
-# UUID / Identifier
-# ------------------------------------------------------------------------------
-
-UUID_HEX_LENGTH: int = 32
-
-TRACE_ID_LENGTH: int = UUID_HEX_LENGTH
-
-SPAN_ID_LENGTH: int = UUID_HEX_LENGTH
-
-
-# ------------------------------------------------------------------------------
-# Logger
-# ------------------------------------------------------------------------------
-
-LOGGER_NAME: str = (
-    "scios.runtime.observability.tracing.span"
-)
-
-# ==============================================================================
-# Part 1.2 – Type Aliases
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# Identity
-# ------------------------------------------------------------------------------
-
-TraceId: TypeAlias = str
-
-SpanId: TypeAlias = str
-
-ParentSpanId: TypeAlias = str
-
-
-# ------------------------------------------------------------------------------
-# Attributes
-# ------------------------------------------------------------------------------
-
-AttributeKey: TypeAlias = str
-
-AttributeValue: TypeAlias = Any
-
-Attributes: TypeAlias = dict[
-    AttributeKey,
-    AttributeValue,
-]
-
-
-# ------------------------------------------------------------------------------
-# Events
-# ------------------------------------------------------------------------------
-
-TraceEvent: TypeAlias = dict[
-    str,
-    Any,
-]
-
-EventCollection: TypeAlias = list[
-    TraceEvent,
-]
-
-
-# ------------------------------------------------------------------------------
-# Links
-# ------------------------------------------------------------------------------
-
-TraceLink: TypeAlias = dict[
-    str,
-    Any,
-]
-
-LinkCollection: TypeAlias = list[
-    TraceLink,
-]
-
-
-# ------------------------------------------------------------------------------
-# Metadata
-# ------------------------------------------------------------------------------
-
-TraceMetadata: TypeAlias = dict[
-    str,
-    Any,
-]
-
-
-# ------------------------------------------------------------------------------
-# Collections
-# ------------------------------------------------------------------------------
-
-SpanCollection: TypeAlias = dict[
-    SpanId,
-    "TraceSpan",
-]
-
-HistoryCollection: TypeAlias = Deque[
-    dict[str, Any]
-]
-
-CacheMap: TypeAlias = dict[
-    str,
-    Any,
-]
-
-
-# ------------------------------------------------------------------------------
-# Hooks / Callbacks
-# ------------------------------------------------------------------------------
-
-TraceHook: TypeAlias = Callable[
-    ...,
-    None,
-]
-
-TraceCallback: TypeAlias = Callable[
-    ...,
-    None,
-]
-
-
-# ------------------------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------------------------
-
-SpanConfiguration: TypeAlias = dict[
-    str,
-    Any,
-]
-
-SpanOptions: TypeAlias = dict[
-    str,
-    Any,
-]
-
-
-# ------------------------------------------------------------------------------
-# Serialization
-# ------------------------------------------------------------------------------
-
-SerializedSpan: TypeAlias = dict[
-    str,
-    Any,
-]
-
-SerializedSnapshot: TypeAlias = dict[
-    str,
-    Any,
-]
-
-
-# ------------------------------------------------------------------------------
-# Generic Types
-# ------------------------------------------------------------------------------
-
-JSONValue: TypeAlias = (
-    str
-    | int
-    | float
-    | bool
-    | None
-    | dict[str, Any]
-    | list[Any]
-)
-
-RuntimeObject: TypeAlias = Any
-# ==============================================================================
-# Part 1.3 – Exceptions
-# ==============================================================================
-
-
-class TraceSpanError(Exception):
-    """
-    Base exception for TraceSpan.
-    """
-
-    def __init__(
-        self,
-        message: str = "",
-        *,
-        code: str = "SPAN_ERROR",
-        details: Optional[
-            Mapping[str, Any]
-        ] = None,
-    ) -> None:
-
-        self.message = message
-
-        self.code = code
-
-        self.details = dict(
-            details or {}
-        )
-
-        super().__init__(
-            message
-        )
-
-
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "type": self.__class__.__name__,
-            "message": self.message,
-            "code": self.code,
-            "details": self.details,
-        }
-
-
-    def __repr__(
-        self,
-    ) -> str:
-
-        return (
-            f"{self.__class__.__name__}("
-            f"message={self.message!r}, "
-            f"code={self.code!r}"
-            f")"
-        )
-
-
-
-class SpanValidationError(
-    TraceSpanError,
-):
-    """
-    Invalid span data.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        field: str | None = None,
-        value: Any = None,
-    ) -> None:
-
-        details: dict[str, Any] = {}
-
-        if field is not None:
-            details["field"] = field
-
-        if value is not None:
-            details["value"] = value
-
-        super().__init__(
-            message,
-            code="SPAN_VALIDATION_ERROR",
-            details=details,
-        )
-
-
-
-class SpanStateError(
-    TraceSpanError,
-):
-    """
-    Invalid lifecycle transition.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        current_state: str | None = None,
-        expected_state: str | None = None,
-    ) -> None:
-
-        super().__init__(
-            message,
-            code="SPAN_STATE_ERROR",
-            details={
-                "current_state": current_state,
-                "expected_state": expected_state,
-            },
-        )
-
-
-
-class SpanClosedError(
-    SpanStateError,
-):
-    """
-    Span already closed.
-    """
-
-    def __init__(
-        self,
-        message: str = (
-            "Span is already closed."
-        ),
-    ) -> None:
-
-        super().__init__(
-            message,
-            current_state="closed",
-        )
-
-
-
-class SpanFinishedError(
-    SpanStateError,
-):
-    """
-    Span already finished.
-    """
-
-    def __init__(
-        self,
-        message: str = (
-            "Span is already finished."
-        ),
-    ) -> None:
-
-        super().__init__(
-            message,
-            current_state="finished",
-        )
-
-
-
-class InvalidTraceError(
-    TraceSpanError,
-):
-    """
-    Invalid trace identity.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        trace_id: TraceId | None = None,
-        span_id: SpanId | None = None,
-    ) -> None:
-
-        super().__init__(
-            message,
-            code="INVALID_TRACE_ERROR",
-            details={
-                "trace_id": trace_id,
-                "span_id": span_id,
-            },
-        )
-# ==============================================================================
-# Part 1.4 – Enums
-# ==============================================================================
-
-
-class SpanKind(
-    Enum,
-):
-    """
-    Semantic role of a span.
-    """
-
-    INTERNAL = (
-        "internal"
-    )
-
-    SERVER = (
-        "server"
-    )
-
-    CLIENT = (
-        "client"
-    )
-
-    PRODUCER = (
-        "producer"
-    )
-
-    CONSUMER = (
-        "consumer"
-    )
-
-
-    def __str__(
-        self,
-    ) -> str:
-
-        return self.value
-
-
-
-class SpanState(
-    Enum,
-):
-    """
-    Runtime lifecycle state.
-    """
-
-    CREATED = (
-        "created"
-    )
-
-    INITIALIZED = (
-        "initialized"
-    )
-
-    STARTED = (
-        "started"
-    )
-
-    RUNNING = (
-        "running"
-    )
-
-    FINISHED = (
-        "finished"
-    )
-
-    CLOSED = (
-        "closed"
-    )
-
-    FROZEN = (
-        "frozen"
-    )
-
-    ERROR = (
-        "error"
-    )
-
-
-    def __str__(
-        self,
-    ) -> str:
-
-        return self.value
-
-
-
-class SpanStatus(
-    Enum,
-):
-    """
-    Execution status.
-    """
-
-    UNSET = (
-        "unset"
-    )
-
-    OK = (
-        "ok"
-    )
-
-    ERROR = (
-        "error"
-    )
-
-
-    def __str__(
-        self,
-    ) -> str:
-
-        return self.value
-
-
-
-class SpanCapability(
-    IntFlag,
-):
-    """
-    Supported runtime capabilities.
-    """
-
-    NONE = 0
-
-    ATTRIBUTES = auto()
-
-    EVENTS = auto()
-
-    LINKS = auto()
-
-    CHILDREN = auto()
-
-    STATUS = auto()
-
-    EXCEPTIONS = auto()
-
-    SERIALIZATION = auto()
-
-    SNAPSHOT = auto()
-
-    VALIDATION = auto()
-
-    CALLBACKS = auto()
-
-    HOOKS = auto()
-
-    CACHE = auto()
-
-    HISTORY = auto()
-
-
-    ALL = (
-        ATTRIBUTES
-        | EVENTS
-        | LINKS
-        | CHILDREN
-        | STATUS
-        | EXCEPTIONS
-        | SERIALIZATION
-        | SNAPSHOT
-        | VALIDATION
-        | CALLBACKS
-        | HOOKS
-        | CACHE
-        | HISTORY
-    )
-
-# ==============================================================================
-# Part 1.5 – Dataclasses
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# SpanStatistics
-# ------------------------------------------------------------------------------
-
-@dataclass(slots=True)
-class SpanStatistics:
-    """
-    Runtime statistics for TraceSpan.
-    """
-
-    # ------------------------------------------------------------------
-    # Counters
-    # ------------------------------------------------------------------
-
-    event_count: int = 0
-    attribute_count: int = 0
-    link_count: int = 0
-    child_count: int = 0
-
-    error_count: int = 0
-
-    update_count: int = 0
-    validation_count: int = 0
-    callback_count: int = 0
-    hook_count: int = 0
-    export_count: int = 0
-
-    # ------------------------------------------------------------------
-    # Timing
-    # ------------------------------------------------------------------
-
-    start_time: float = 0.0
-    end_time: float = 0.0
-    duration: float = 0.0
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    created_at: float = field(
-        default_factory=time.time,
-    )
-
-    updated_at: float = field(
-        default_factory=time.time,
-    )
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def reset(self) -> None:
-        """
-        Reset runtime statistics.
-        """
-
-        self.event_count = 0
-        self.attribute_count = 0
-        self.link_count = 0
-        self.child_count = 0
-
-        self.error_count = 0
-
-        self.update_count = 0
-        self.validation_count = 0
-        self.callback_count = 0
-        self.hook_count = 0
-        self.export_count = 0
-
-        self.start_time = 0.0
-        self.end_time = 0.0
-        self.duration = 0.0
-
-        self.updated_at = time.time()
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Serialize statistics.
-        """
-
-        return asdict(self)
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: Mapping[str, Any],
-    ) -> "SpanStatistics":
-        """
-        Restore statistics from dictionary.
-        """
-
-        return cls(**dict(data))
-
-
-# ------------------------------------------------------------------------------
-# SpanSnapshot
-# ------------------------------------------------------------------------------
-
-@dataclass(slots=True, frozen=True)
-class SpanSnapshot:
-    """
-    Immutable runtime snapshot of TraceSpan.
-    """
-
-    # ------------------------------------------------------------------
-    # Identity
-    # ------------------------------------------------------------------
-
-    trace_id: TraceId
-    span_id: SpanId
-    parent_span_id: ParentSpanId | None
-
-    # ------------------------------------------------------------------
-    # Metadata
-    # ------------------------------------------------------------------
-
-    name: str
-    kind: str
-    status: str
-    state: str
-
-    # ------------------------------------------------------------------
-    # Timing
-    # ------------------------------------------------------------------
-
-    start_time: float
-    end_time: float | None
-    duration: float
-
-    # ------------------------------------------------------------------
-    # Runtime Data
-    # ------------------------------------------------------------------
-
-    attributes: dict[str, Any]
-    events: list[TraceEvent]
-    links: list[TraceLink]
-    metadata: dict[str, Any]
-
-    # ------------------------------------------------------------------
-    # Statistics
-    # ------------------------------------------------------------------
-
-    statistics: dict[str, Any]
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    created_at: float = field(
-        default_factory=time.time,
-    )
-
-    # ------------------------------------------------------------------
-    # Initialization
-    # ------------------------------------------------------------------
-
-    def __post_init__(self) -> None:
-        """
-        Normalize mutable containers.
-        """
-
-        object.__setattr__(
-            self,
-            "attributes",
-            dict(self.attributes),
-        )
-
-        object.__setattr__(
-            self,
-            "events",
-            list(self.events),
-        )
-
-        object.__setattr__(
-            self,
-            "links",
-            list(self.links),
-        )
-
-        object.__setattr__(
-            self,
-            "metadata",
-            dict(self.metadata),
-        )
-
-        object.__setattr__(
-            self,
-            "statistics",
-            dict(self.statistics),
-        )
-
-    # ------------------------------------------------------------------
-    # Serialization
-    # ------------------------------------------------------------------
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Serialize snapshot.
-        """
-
-        return asdict(self)
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: Mapping[str, Any],
-    ) -> "SpanSnapshot":
-        """
-        Restore snapshot.
-        """
-
-        return cls(**dict(data))
-
-    def to_json(
-        self,
-        *,
-        indent: int = DEFAULT_INDENT,
-    ) -> str:
-        """
-        Serialize snapshot to JSON.
-        """
-
-        return json.dumps(
-            self.to_dict(),
-            indent=indent,
-            sort_keys=DEFAULT_JSON_SORT_KEYS,
-            ensure_ascii=DEFAULT_JSON_ENSURE_ASCII,
-            default=str,
-        )
-
-
-# ------------------------------------------------------------------------------
-# SpanReport
-# ------------------------------------------------------------------------------
-
-@dataclass(slots=True)
-class SpanReport:
-
-    pass
-
-    
-    # ------------------------------------------------------------------
-    # Serialization
-    # ------------------------------------------------------------------
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Serialize report.
-        """
-
-        return asdict(self)
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: Mapping[str, Any],
-    ) -> "SpanReport":
-        """
-        Restore report.
-        """
-
-        return cls(**dict(data))
-
-    def to_json(
-        self,
-        *,
-        indent: int = DEFAULT_INDENT,
-    ) -> str:
-        """
-        Serialize report to JSON.
-        """
-
-        return json.dumps(
-            self.to_dict(),
-            indent=indent,
-            sort_keys=DEFAULT_JSON_SORT_KEYS,
-            ensure_ascii=DEFAULT_JSON_ENSURE_ASCII,
-            default=str,
-        )
-
-
-# ==============================================================================
-# Part 2. Constructor
-# ==============================================================================
-
-
-class TraceSpan:
-    """
-    Core runtime tracing span.
-    """
-
-
-    def __init__(
-        self,
-        name: str = DEFAULT_SPAN_NAME,
-        *,
-        trace_id: TraceId | None = None,
-        span_id: SpanId | None = None,
-        parent_span_id: ParentSpanId | None = None,
-        kind: SpanKind = SpanKind.INTERNAL,
-
-        attributes: Attributes | None = None,
-        metadata: TraceMetadata | None = None,
-        context: TraceMetadata | None = None,
-        tags: dict[str, Any] | None = None,
-
-        auto_start: bool = False,
-        enabled: bool = True,
-
-    ) -> None:
-        """
-        Initialize TraceSpan.
-        """
-
-
-        if not name or not name.strip():
-
-            raise SpanValidationError(
-                "Span name cannot be empty."
-            )
-
-
-        now = time.time()
-
-
-        # ------------------------------------------------------------------
-        # Identity
-        # ------------------------------------------------------------------
-
-        self._trace_id = (
-            trace_id
-            if trace_id is not None
-            else uuid.uuid4().hex
-        )
-
-
-        self._span_id = (
-            span_id
-            if span_id is not None
-            else uuid.uuid4().hex
-        )
-
-
-        self._parent_span_id = parent_span_id
-
-
-        self._name = name.strip()
-
-
-        self._kind = kind
-
-
-
-        # ------------------------------------------------------------------
-        # Runtime Flags
-        # ------------------------------------------------------------------
-
-        self._enabled = enabled
-
-        self._initialized = True
-
-        self._started = False
-
-        self._finished = False
-
-
-
-        # ------------------------------------------------------------------
-        # Lifecycle
-        # ------------------------------------------------------------------
-
-        self._state = SpanState.INITIALIZED
-
-
-        self._status = SpanStatus.UNSET
-
-
-        self._closed = False
-
-
-
-        # ------------------------------------------------------------------
-        # Timing
-        # ------------------------------------------------------------------
-
-        self._created_at = now
-
-        self._updated_at = now
-
-
-        self._start_time = 0.0
-
-        self._end_time = 0.0
-
-
-        self._duration = 0.0
-
-
-
-        # ------------------------------------------------------------------
-        # Context
-        # ------------------------------------------------------------------
-
-        self._context = dict(
-            context or {}
-        )
-
-
-        self._attributes = dict(
-            attributes or {}
-        )
-
-
-        self._metadata = dict(
-            metadata or {}
-        )
-
-
-        self._tags = dict(
-            tags or {}
-        )
-
-
-        self._events = []
-
-        self._links = []
-
-
-
-        # ------------------------------------------------------------------
-        # Hierarchy
-        # ------------------------------------------------------------------
-
-        self._children = {}
-
-
-
-        # ------------------------------------------------------------------
-        # Runtime
-        # ------------------------------------------------------------------
-
-        self._statistics = SpanStatistics()
-
-
-
-        self._lock = RLock()
-
-
-
-        self._history = deque(
-            maxlen=DEFAULT_HISTORY_LIMIT,
-        )
-
-
-        self._cache = {}
-
-
-        self._capabilities = (
-            SpanCapability.ALL
-        )
-
-
-
-        # ------------------------------------------------------------------
-        # Auto lifecycle
-        # ------------------------------------------------------------------
-
-        if auto_start:
-
-            self.start()   
-
-# ==============================================================================
-# Part 3. Properties
-# ==============================================================================
-
-
-    # --------------------------------------------------------------------------
-    # Identity
-    # --------------------------------------------------------------------------
-
-    @property
-    def trace_id(
-        self,
-    ) -> TraceId:
-        return self._trace_id
-
-
-    @property
-    def span_id(
-        self,
-    ) -> SpanId:
-        return self._span_id
-
-
-    @property
-    def parent_span_id(
-        self,
-    ) -> ParentSpanId | None:
-        return self._parent_span_id
-
-
-    @property
-    def parent(
-        self,
-    ) -> "TraceSpan | None":
-        return getattr(
-            self,
-            "_parent",
-            None,
-        )
-
-
-    @property
-    def name(
-        self,
-    ) -> str:
-        return self._name
-
-
-    @name.setter
-    def name(
-        self,
-        value: str,
-    ) -> None:
-
-        if not isinstance(
-            value,
-            str,
-        ):
-            raise SpanValidationError(
-                "Span name must be string."
-            )
-
-        value = value.strip()
-
-        if not value:
-            raise SpanValidationError(
-                "Span name cannot be empty."
-            )
-
-        self._name = value
-        self._updated_at = time.time()
-
-
-
-    @property
-    def kind(
-        self,
-    ) -> SpanKind:
-        return self._kind
-
-
-    @kind.setter
-    def kind(
-        self,
-        value: SpanKind,
-    ) -> None:
-
-        if not isinstance(
-            value,
-            SpanKind,
-        ):
-            raise SpanValidationError(
-                "Invalid span kind."
-            )
-
-        self._kind = value
-        self._updated_at = time.time()
-
-
-
-    # --------------------------------------------------------------------------
-    # Lifecycle State
-    # --------------------------------------------------------------------------
-
-    @property
-    def state(
-        self,
-    ) -> SpanState:
-        return self._state
-
-
-    @property
-    def status(
-        self,
-    ) -> SpanStatus:
-        return self._status
-
-
-    @status.setter
-    def status(
-        self,
-        value: SpanStatus,
-    ) -> None:
-
-        if not isinstance(
-            value,
-            SpanStatus,
-        ):
-            raise SpanValidationError(
-                "Invalid span status."
-            )
-
-        self._status = value
-        self._updated_at = time.time()
-
-
-
-    @property
-    def enabled(
-        self,
-    ) -> bool:
-        return self._enabled
-
-
-    @enabled.setter
-    def enabled(
-        self,
-        value: bool,
-    ) -> None:
-
-        self._enabled = bool(value)
-        self._updated_at = time.time()
-
-
-
-    @property
-    def started(
-        self,
-    ) -> bool:
-        return self._started
-
-
-    @property
-    def finished(
-        self,
-    ) -> bool:
-        return self._finished
-
-
-    @property
-    def cancelled(
-        self,
-    ) -> bool:
-
-        return getattr(
-            self,
-            "_cancelled",
-            False,
-        )
-
-
-    @property
-    def closed(
-        self,
-    ) -> bool:
-
-        return self._closed
-
-
-
-    # --------------------------------------------------------------------------
-    # Timing
-    # --------------------------------------------------------------------------
-
-    @property
-    def created_at(
-        self,
-    ) -> float:
-        return self._created_at
-
-
-    @property
-    def updated_at(
-        self,
-    ) -> float:
-        return self._updated_at
-
-
-    @property
-    def start_time(
-        self,
-    ) -> float:
-        return self._start_time
-
-
-    @property
-    def end_time(
-        self,
-    ) -> float:
-        return self._end_time
-
-
-    @property
-    def started_at(
-        self,
-    ) -> float | None:
-
-        return (
-            self._start_time
-            if self._started
-            else None
-        )
-
-
-    @property
-    def finished_at(
-        self,
-    ) -> float | None:
-
-        return (
-            self._end_time
-            if self._finished
-            else None
-        )
-
-
-    @property
-    def duration(
-        self,
-    ) -> float:
-
-        if (
-            self._started
-            and not self._finished
-            and self._start_time > 0.0
-        ):
-
-            return max(
-                0.0,
-                time.time()
-                -
-                self._start_time,
-            )
-
-        return self._duration
-
-
-
-    # --------------------------------------------------------------------------
-    # Context
-    # --------------------------------------------------------------------------
-
-    @property
-    def context(
-        self,
-    ) -> TraceMetadata:
-
-        return dict(
-            self._context
-        )
-
-
-    @context.setter
-    def context(
-        self,
-        value: TraceMetadata,
-    ) -> None:
-
-        self._context = dict(
-            value
-        )
-
-        self._updated_at = time.time()
-
-
-
-    @property
-    def metadata(
-        self,
-    ) -> TraceMetadata:
-
-        return dict(
-            self._metadata
-        )
-
-
-
-    @property
-    def tags(
-        self,
-    ) -> list[str]:
-
-        return list(
-            self._tags.keys()
-        )
-
-
-
-    @property
-    def statistics(
-        self,
-    ) -> SpanStatistics:
-
-        return self._statistics
-
-
-
-    @property
-    def capabilities(
-        self,
-    ) -> SpanCapability:
-
-        return self._capabilities
-
-
-
-    # --------------------------------------------------------------------------
-    # Attributes
-    # --------------------------------------------------------------------------
-
-    @property
-    def attributes(
-        self,
-    ) -> Attributes:
-
-        return dict(
-            self._attributes
-        )
-
-
-    @property
-    def attribute_count(
-        self,
-    ) -> int:
-
-        return len(
-            self._attributes
-        )
-
-
-
-    # --------------------------------------------------------------------------
-    # Events
-    # --------------------------------------------------------------------------
-
-    @property
-    def events(
-        self,
-    ) -> EventCollection:
-
-        return list(
-            self._events
-        )
-
-
-    @property
-    def event_count(
-        self,
-    ) -> int:
-
-        return len(
-            self._events
-        )
-
-
-
-    # --------------------------------------------------------------------------
-    # Links
-    # --------------------------------------------------------------------------
-
-    @property
-    def links(
-        self,
-    ) -> LinkCollection:
-
-        return list(
-            self._links
-        )
-
-
-    @property
-    def link_count(
-        self,
-    ) -> int:
-
-        return len(
-            self._links
-        )
-
-
-
-    # --------------------------------------------------------------------------
-    # Children
-    # --------------------------------------------------------------------------
-
-    @property
-    def children(
-        self,
-    ) -> SpanCollection:
-
-        return dict(
-            self._children
-        )
-
-
-    @property
-    def child_count(
-        self,
-    ) -> int:
-
-        return len(
-            self._children
-        )
-
-
-
-
-# ==============================================================================
-# Part 4. Lifecycle
-# ==============================================================================
-
-
-    def start(
-        self,
-    ) -> "TraceSpan":
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-
-            if not self._enabled:
-                return self
-
-
-            if self._started:
-                return self
-
-
-            now = time.time()
-
-
-            self._started = True
-            self._finished = False
-            self._cancelled = False
-
-
-            self._start_time = now
-            self._end_time = 0.0
-
-
-            self._started_at = now
-            self._finished_at = None
-
-
-            self._duration = 0.0
-
-
-            self._state = SpanState.RUNNING
-
-            self._status = SpanStatus.UNSET
-
-
-            self._statistics.start_time = now
-
-
-            self._updated_at = now
-
-
-            return self
-
-
-
-
-
-    def end(
-        self,
-        status: SpanStatus = SpanStatus.OK,
-    ) -> "TraceSpan":
-
-        return self.finish(
-            status=status,
-        )
-
-
-
-
-
-    def finish(
-        self,
-        status: SpanStatus = SpanStatus.OK,
-    ) -> "TraceSpan":
-
-
-        if not isinstance(
-            status,
-            SpanStatus,
-        ):
-
-            raise SpanValidationError(
-                "Invalid span status."
-            )
-
-
-        with self._lock:
-
-
-            if self._closed:
-                raise SpanClosedError()
-
-
-            if self._finished:
-                return self
-
-
-            now = time.time()
-
-
-            self._finished = True
-
-            self._finished_at = now
-
-
-            if self._start_time > 0.0:
-
-                self._duration = (
-                    now
-                    -
-                    self._start_time
-                )
-
-
-            self._end_time = now
-
-
-            self._state = SpanState.FINISHED
-
-
-            self._status = status
-
-
-            self._statistics.end_time = now
-
-            self._statistics.duration = (
-                self._duration
-            )
-
-
-            if status == SpanStatus.ERROR:
-
-                self._statistics.error_count += 1
-
-
-            self._updated_at = now
-
-
-            return self
-
-
-
-
-
-    def cancel(
-        self,
-    ) -> "TraceSpan":
-
-
-        with self._lock:
-
-
-            if self._closed:
-                raise SpanClosedError()
-
-
-            now = time.time()
-
-
-            self._cancelled = True
-
-            self._finished = True
-
-
-            self._finished_at = now
-
-            self._end_time = now
-
-
-            if self._start_time > 0.0:
-
-                self._duration = (
-                    now
-                    -
-                    self._start_time
-                )
-
-
-            self._state = SpanState.ERROR
-
-            self._status = SpanStatus.ERROR
-
-
-            self._statistics.error_count += 1
-
-
-            self._statistics.end_time = now
-
-            self._statistics.duration = (
-                self._duration
-            )
-
-
-            self._updated_at = now
-
-
-            return self
-
-
-
-
-
-    def reset(
-        self,
-    ) -> "TraceSpan":
-
-
-        with self._lock:
-
-
-            if self._closed:
-                raise SpanClosedError()
-
-
-            self._started = False
-
-            self._finished = False
-
-            self._cancelled = False
-
-
-            self._started_at = None
-
-            self._finished_at = None
-
-
-            self._start_time = 0.0
-
-            self._end_time = 0.0
-
-            self._duration = 0.0
-
-
-            self._state = SpanState.INITIALIZED
-
-            self._status = SpanStatus.UNSET
-
-
-
-            self._events.clear()
-
-            self._links.clear()
-
-            self._attributes.clear()
-
-            self._metadata.clear()
-
-            self._context.clear()
-
-            self._tags.clear()
-
-            self._children.clear()
-
-
-
-            if hasattr(
-                self,
-                "_cache",
-            ):
-                self._cache.clear()
-
-
-
-            if hasattr(
-                self,
-                "_history",
-            ):
-                self._history.clear()
-
-
-
-            self._statistics.reset()
-
-
-            self._updated_at = time.time()
-
-
-            return self
-
-
-
-
-
-    def close(
-        self,
-    ) -> "TraceSpan":
-
-
-        with self._lock:
-
-
-            if self._closed:
-                return self
-
-
-            self._closed = True
-
-
-            self._state = SpanState.CLOSED
-
-
-            self._updated_at = time.time()
-
-
-            return self
-
-
-
-
-
-    def disable(
-        self,
-    ) -> "TraceSpan":
-
-        self.enabled = False
-
-        return self
-
-
-
-
-
-    def enable(
-        self,
-    ) -> "TraceSpan":
-
-        self.enabled = True
-
-        return self
-
-
-
-
-
-    def freeze(
-        self,
-    ) -> "TraceSpan":
-
-        self._frozen = True
-
-        return self
-
-
-
-
-
-    def unfreeze(
-        self,
-    ) -> "TraceSpan":
-
-        self._frozen = False
-
-        return self
-
-# ==============================================================================
-# Part 5. Attributes
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# copy_attributes()
-# ------------------------------------------------------------------------------
-
-    def copy_attributes(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return a deep copy of all attributes.
-        """
-
-        with self._lock:
-
-            return copy.deepcopy(
-                self._attributes
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # set_attribute()
-    # ------------------------------------------------------------------------------
-
-    def set_attribute(
-        self,
-        key: AttributeKey,
-        value: AttributeValue,
-    ) -> "TraceSpan":
-        """
-        Set or replace one attribute.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            if not isinstance(
-                key,
-                str,
-            ):
-                raise SpanValidationError(
-                    "Attribute key must be string."
-                )
-
-            key = key.strip()
-
-            if not key:
-                raise SpanValidationError(
-                    "Attribute key cannot be empty."
-                )
-
-            if (
-                key not in self._attributes
-                and
-                len(self._attributes)
-                >= DEFAULT_ATTRIBUTES_LIMIT
-            ):
-                raise SpanValidationError(
-                    "Maximum attribute limit exceeded."
-                )
-
-            self._attributes[key] = value
-
-            self._statistics.attribute_count = (
-                len(self._attributes)
-            )
-
-            self._statistics.update_count += 1
-
-            self._updated_at = time.time()
-
-            return self
-
-
-    # ------------------------------------------------------------------------------
-    # set_attributes()
-    # ------------------------------------------------------------------------------
-
-    def set_attributes(
-        self,
-        attributes: Mapping[str, Any],
-    ) -> "TraceSpan":
-        """
-        Set multiple attributes.
-        """
-
-        if not isinstance(
-            attributes,
-            Mapping,
-        ):
-            raise SpanValidationError(
-                "Attributes must be mapping."
-            )
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            for key, value in attributes.items():
-
-                if not isinstance(
-                    key,
-                    str,
-                ):
-                    raise SpanValidationError(
-                        "Attribute key must be string."
-                    )
-
-                key = key.strip()
-
-                if not key:
-                    raise SpanValidationError(
-                        "Attribute key cannot be empty."
-                    )
-
-                if (
-                    key not in self._attributes
-                    and
-                    len(self._attributes)
-                    >= DEFAULT_ATTRIBUTES_LIMIT
-                ):
-                    raise SpanValidationError(
-                        "Maximum attribute limit exceeded."
-                    )
-
-                self._attributes[key] = value
-
-            self._statistics.attribute_count = (
-                len(self._attributes)
-            )
-
-            self._statistics.update_count += 1
-
-            self._updated_at = time.time()
-
-            return self
-
-
-    # ------------------------------------------------------------------------------
-    # update_attributes()
-    # ------------------------------------------------------------------------------
-
-    def update_attributes(
-        self,
-        attributes: Mapping[str, Any],
-    ) -> "TraceSpan":
-        """
-        Alias of set_attributes().
-        """
-
-        return self.set_attributes(
-            attributes
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # remove_attribute()
-    # ------------------------------------------------------------------------------
-
-    def remove_attribute(
-        self,
-        key: AttributeKey,
-    ) -> bool:
-        """
-        Remove one attribute.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            if not isinstance(
-                key,
-                str,
-            ):
-                raise SpanValidationError(
-                    "Attribute key must be string."
-                )
-
-            key = key.strip()
-
-            if key not in self._attributes:
-                return False
-
-            del self._attributes[key]
-
-            self._statistics.attribute_count = (
-                len(self._attributes)
-            )
-
-            self._statistics.update_count += 1
-
-            self._updated_at = time.time()
-
-            return True
-
-
-    # ------------------------------------------------------------------------------
-    # clear_attributes()
-    # ------------------------------------------------------------------------------
-
-    def clear_attributes(
-        self,
-    ) -> "TraceSpan":
-        """
-        Remove all attributes.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            if not self._attributes:
-                return self
-
-            self._attributes.clear()
-
-            self._statistics.attribute_count = 0
-
-            self._statistics.update_count += 1
-
-            self._updated_at = time.time()
-
-            return self
-
-
-    # ------------------------------------------------------------------------------
-    # get_attribute()
-    # ------------------------------------------------------------------------------
-
-    def get_attribute(
-        self,
-        key: AttributeKey,
-        default: Any = None,
-    ) -> Any:
-        """
-        Get one attribute.
-        """
-
-        with self._lock:
-
-            return self._attributes.get(
-                key,
-                default,
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # has_attribute()
-    # ------------------------------------------------------------------------------
-
-    def has_attribute(
-        self,
-        key: AttributeKey,
-    ) -> bool:
-        """
-        Return True if attribute exists.
-        """
-
-        with self._lock:
-
-            return key in self._attributes
-
-
-    # ------------------------------------------------------------------------------
-    # attribute_keys()
-    # ------------------------------------------------------------------------------
-
-    def attribute_keys(
-        self,
-    ) -> list[str]:
-        """
-        Return attribute keys.
-        """
-
-        with self._lock:
-
-            return list(
-                self._attributes.keys()
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # attribute_values()
-    # ------------------------------------------------------------------------------
-
-    def attribute_values(
-        self,
-    ) -> list[Any]:
-        """
-        Return attribute values.
-        """
-
-        with self._lock:
-
-            return list(
-                self._attributes.values()
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # attribute_items()
-    # ------------------------------------------------------------------------------
-
-    def attribute_items(
-        self,
-    ) -> list[tuple[str, Any]]:
-        """
-        Return attribute items.
-        """
-
-        with self._lock:
-
-            return list(
-                self._attributes.items()
-            )
-
-# ==============================================================================
-# Part 6. Events
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# add_event()
-# ------------------------------------------------------------------------------
-
-    def add_event(
-        self,
-        name: str,
-        attributes: Mapping[str, Any] | None = None,
-    ) -> "TraceSpan":
-        """
-        Record a runtime event.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            if not isinstance(
-                name,
-                str,
-            ):
-                raise SpanValidationError(
-                    "Event name must be string."
-                )
-
-            name = name.strip()
-
-            if not name:
-                raise SpanValidationError(
-                    "Event name cannot be empty."
-                )
-
-            if (
-                len(self._events)
-                >= DEFAULT_EVENTS_LIMIT
-            ):
-                raise SpanValidationError(
-                    "Maximum event limit exceeded."
-                )
-
-            if (
-                attributes is not None
-                and
-                not isinstance(
-                    attributes,
-                    Mapping,
-                )
-            ):
-                raise SpanValidationError(
-                    "Event attributes must be mapping."
-                )
-
-            now = time.time()
-
-            event: TraceEvent = {
-
-                "id":
-                    uuid.uuid4().hex,
-
-                "name":
-                    name,
-
-                "timestamp":
-                    now,
-
-                "attributes":
-                    copy.deepcopy(
-                        dict(
-                            attributes or {}
-                        )
-                    ),
-            }
-
-            self._events.append(
-                event
-            )
-
-            self._statistics.event_count = (
-                len(self._events)
-            )
-
-            self._statistics.update_count += 1
-
-            self._updated_at = now
-
-            return self
-
-
-    # ------------------------------------------------------------------------------
-    # get_event()
-    # ------------------------------------------------------------------------------
-
-    def get_event(
-        self,
-        event_id: str,
-    ) -> TraceEvent | None:
-        """
-        Return event by id.
-        """
-
-        with self._lock:
-
-            for event in self._events:
-
-                if (
-                    event.get("id")
-                    ==
-                    event_id
-                ):
-                    return copy.deepcopy(
-                        event
-                    )
-
-            return None
-
-
-    # ------------------------------------------------------------------------------
-    # get_events()
-    # ------------------------------------------------------------------------------
-
-    def get_events(
-        self,
-    ) -> list[TraceEvent]:
-        """
-        Return all events.
-        """
-
-        with self._lock:
-
-            return copy.deepcopy(
-                self._events
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # event_count
-    # ------------------------------------------------------------------------------
-
-    @property
-    def event_count(
-        self,
-    ) -> int:
-        """
-        Number of events.
-        """
-
-        return len(
-            self._events
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # has_event()
-    # ------------------------------------------------------------------------------
-
-    def has_event(
-        self,
-        event_id: str,
-    ) -> bool:
-        """
-        Check event existence.
-        """
-
-        return (
-            self.get_event(
-                event_id
-            )
-            is not None
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # remove_event()
-    # ------------------------------------------------------------------------------
-
-    def remove_event(
-        self,
-        event_id: str,
-    ) -> bool:
-        """
-        Remove event by id.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            for index, event in enumerate(
-                self._events
-            ):
-
-                if (
-                    event.get("id")
-                    ==
-                    event_id
-                ):
-
-                    del self._events[
-                        index
-                    ]
-
-                    self._statistics.event_count = (
-                        len(
-                            self._events
-                        )
-                    )
-
-                    self._statistics.update_count += 1
-
-                    self._updated_at = (
-                        time.time()
-                    )
-
-                    return True
-
-            return False
-
-
-    # ------------------------------------------------------------------------------
-    # clear_events()
-    # ------------------------------------------------------------------------------
-
-    def clear_events(
-        self,
-    ) -> "TraceSpan":
-        """
-        Remove all events.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            if not self._events:
-                return self
-
-            self._events.clear()
-
-            self._statistics.event_count = 0
-
-            self._statistics.update_count += 1
-
-            self._updated_at = time.time()
-
-            return self
-
-
-    # ------------------------------------------------------------------------------
-    # record_exception()
-    # ------------------------------------------------------------------------------
-
-    def record_exception(
-        self,
-        exc: BaseException,
-        **attributes: Any,
-    ) -> "TraceSpan":
-        """
-        Record exception as an event.
-        """
-
-        if not isinstance(
-            exc,
-            BaseException,
-        ):
-            raise SpanValidationError(
-                "exc must be BaseException."
-            )
-
-        payload = {
-
-            "type":
-                exc.__class__.__name__,
-
-            "message":
-                str(exc),
-        }
-
-        payload.update(
-            attributes
-        )
-
-        self.add_event(
-            "exception",
-            payload,
-        )
-
-        self._status = (
-            SpanStatus.ERROR
-        )
-
-        self._statistics.error_count += 1
-
-        return self
-
-# ==============================================================================
-# Part 7. Links
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# add_link()
-# ------------------------------------------------------------------------------
-
-    def add_link(
-        self,
-        trace_id: TraceId,
-        span_id: SpanId,
-        attributes: Mapping[str, Any] | None = None,
-        **metadata: Any,
-    ) -> "TraceSpan":
-        """
-        Add a link to another span.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            if (
-                not isinstance(trace_id, str)
-                or
-                not trace_id.strip()
-            ):
-                raise SpanValidationError(
-                    "trace_id cannot be empty."
-                )
-
-            if (
-                not isinstance(span_id, str)
-                or
-                not span_id.strip()
-            ):
-                raise SpanValidationError(
-                    "span_id cannot be empty."
-                )
-
-            trace_id = trace_id.strip()
-            span_id = span_id.strip()
-
-            payload: dict[str, Any] = {}
-
-            if attributes is not None:
-
-                if not isinstance(
-                    attributes,
-                    Mapping,
-                ):
-                    raise SpanValidationError(
-                        "Link attributes must be mapping."
-                    )
-
-                payload.update(attributes)
-
-            payload.update(metadata)
-
-            if (
-                len(self._links)
-                >=
-                DEFAULT_LINKS_LIMIT
-            ):
-                raise SpanValidationError(
-                    "Maximum link limit exceeded."
-                )
-
-            for link in self._links:
-
-                if (
-                    link["trace_id"] == trace_id
-                    and
-                    link["span_id"] == span_id
-                ):
-                    link["attributes"].update(
-                        copy.deepcopy(payload)
-                    )
-
-                    self._updated_at = time.time()
-
-                    return self
-
-            now = time.time()
-
-            link: TraceLink = {
-
-                "id":
-                    uuid.uuid4().hex,
-
-                "trace_id":
-                    trace_id,
-
-                "span_id":
-                    span_id,
-
-                "attributes":
-                    copy.deepcopy(payload),
-
-                "timestamp":
-                    now,
-            }
-
-            self._links.append(
-                link
-            )
-
-            self._statistics.link_count = (
-                len(self._links)
-            )
-
-            self._statistics.update_count += 1
-
-            self._updated_at = now
-
-            return self
-
-
-    # ------------------------------------------------------------------------------
-    # get_link()
-    # ------------------------------------------------------------------------------
-
-    def get_link(
-        self,
-        trace_id: TraceId,
-        span_id: SpanId,
-    ) -> TraceLink | None:
-        """
-        Return one link.
-        """
-
-        with self._lock:
-
-            for link in self._links:
-
-                if (
-                    link["trace_id"] == trace_id
-                    and
-                    link["span_id"] == span_id
-                ):
-                    return copy.deepcopy(
-                        link
-                    )
-
-            return None
-
-
-    # ------------------------------------------------------------------------------
-    # get_links()
-    # ------------------------------------------------------------------------------
-
-    def get_links(
-        self,
-    ) -> list[TraceLink]:
-        """
-        Return all links.
-        """
-
-        with self._lock:
-
-            return copy.deepcopy(
-                self._links
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # has_link()
-    # ------------------------------------------------------------------------------
-
-    def has_link(
-        self,
-        trace_id: TraceId,
-        span_id: SpanId,
-    ) -> bool:
-        """
-        Check whether link exists.
-        """
-
-        return (
-            self.get_link(
-                trace_id,
-                span_id,
-            )
-            is not None
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # remove_link()
-    # ------------------------------------------------------------------------------
-
-    def remove_link(
-        self,
-        trace_id: TraceId,
-        span_id: SpanId | None = None,
-    ) -> bool:
-        """
-        Remove a link.
-
-        Supports:
-            remove_link(link_id)
-            remove_link(trace_id, span_id)
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            for index, link in enumerate(
-                self._links
-            ):
-
-                matched = False
-
-                if span_id is None:
-
-                    matched = (
-                        link["id"]
-                        ==
-                        trace_id
-                    )
-
-                else:
-
-                    matched = (
-
-                        link["trace_id"]
-                        ==
-                        trace_id
-
-                        and
-
-                        link["span_id"]
-                        ==
-                        span_id
-
-                    )
-
-                if matched:
-
-                    del self._links[index]
-
-                    self._statistics.link_count = (
-                        len(self._links)
-                    )
-
-                    self._statistics.update_count += 1
-
-                    self._updated_at = (
-                        time.time()
-                    )
-
-                    return True
-
-            return False
-
-
-    # ------------------------------------------------------------------------------
-    # clear_links()
-    # ------------------------------------------------------------------------------
-
-    def clear_links(
-        self,
-    ) -> "TraceSpan":
-        """
-        Remove all links.
-        """
-
-        with self._lock:
-
-            if self._closed:
-                raise SpanClosedError()
-
-            if not self._links:
-                return self
-
-            self._links.clear()
-
-            self._statistics.link_count = 0
-
-            self._statistics.update_count += 1
-
-            self._updated_at = time.time()
-
-            return self
-
-
-    # ------------------------------------------------------------------------------
-    # link_count
-    # ------------------------------------------------------------------------------
-
-    @property
-    def link_count(
-        self,
-    ) -> int:
-        """
-        Number of links.
-        """
-
-        return len(
-            self._links
-        )
-
-# ==============================================================================
-# Part 8. Serialization
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# to_dict()
-# ------------------------------------------------------------------------------
-
-    def to_dict(
-        self,
-    ) -> SerializedSpan:
-        """
-        Serialize span into dictionary.
-        """
-
-        with self._lock:
-
-            return {
-
-                # ------------------------------------------------------------------
-                # Identity
-                # ------------------------------------------------------------------
-
-                "trace_id":
-                    self._trace_id,
-
-                "span_id":
-                    self._span_id,
-
-                "parent_span_id":
-                    self._parent_span_id,
-
-                # ------------------------------------------------------------------
-                # Metadata
-                # ------------------------------------------------------------------
-
-                "name":
-                    self._name,
-
-                "kind":
-                    self._kind.value,
-
-                # ------------------------------------------------------------------
-                # Lifecycle
-                # ------------------------------------------------------------------
-
-                "state":
-                    self._state.value,
-
-                "status":
-                    self._status.value,
-
-                "enabled":
-                    self._enabled,
-
-                "started":
-                    self._started,
-
-                "finished":
-                    self._finished,
-
-                "cancelled":
-                    getattr(
-                        self,
-                        "_cancelled",
-                        False,
-                    ),
-
-                "closed":
-                    getattr(
-                        self,
-                        "_closed",
-                        False,
-                    ),
-
-                # ------------------------------------------------------------------
-                # Timing
-                # ------------------------------------------------------------------
-
-                "created_at":
-                    self._created_at,
-
-                "updated_at":
-                    self._updated_at,
-
-                "started_at":
-                    self._started_at,
-
-                "finished_at":
-                    self._finished_at,
-
-                "start_time":
-                    self._start_time,
-
-                "end_time":
-                    self._end_time,
-
-                "duration":
-                    self.duration,
-
-                # ------------------------------------------------------------------
-                # Runtime
-                # ------------------------------------------------------------------
-
-                "context":
-                    copy.deepcopy(
-                        self._context
-                    ),
-
-                "metadata":
-                    copy.deepcopy(
-                        self._metadata
-                    ),
-
-                "tags":
-                    copy.deepcopy(
-                        self._tags
-                    ),
-
-                "attributes":
-                    copy.deepcopy(
-                        self._attributes
-                    ),
-
-                "events":
-                    copy.deepcopy(
-                        self._events
-                    ),
-
-                "links":
-                    copy.deepcopy(
-                        self._links
-                    ),
-
-                # ------------------------------------------------------------------
-                # Statistics
-                # ------------------------------------------------------------------
-
-                "statistics":
-                    self._statistics.to_dict(),
-            }
-
-
-    # ------------------------------------------------------------------------------
-    # from_dict()
-    # ------------------------------------------------------------------------------
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: Mapping[str, Any],
-    ) -> "TraceSpan":
-        """
-        Restore span from dictionary.
-        """
-
-        if not isinstance(
-            data,
-            Mapping,
-        ):
-            raise SpanValidationError(
-                "Serialized span must be mapping."
-            )
-
-        span = cls(
-
-            name=data.get(
-                "name",
-                DEFAULT_SPAN_NAME,
-            ),
-
-            trace_id=data.get(
-                "trace_id",
-            ),
-
-            span_id=data.get(
-                "span_id",
-            ),
-
-            parent_span_id=data.get(
-                "parent_span_id",
-            ),
-
-            kind=SpanKind(
-                data.get(
-                    "kind",
-                    SpanKind.INTERNAL.value,
-                )
-            ),
-
-            attributes=copy.deepcopy(
-                data.get(
-                    "attributes",
-                    {},
-                )
-            ),
-
-            metadata=copy.deepcopy(
-                data.get(
-                    "metadata",
-                    {},
-                )
-            ),
-
-            tags=copy.deepcopy(
-                data.get(
-                    "tags",
-                    {},
-                )
-            ),
-
-            enabled=bool(
-                data.get(
-                    "enabled",
-                    True,
-                )
-            ),
-        )
-
-        # ------------------------------------------------------------------
-        # Lifecycle
-        # ------------------------------------------------------------------
-
-        span._state = SpanState(
-            data.get(
-                "state",
-                SpanState.INITIALIZED.value,
-            )
-        )
-
-        span._status = SpanStatus(
-            data.get(
-                "status",
-                SpanStatus.UNSET.value,
-            )
-        )
-
-        span._started = bool(
-            data.get(
-                "started",
-                False,
-            )
-        )
-
-        span._finished = bool(
-            data.get(
-                "finished",
-                False,
-            )
-        )
-
-        span._cancelled = bool(
-            data.get(
-                "cancelled",
-                False,
-            )
-        )
-
-        span._closed = bool(
-            data.get(
-                "closed",
-                False,
-            )
-        )
-
-        # ------------------------------------------------------------------
-        # Timing
-        # ------------------------------------------------------------------
-
-        span._created_at = float(
-            data.get(
-                "created_at",
-                span._created_at,
-            )
-        )
-
-        span._updated_at = float(
-            data.get(
-                "updated_at",
-                span._updated_at,
-            )
-        )
-
-        span._started_at = data.get(
-            "started_at",
-        )
-
-        span._finished_at = data.get(
-            "finished_at",
-        )
-
-        span._start_time = float(
-            data.get(
-                "start_time",
-                0.0,
-            )
-        )
-
-        span._end_time = float(
-            data.get(
-                "end_time",
-                0.0,
-            )
-        )
-
-        span._duration = float(
-            data.get(
-                "duration",
-                0.0,
-            )
-        )
-
-        # ------------------------------------------------------------------
-        # Collections
-        # ------------------------------------------------------------------
-
-        span._context = copy.deepcopy(
-            data.get(
-                "context",
-                {},
-            )
-        )
-
-        span._events = copy.deepcopy(
-            data.get(
-                "events",
-                [],
-            )
-        )
-
-        span._links = copy.deepcopy(
-            data.get(
-                "links",
-                [],
-            )
-        )
-
-        # ------------------------------------------------------------------
-        # Statistics
-        # ------------------------------------------------------------------
-
-        statistics = data.get(
-            "statistics",
-        )
-
-        if (
-            isinstance(
-                statistics,
-                Mapping,
-            )
-            and
-            hasattr(
-                SpanStatistics,
-                "from_dict",
-            )
-        ):
-            span._statistics = (
-                SpanStatistics.from_dict(
-                    statistics
-                )
-            )
-
-        elif isinstance(
-            statistics,
-            Mapping,
-        ):
-            span._statistics = (
-                SpanStatistics(
-                    **statistics
-                )
-            )
-
-        else:
-
-            span._statistics.attribute_count = (
-                len(
-                    span._attributes
-                )
-            )
-
-            span._statistics.event_count = (
-                len(
-                    span._events
-                )
-            )
-
-            span._statistics.link_count = (
-                len(
-                    span._links
-                )
-            )
-
-        return span
-
-
-    # ------------------------------------------------------------------------------
-    # to_json()
-    # ------------------------------------------------------------------------------
-
-    def to_json(
-        self,
-        *,
-        indent: int = DEFAULT_INDENT,
-    ) -> str:
-        """
-        Serialize span into JSON.
-        """
-
-        return json.dumps(
-
-            self.to_dict(),
-
-            indent=indent,
-
-            sort_keys=DEFAULT_JSON_SORT_KEYS,
-
-            ensure_ascii=DEFAULT_JSON_ENSURE_ASCII,
-
-            default=str,
-
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # from_json()
-    # ------------------------------------------------------------------------------
-
-    @classmethod
-    def from_json(
-        cls,
-        payload: str,
-    ) -> "TraceSpan":
-        """
-        Restore span from JSON.
-        """
-
-        if not isinstance(
-            payload,
-            str,
-        ):
-            raise SpanValidationError(
-                "JSON payload must be string."
-            )
-
-        return cls.from_dict(
-            json.loads(
-                payload
-            )
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # snapshot()
-    # ------------------------------------------------------------------------------
-
-    def snapshot(
-        self,
-    ) -> SpanSnapshot:
-        """
-        Create snapshot.
-        """
-
-        with self._lock:
-
-            return SpanSnapshot(
-
-                trace_id=self._trace_id,
-
-                span_id=self._span_id,
-
-                parent_span_id=self._parent_span_id,
-
-                name=self._name,
-
-                kind=self._kind.value,
-
-                state=self._state.value,
-
-                status=self._status.value,
-
-                start_time=self._start_time,
-
-                end_time=self._end_time,
-
-                duration=self.duration,
-
-                attributes=copy.deepcopy(
-                    self._attributes
-                ),
-
-                events=copy.deepcopy(
-                    self._events
-                ),
-
-                links=copy.deepcopy(
-                    self._links
-                ),
-
-                metadata=copy.deepcopy(
-                    self._metadata
-                ),
-
-                statistics=self._statistics.to_dict(),
-
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # restore()
-    # ------------------------------------------------------------------------------
-
-    def restore(
-        self,
-        snapshot: SpanSnapshot,
-    ) -> "TraceSpan":
-        """
-        Restore current object from snapshot.
-        """
-
-        if not isinstance(
-            snapshot,
-            SpanSnapshot,
-        ):
-            raise SpanValidationError(
-                "Invalid snapshot."
-            )
-
-        with self._lock:
-
-            self._trace_id = snapshot.trace_id
-            self._span_id = snapshot.span_id
-            self._parent_span_id = (
-                snapshot.parent_span_id
-            )
-
-            self._name = snapshot.name
-            self._kind = SpanKind(
-                snapshot.kind
-            )
-            self._state = SpanState(
-                snapshot.state
-            )
-            self._status = SpanStatus(
-                snapshot.status
-            )
-
-            self._start_time = (
-                snapshot.start_time
-            )
-
-            self._end_time = (
-                snapshot.end_time
-                or
-                0.0
-            )
-
-            self._duration = (
-                snapshot.duration
-            )
-
-            self._attributes = copy.deepcopy(
-                snapshot.attributes
-            )
-
-            self._events = copy.deepcopy(
-                snapshot.events
-            )
-
-            self._links = copy.deepcopy(
-                snapshot.links
-            )
-
-            self._metadata = copy.deepcopy(
-                snapshot.metadata
-            )
-
-            if hasattr(
-                SpanStatistics,
-                "from_dict",
-            ):
-                self._statistics = (
-                    SpanStatistics.from_dict(
-                        snapshot.statistics
-                    )
-                )
-            else:
-                self._statistics = (
-                    SpanStatistics(
-                        **snapshot.statistics
-                    )
-                )
-
-            self._updated_at = time.time()
-
-            return self
-
-    
-# ==============================================================================
-# Part 9. Validation
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# validate()
-# ------------------------------------------------------------------------------
-
-    def validate(
-        self,
-    ) -> bool:
-        """
-        Validate runtime integrity.
-        """
-
-        with self._lock:
-
-            self._validate_identity()
-            self._validate_state()
-            self._validate_flags()
-            self._validate_timing()
-            self._validate_collections()
-            self._validate_statistics()
-
-            return True
-
-
-    # ------------------------------------------------------------------------------
-    # _validate_identity()
-    # ------------------------------------------------------------------------------
-
-    def _validate_identity(
-        self,
-    ) -> None:
-        """
-        Validate identity fields.
-        """
-
-        if (
-            not isinstance(
-                self._trace_id,
-                str,
-            )
-            or
-            not self._trace_id.strip()
-        ):
-            raise SpanValidationError(
-                "Invalid trace_id."
-            )
-
-        if (
-            not isinstance(
-                self._span_id,
-                str,
-            )
-            or
-            not self._span_id.strip()
-        ):
-            raise SpanValidationError(
-                "Invalid span_id."
-            )
-
-        if (
-            self._parent_span_id is not None
-            and
-            (
-                not isinstance(
-                    self._parent_span_id,
-                    str,
-                )
-                or
-                not self._parent_span_id.strip()
-            )
-        ):
-            raise SpanValidationError(
-                "Invalid parent_span_id."
-            )
-
-        if (
-            not isinstance(
-                self._name,
-                str,
-            )
-            or
-            not self._name.strip()
-        ):
-            raise SpanValidationError(
-                "Span name cannot be empty."
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # _validate_state()
-    # ------------------------------------------------------------------------------
-
-    def _validate_state(
-        self,
-    ) -> None:
-        """
-        Validate enum objects.
-        """
-
-        if not isinstance(
-            self._kind,
-            SpanKind,
-        ):
-            raise SpanValidationError(
-                "Invalid span kind."
-            )
-
-        if not isinstance(
-            self._state,
-            SpanState,
-        ):
-            raise SpanValidationError(
-                "Invalid span state."
-            )
-
-        if not isinstance(
-            self._status,
-            SpanStatus,
-        ):
-            raise SpanValidationError(
-                "Invalid span status."
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # _validate_flags()
-    # ------------------------------------------------------------------------------
-
-    def _validate_flags(
-        self,
-    ) -> None:
-        """
-        Validate lifecycle flags.
-        """
-
-        flags = (
-
-            getattr(
-                self,
-                "_enabled",
-                True,
-            ),
-
-            getattr(
-                self,
-                "_started",
-                False,
-            ),
-
-            getattr(
-                self,
-                "_finished",
-                False,
-            ),
-
-            getattr(
-                self,
-                "_cancelled",
-                False,
-            ),
-
-            getattr(
-                self,
-                "_closed",
-                False,
-            ),
-        )
-
-        if not all(
-            isinstance(
-                value,
-                bool,
-            )
-            for value in flags
-        ):
-            raise SpanValidationError(
-                "Lifecycle flags must be bool."
-            )
-
-        if (
-            self._finished
-            and
-            not self._started
-        ):
-            raise SpanValidationError(
-                "Finished span must be started."
-            )
-
-        if (
-            self._closed
-            and
-            not self._finished
-            and
-            not self._cancelled
-        ):
-            raise SpanValidationError(
-                "Closed span must be finished or cancelled."
-            )
-
-        if (
-            self._cancelled
-            and
-            self._status
-            not in (
-                SpanStatus.ERROR,
-                SpanStatus.CANCELLED,
-            )
-        ):
-            raise SpanValidationError(
-                "Cancelled span has invalid status."
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # _validate_timing()
-    # ------------------------------------------------------------------------------
-
-    def _validate_timing(
-        self,
-    ) -> None:
-        """
-        Validate timestamps.
-        """
-
-        values = (
-
-            self._created_at,
-
-            self._updated_at,
-
-            self._start_time,
-
-            self._end_time,
-        )
-
-        for value in values:
-
-            if (
-                value is not None
-                and
-                value < 0.0
-            ):
-                raise SpanValidationError(
-                    "Timestamp cannot be negative."
-                )
-
-        if (
-            self._updated_at
-            <
-            self._created_at
-        ):
-            raise SpanValidationError(
-                "updated_at precedes created_at."
-            )
-
-        if (
-            self._start_time > 0.0
-            and
-            self._end_time > 0.0
-            and
-            self._end_time < self._start_time
-        ):
-            raise SpanValidationError(
-                "end_time precedes start_time."
-            )
-
-        duration = getattr(
-            self,
-            "_duration",
-            self.duration,
-        )
-
-        if duration < 0.0:
-            raise SpanValidationError(
-                "Negative duration."
-            )
-
-        if (
-            self._finished
-            and
-            self._start_time > 0.0
-            and
-            self._end_time > 0.0
-        ):
-
-            expected = (
-                self._end_time
-                -
-                self._start_time
-            )
-
-            if abs(
-                expected - duration
-            ) > 1e-6:
-                raise SpanValidationError(
-                    "Duration mismatch."
-                )
-
-
-    # ------------------------------------------------------------------------------
-    # _validate_collections()
-    # ------------------------------------------------------------------------------
-
-    def _validate_collections(
-        self,
-    ) -> None:
-        """
-        Validate runtime collections.
-        """
-
-        mappings = {
-
-            "attributes":
-                self._attributes,
-
-            "context":
-                self._context,
-
-            "metadata":
-                self._metadata,
-
-            "children":
-                self._children,
-
-            "cache":
-                self._cache,
-        }
-
-        for name, value in mappings.items():
-
-            if not isinstance(
-                value,
-                dict,
-            ):
-                raise SpanValidationError(
-                    f"{name} must be dict."
-                )
-
-        if not isinstance(
-            self._tags,
-            (
-                dict,
-                list,
-                set,
-            ),
-        ):
-            raise SpanValidationError(
-                "tags must be collection."
-            )
-
-        if not isinstance(
-            self._events,
-            list,
-        ):
-            raise SpanValidationError(
-                "events must be list."
-            )
-
-        if not isinstance(
-            self._links,
-            list,
-        ):
-            raise SpanValidationError(
-                "links must be list."
-            )
-
-        if not isinstance(
-            self._history,
-            deque,
-        ):
-            raise SpanValidationError(
-                "history must be deque."
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # _validate_statistics()
-    # ------------------------------------------------------------------------------
-
-    def _validate_statistics(
-        self,
-    ) -> None:
-        """
-        Validate statistics consistency.
-        """
-
-        if not isinstance(
-            self._statistics,
-            SpanStatistics,
-        ):
-            raise SpanValidationError(
-                "Invalid statistics object."
-            )
-
-        checks = (
-
-            (
-                "attribute_count",
-                len(
-                    self._attributes
-                ),
-            ),
-
-            (
-                "event_count",
-                len(
-                    self._events
-                ),
-            ),
-
-            (
-                "link_count",
-                len(
-                    self._links
-                ),
-            ),
-        )
-
-        for field, expected in checks:
-
-            actual = getattr(
-                self._statistics,
-                field,
-                expected,
-            )
-
-            if actual != expected:
-                raise SpanValidationError(
-                    f"{field} mismatch."
-                )
-# ==============================================================================
-# Part 10. Diagnostics
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# health()
-# ------------------------------------------------------------------------------
-
-    def health(
-        self,
-    ) -> bool:
-        """
-        Return runtime health status.
-        """
-
-        with self._lock:
-
-            try:
-
-                self.validate()
-
-            except Exception:
-
-                return False
-
-            return (
-
-                not getattr(
-                    self,
-                    "_closed",
-                    False,
-                )
-
-                and
-
-                self._state is not SpanState.CLOSED
-
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # diagnostics()
-    # ------------------------------------------------------------------------------
-
-    def diagnostics(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return detailed runtime diagnostics.
-        """
-
-        with self._lock:
-
-            statistics = self._statistics.to_dict()
-
-            return {
-
-                # --------------------------------------------------------------
-                # Health
-                # --------------------------------------------------------------
-
-                "healthy":
-                    self.health(),
-
-                "valid":
-                    self.health(),
-
-                # --------------------------------------------------------------
-                # Identity
-                # --------------------------------------------------------------
-
-                "trace_id":
-                    self._trace_id,
-
-                "span_id":
-                    self._span_id,
-
-                "parent_span_id":
-                    self._parent_span_id,
-
-                "name":
-                    self._name,
-
-                "kind":
-                    self._kind.value,
-
-                # --------------------------------------------------------------
-                # Lifecycle
-                # --------------------------------------------------------------
-
-                "state":
-                    self._state.value,
-
-                "status":
-                    self._status.value,
-
-                "enabled":
-                    self._enabled,
-
-                "started":
-                    self._started,
-
-                "finished":
-                    self._finished,
-
-                "cancelled":
-                    getattr(
-                        self,
-                        "_cancelled",
-                        False,
-                    ),
-
-                "closed":
-                    getattr(
-                        self,
-                        "_closed",
-                        False,
-                    ),
-
-                # --------------------------------------------------------------
-                # Timing
-                # --------------------------------------------------------------
-
-                "created_at":
-                    self._created_at,
-
-                "updated_at":
-                    self._updated_at,
-
-                "started_at":
-                    self._started_at,
-
-                "finished_at":
-                    self._finished_at,
-
-                "start_time":
-                    self._start_time,
-
-                "end_time":
-                    self._end_time,
-
-                "duration":
-                    self.duration,
-
-                # --------------------------------------------------------------
-                # Collections
-                # --------------------------------------------------------------
-
-                "attributes":
-                    len(self._attributes),
-
-                "events":
-                    len(self._events),
-
-                "links":
-                    len(self._links),
-
-                "children":
-                    len(self._children),
-
-                "history":
-                    len(self._history),
-
-                "tags":
-                    copy.deepcopy(
-                        self._tags,
-                    ),
-
-                "metadata":
-                    copy.deepcopy(
-                        self._metadata,
-                    ),
-
-                "context":
-                    copy.deepcopy(
-                        self._context,
-                    ),
-
-                # --------------------------------------------------------------
-                # Statistics
-                # --------------------------------------------------------------
-
-                "statistics":
-                    statistics,
-            }
-
-
-    # ------------------------------------------------------------------------------
-    # summary()
-    # ------------------------------------------------------------------------------
-
-    def summary(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return compact runtime summary.
-        """
-
-        with self._lock:
-
-            return {
-
-                "trace_id":
-                    self._trace_id,
-
-                "span_id":
-                    self._span_id,
-
-                "name":
-                    self._name,
-
-                "kind":
-                    self._kind.value,
-
-                "state":
-                    self._state.value,
-
-                "status":
-                    self._status.value,
-
-                "duration":
-                    self.duration,
-
-                "events":
-                    len(
-                        self._events
-                    ),
-
-                "attributes":
-                    len(
-                        self._attributes
-                    ),
-
-                "links":
-                    len(
-                        self._links
-                    ),
-
-                "healthy":
-                    self.health(),
-
-            }
-
-
-    # ------------------------------------------------------------------------------
-    # report()
-    # ------------------------------------------------------------------------------
-
-    def report(
-        self,
-    ) -> SpanReport:
-        """
-        Generate SpanReport.
-        """
-
-        with self._lock:
-
-            report = SpanReport()
-
-            report.trace_id = self._trace_id
-            report.span_id = self._span_id
-            report.parent_span_id = self._parent_span_id
-
-            report.name = self._name
-            report.kind = self._kind.value
-
-            report.state = self._state.value
-            report.status = self._status.value
-
-            report.duration = self.duration
-
-            report.event_count = len(
-                self._events
-            )
-
-            report.attribute_count = len(
-                self._attributes
-            )
-
-            report.link_count = len(
-                self._links
-            )
-
-            report.child_count = len(
-                self._children
-            )
-
-            report.error_count = getattr(
-                self._statistics,
-                "error_count",
-                0,
-            )
-
-            report.created_at = self._created_at
-
-            return report
-
-
-    # ------------------------------------------------------------------------------
-    # runtime_statistics()
-    # ------------------------------------------------------------------------------
-
-    def runtime_statistics(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Return runtime statistics.
-        """
-
-        with self._lock:
-
-            uptime = max(
-
-                0.0,
-
-                time.time()
-                -
-                self._created_at,
-
-            )
-
-            return {
-
-                "identity": {
-
-                    "trace_id":
-                        self._trace_id,
-
-                    "span_id":
-                        self._span_id,
-
-                    "name":
-                        self._name,
-
-                },
-
-                "lifecycle": {
-
-                    "state":
-                        self._state.value,
-
-                    "status":
-                        self._status.value,
-
-                    "enabled":
-                        self._enabled,
-
-                    "started":
-                        self._started,
-
-                    "finished":
-                        self._finished,
-
-                },
-
-                "counts": {
-
-                    "attributes":
-                        len(
-                            self._attributes
-                        ),
-
-                    "events":
-                        len(
-                            self._events
-                        ),
-
-                    "links":
-                        len(
-                            self._links
-                        ),
-
-                    "children":
-                        len(
-                            self._children
-                        ),
-
-                },
-
-                "timing": {
-
-                    "duration":
-                        self.duration,
-
-                    "uptime":
-                        uptime,
-
-                },
-
-                "statistics":
-                    self._statistics.to_dict(),
-
-            }
-
-
-    # ------------------------------------------------------------------------------
-    # success_rate()
-    # ------------------------------------------------------------------------------
-
-    def success_rate(
-        self,
-    ) -> float:
-        """
-        Return success rate.
-        """
-
-        with self._lock:
-
-            status = self._status
-
-            if status is SpanStatus.OK:
-                return 1.0
-
-            if status is SpanStatus.ERROR:
-                return 0.0
-
-            if status is SpanStatus.UNSET:
-                return 0.5
-
-            return 0.5
-
-
-    # ------------------------------------------------------------------------------
-    # failure_rate()
-    # ------------------------------------------------------------------------------
-
-    def failure_rate(
-        self,
-    ) -> float:
-        """
-        Return failure rate.
-        """
-
-        return max(
-
-            0.0,
-
-            1.0
-            -
-            self.success_rate(),
-
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # duration_statistics()
-    # ------------------------------------------------------------------------------
-
-    def duration_statistics(
-        self,
-    ) -> dict[str, float]:
-        """
-        Return duration statistics.
-        """
-
-        with self._lock:
-
-            duration = max(
-                0.0,
-                self.duration,
-            )
-
-            return {
-
-                "current":
-                    duration,
-
-                "minimum":
-                    duration,
-
-                "maximum":
-                    duration,
-
-                "average":
-                    duration,
-
-            }
-
-
-    # ------------------------------------------------------------------------------
-    # throughput()
-    # ------------------------------------------------------------------------------
-
-    def throughput(
-        self,
-    ) -> float:
-        """
-        Return event throughput.
-        """
-
-        with self._lock:
-
-            duration = self.duration
-
-            if duration <= 0.0:
-
-                return 0.0
-
-            return (
-
-                len(
-                    self._events
-                )
-
-                /
-
-                duration
-
-            ) 
-
-# ==============================================================================
-# Part 11. Python Protocols
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# Representation
-# ------------------------------------------------------------------------------
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-        """
-
-        with self._lock:
-
-            return (
-
-                "TraceSpan("
-
-                f"name={self._name!r}, "
-
-                f"trace_id={self._trace_id!r}, "
-
-                f"span_id={self._span_id!r}, "
-
-                f"state={self._state.value!r}, "
-
-                f"status={self._status.value!r}, "
-
-                f"events={len(self._events)}, "
-
-                f"attributes={len(self._attributes)}, "
-
-                f"links={len(self._links)}"
-
-                ")"
-
-            )
-
-
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human readable representation.
-        """
-
-        with self._lock:
-
-            return (
-
-                f"{self._name}"
-
-                f"[{self._span_id}] "
-
-                f"{self._status.value}"
-
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # Container Protocol
-    # ------------------------------------------------------------------------------
-
-    def __len__(
-        self,
-    ) -> int:
-        """
-        Return runtime object count.
-
-        attributes + events + links
-        """
-
-        with self._lock:
-
-            return (
-
-                len(
-                    self._attributes
-                )
-
-                +
-
-                len(
-                    self._events
-                )
-
-                +
-
-                len(
-                    self._links
-                )
-
-            )
-
-
-    def __iter__(
-        self,
-    ) -> Iterator[str]:
-        """
-        Iterate attribute keys.
-        """
-
-        with self._lock:
-
-            return iter(
-
-                tuple(
-                    self._attributes.keys()
-                )
-
-            )
-
-
-    def __contains__(
-        self,
-        key: object,
-    ) -> bool:
-        """
-        Check attribute existence.
-        """
-
-        if not isinstance(
-            key,
-            str,
-        ):
-
-            return False
-
-        with self._lock:
-
-            return (
-
-                key
-                in
-                self._attributes
-
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # Mapping Protocol
-    # ------------------------------------------------------------------------------
-
-    def __getitem__(
-        self,
-        key: str,
-    ) -> Any:
-        """
-        Get attribute.
-        """
-
-        with self._lock:
-
-            return self._attributes[
-                key
-            ]
-
-
-    def __setitem__(
-        self,
-        key: str,
-        value: Any,
-    ) -> None:
-        """
-        Set attribute.
-        """
-
-        self.set_attribute(
-
-            key,
-
-            value,
-
-        )
-
-
-    def __delitem__(
-        self,
-        key: str,
-    ) -> None:
-        """
-        Delete attribute.
-        """
-
-        if not self.remove_attribute(
-            key
-        ):
-
-            raise KeyError(
-                key
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # Boolean Protocol
-    # ------------------------------------------------------------------------------
-
-    def __bool__(
-        self,
-    ) -> bool:
-        """
-        Runtime truth state.
-        """
-
-        with self._lock:
-
-            return (
-
-                self._enabled
-
-                and
-
-                not getattr(
-                    self,
-                    "_cancelled",
-                    False,
-                )
-
-                and
-
-                not getattr(
-                    self,
-                    "_closed",
-                    False,
-                )
-
-                and
-
-                self._state
-                is not SpanState.CLOSED
-
-            )
-
-
-    # ------------------------------------------------------------------------------
-    # Copy Protocol
-    # ------------------------------------------------------------------------------
-
-    def __copy__(
-        self,
-    ) -> "TraceSpan":
-        """
-        Shallow runtime copy.
-        """
-
-        return self.__class__.from_dict(
-
-            self.to_dict()
-
-        )
-
-
-    def __deepcopy__(
-        self,
-        memo: dict[int, Any] | None = None,
-    ) -> "TraceSpan":
-        """
-        Deep runtime copy.
-        """
-
-        if memo is None:
-
-            memo = {}
-
-
-        existing = memo.get(
-            id(self)
-        )
-
-        if existing is not None:
-
-            return existing
-
-
-        obj = self.__class__.from_dict(
-
-            copy.deepcopy(
-
-                self.to_dict(),
-
-                memo,
-
-            )
-
-        )
-
-        memo[
-            id(self)
-        ] = obj
-
-        return obj
-
-
-    # ------------------------------------------------------------------------------
-    # Equality / Hash
-    # ------------------------------------------------------------------------------
-
-    def __eq__(
-        self,
-        other: object,
-    ) -> bool:
-        """
-        Compare spans by identity.
-        """
-
-        if not isinstance(
-            other,
-            TraceSpan,
-        ):
-
-            return NotImplemented
-
-        return (
-
-            self._trace_id
-            ==
-            other._trace_id
-
-            and
-
-            self._span_id
-            ==
-            other._span_id
-
-        )
-
-
-    def __hash__(
-        self,
-    ) -> int:
-        """
-        Hash by identity.
-        """
-
-        return hash(
-
-            (
-
-                self._trace_id,
-
-                self._span_id,
-
-            )
-
-        )
-
-
-    # ------------------------------------------------------------------------------
-    # Context Manager
-    # ------------------------------------------------------------------------------
-
-    def __enter__(
-        self,
-    ) -> "TraceSpan":
-        """
-        Enter runtime context.
-        """
-
-        self.start()
-
-        return self
-
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool:
-        """
-        Exit runtime context.
-        """
-
-        if exc_value is not None:
-
-            self.finish()
-
-            self._status = SpanStatus.ERROR
-
-            if hasattr(
-                self,
-                "record_exception",
-            ):
-
-                self.record_exception(
-                    exc_value
-                )
-
-        else:
-
-            self.finish()
-
-            self._status = SpanStatus.OK
-
-        return False
-
-# ==============================================================================
-# Public Alias
-# ==============================================================================
-
-Span = TraceSpan
-
+from uuid import uuid4
 
 
 # ==============================================================================
 # Public API
 # ==============================================================================
 
-
 __all__ = [
 
-    # ------------------------------------------------------------------
-    # Main Runtime Objects
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------------------
+    # Constants
+    # --------------------------------------------------------------------------
 
-    "TraceSpan",
+    "SPAN_VERSION",
+    "SPAN_API_VERSION",
 
-    "Span",
+    "DEFAULT_SPAN_NAME",
+    "DEFAULT_SPAN_KIND",
+    "DEFAULT_SPAN_STATUS",
 
+    "DEFAULT_SPAN_AUTO_START",
+    "DEFAULT_SPAN_AUTO_FINISH",
 
-    # ------------------------------------------------------------------
-    # Dataclasses
-    # ------------------------------------------------------------------
-
-    "SpanStatistics",
-
-    "SpanSnapshot",
-
-    "SpanReport",
-
-
-    # ------------------------------------------------------------------
-    # Enumerations
-    # ------------------------------------------------------------------
-
-    "SpanKind",
-
-    "SpanState",
-
-    "SpanStatus",
-
-    "SpanCapability",
-
-
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # Exceptions
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
-    "TraceSpanError",
-
+    "SpanError",
     "SpanValidationError",
-
     "SpanStateError",
 
     "SpanClosedError",
+    "SpanAlreadyStartedError",
+    "SpanAlreadyFinishedError",
 
-    "SpanFinishedError",
+    "SpanNotStartedError",
+    "SpanNotFinishedError",
 
-    "InvalidTraceError",
+    "SpanFrozenError",
+    "SpanCancelledError",
 
+    # --------------------------------------------------------------------------
+    # Type Aliases
+    # --------------------------------------------------------------------------
+
+    "SpanId",
+    "TraceId",
+    "ParentSpanId",
+    "SpanName",
+
+    "SpanAttributeKey",
+    "SpanAttributeValue",
+    "SpanAttributes",
+
+    "Timestamp",
+]
+
+
+# ==============================================================================
+# Part 1. Constants
+# ==============================================================================
+
+SPAN_VERSION = "1.0.0"
+
+SPAN_API_VERSION = "1"
+
+
+DEFAULT_SPAN_NAME = "Span"
+
+DEFAULT_SPAN_KIND = "internal"
+
+DEFAULT_SPAN_STATUS = "unset"
+
+
+DEFAULT_SPAN_AUTO_START = False
+
+DEFAULT_SPAN_AUTO_FINISH = True
+
+
+# ==============================================================================
+# Part 2. Exceptions
+# ==============================================================================
+
+
+class SpanError(RuntimeError):
+    """
+    Base exception for the Span subsystem.
+    """
+
+
+class SpanValidationError(SpanError):
+    """
+    Raised when Span configuration or input is invalid.
+    """
+
+
+class SpanStateError(SpanError):
+    """
+    Raised when an operation is incompatible with Span state.
+    """
+
+
+class SpanClosedError(SpanStateError):
+    """
+    Raised when an operation is attempted on a closed Span.
+    """
+
+
+class SpanAlreadyStartedError(SpanStateError):
+    """
+    Raised when a Span is started more than once.
+    """
+
+
+class SpanAlreadyFinishedError(SpanStateError):
+    """
+    Raised when a Span is finished more than once.
+    """
+
+
+class SpanNotStartedError(SpanStateError):
+    """
+    Raised when an operation requires a started Span.
+    """
+
+
+class SpanNotFinishedError(SpanStateError):
+    """
+    Raised when an operation requires a finished Span.
+    """
+
+
+class SpanFrozenError(SpanStateError):
+    """
+    Raised when mutation is attempted on a frozen Span.
+    """
+
+
+class SpanCancelledError(SpanStateError):
+    """
+    Raised when an operation is attempted on a cancelled Span.
+    """
+
+
+# ==============================================================================
+# Part 3. Type Aliases
+# ==============================================================================
+
+SpanId: TypeAlias = str
+
+TraceId: TypeAlias = str
+
+ParentSpanId: TypeAlias = str | None
+
+SpanName: TypeAlias = str
+
+
+SpanAttributeKey: TypeAlias = str
+
+
+SpanAttributeValue: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+    | bytes
+    | Sequence[Any]
+    | Mapping[str, Any]
+    | None
+)
+
+
+SpanAttributes: TypeAlias = dict[
+    SpanAttributeKey,
+    SpanAttributeValue,
+]
+
+
+Timestamp: TypeAlias = datetime
+
+# ==============================================================================
+# Part 4. Span
+# ==============================================================================
+
+
+class Span:
+    """
+    Runtime tracing Span entity.
+
+    A Span represents one unit of work inside a Trace.
+
+    The Span is intentionally independent from TraceManager.
+    Manager-level orchestration will be added later.
+    """
+
+    # ==========================================================================
+    # 4.1 Constructor
+    # ==========================================================================
+
+    def __init__(
+        self,
+        name: str = DEFAULT_SPAN_NAME,
+        *,
+        span_id: SpanId | None = None,
+        trace_id: TraceId | None = None,
+        parent_id: ParentSpanId = None,
+        component: str | None = None,
+        task_id: str | None = None,
+        kind: str = DEFAULT_SPAN_KIND,
+        status: str = DEFAULT_SPAN_STATUS,
+        auto_start: bool = DEFAULT_SPAN_AUTO_START,
+        auto_finish: bool = DEFAULT_SPAN_AUTO_FINISH,
+        attributes: Mapping[
+            SpanAttributeKey,
+            SpanAttributeValue,
+        ] | None = None,
+    ) -> None:
+        """
+        Initialize a Span entity.
+        """
+
+        # ----------------------------------------------------------------------
+        # Validate name
+        # ----------------------------------------------------------------------
+
+        if not isinstance(name, str):
+            raise SpanValidationError(
+                "name must be a string"
+            )
+
+        name = name.strip()
+
+        if not name:
+            raise SpanValidationError(
+                "name cannot be empty"
+            )
+
+        # ----------------------------------------------------------------------
+        # Validate span_id
+        # ----------------------------------------------------------------------
+
+        if span_id is not None:
+
+            if not isinstance(span_id, str):
+                raise SpanValidationError(
+                    "span_id must be a string or None"
+                )
+
+            span_id = span_id.strip()
+
+            if not span_id:
+                raise SpanValidationError(
+                    "span_id cannot be empty"
+                )
+
+        # ----------------------------------------------------------------------
+        # Validate trace_id
+        # ----------------------------------------------------------------------
+
+        if trace_id is not None:
+
+            if not isinstance(trace_id, str):
+                raise SpanValidationError(
+                    "trace_id must be a string or None"
+                )
+
+            trace_id = trace_id.strip()
+
+            if not trace_id:
+                raise SpanValidationError(
+                    "trace_id cannot be empty"
+                )
+
+        # ----------------------------------------------------------------------
+        # Validate parent_id
+        # ----------------------------------------------------------------------
+
+        if parent_id is not None:
+
+            if not isinstance(parent_id, str):
+                raise SpanValidationError(
+                    "parent_id must be a string or None"
+                )
+
+            parent_id = parent_id.strip()
+
+            if not parent_id:
+                raise SpanValidationError(
+                    "parent_id cannot be empty"
+                )
+
+        # ----------------------------------------------------------------------
+        # Validate component
+        # ----------------------------------------------------------------------
+
+        if component is not None:
+
+            if not isinstance(component, str):
+                raise SpanValidationError(
+                    "component must be a string or None"
+                )
+
+            component = component.strip()
+
+            if not component:
+                raise SpanValidationError(
+                    "component cannot be empty"
+                )
+
+        # ----------------------------------------------------------------------
+        # Validate task_id
+        # ----------------------------------------------------------------------
+
+        if task_id is not None:
+
+            if not isinstance(task_id, str):
+                raise SpanValidationError(
+                    "task_id must be a string or None"
+                )
+
+            task_id = task_id.strip()
+
+            if not task_id:
+                raise SpanValidationError(
+                    "task_id cannot be empty"
+                )
+
+        # ----------------------------------------------------------------------
+        # Validate configuration
+        # ----------------------------------------------------------------------
+
+        if not isinstance(kind, str):
+            raise SpanValidationError(
+                "kind must be a string"
+            )
+
+        if not isinstance(status, str):
+            raise SpanValidationError(
+                "status must be a string"
+            )
+
+        if not isinstance(auto_start, bool):
+            raise SpanValidationError(
+                "auto_start must be bool"
+            )
+
+        if not isinstance(auto_finish, bool):
+            raise SpanValidationError(
+                "auto_finish must be bool"
+            )
+
+        # ----------------------------------------------------------------------
+        # Identity
+        # ----------------------------------------------------------------------
+
+        self._id: SpanId = (
+            span_id
+            if span_id is not None
+            else self._generate_id()
+        )
+
+        self._trace_id: TraceId | None = trace_id
+
+        self._parent_id: ParentSpanId = parent_id
+
+        self._name: SpanName = name
+
+        self._component: str | None = component
+
+        self._task_id: str | None = task_id
+
+        # ----------------------------------------------------------------------
+        # Configuration
+        # ----------------------------------------------------------------------
+
+        self._kind: str = kind
+
+        self._status: str = status
+
+        self._auto_start: bool = auto_start
+
+        self._auto_finish: bool = auto_finish
+
+        # ----------------------------------------------------------------------
+        # Lifecycle
+        # ----------------------------------------------------------------------
+
+        self._state: str = "created"
+
+        self._started: bool = False
+
+        self._finished: bool = False
+
+        self._cancelled: bool = False
+
+        self._closed: bool = False
+
+        self._frozen: bool = False
+
+        self._start_time: Timestamp | None = None
+
+        self._end_time: Timestamp | None = None
+
+        # ----------------------------------------------------------------------
+        # Metadata
+        # ----------------------------------------------------------------------
+
+        self._attributes: SpanAttributes = dict(
+            attributes
+            if attributes is not None
+            else {}
+        )
+
+        self._tags: dict[
+            str,
+            Any,
+        ] = {}
+
+        self._baggage: dict[
+            str,
+            Any,
+        ] = {}
+
+        # ----------------------------------------------------------------------
+        # Child collections
+        # ----------------------------------------------------------------------
+
+        self._events: list[Any] = []
+
+        self._links: list[Any] = []
+
+        # ----------------------------------------------------------------------
+        # Error / exception state
+        # ----------------------------------------------------------------------
+
+        self._exception: BaseException | None = None
+
+        # ----------------------------------------------------------------------
+        # Context
+        # ----------------------------------------------------------------------
+
+        self._context: Any | None = None
+
+        self._context_id: str | None = None
+
+        # ----------------------------------------------------------------------
+        # Automatic lifecycle
+        # ----------------------------------------------------------------------
+
+        if self._auto_start:
+            self.start()
+
+
+    # ==========================================================================
+    # 4.2 Identity
+    # ==========================================================================
+
+    @property
+    def id(self) -> SpanId:
+        return self._id
+
+
+    @property
+    def span_id(self) -> SpanId:
+        return self._id
+
+
+    @property
+    def trace_id(self) -> TraceId | None:
+        return self._trace_id
+
+
+    @property
+    def parent_id(self) -> ParentSpanId:
+        return self._parent_id
+
+
+    @property
+    def parent_span_id(self) -> ParentSpanId:
+        """Return the parent span identifier."""
+        return self._parent_id
+
+
+    @property
+    def component(self) -> str | None:
+        """Return the component associated with this span."""
+        return self._component
+
+
+    @property
+    def task_id(self) -> str | None:
+        """Return the task identifier associated with this span."""
+        return self._task_id
+
+
+    @property
+    def name(self) -> SpanName:
+        return self._name
+
+
+    @property
+    def kind(self) -> str:
+        return self._kind
+
+
+    # ==========================================================================
+    # 4.3 Lifecycle
+    # ==========================================================================
+
+    def start(self) -> "Span":
+        """
+        Start the Span.
+        """
+
+        self._ensure_mutable()
+
+        if self._started:
+            raise SpanAlreadyStartedError(
+                "Span has already been started"
+            )
+
+        if self._finished:
+            raise SpanStateError(
+                "Finished Span cannot be started"
+            )
+
+        if self._cancelled:
+            raise SpanCancelledError(
+                "Cancelled Span cannot be started"
+            )
+
+        self._start_time = self._now()
+        self._started = True
+        self._finished = False
+        self._cancelled = False
+        self._state = "running"
+
+        return self
+
+    def finish(
+        self,
+        *,
+        end_time: Timestamp | None = None,
+    ) -> "Span":
+        """
+        Finish the Span.
+        """
+
+        self._ensure_mutable()
+
+        if not self._started:
+            raise SpanNotStartedError(
+                "Cannot finish a Span that has not started"
+            )
+
+        if self._finished:
+            raise SpanAlreadyFinishedError(
+                "Span has already been finished"
+            )
+
+        if self._cancelled:
+            raise SpanCancelledError(
+                "Cancelled Span cannot be finished"
+            )
+
+        if end_time is not None:
+            if not isinstance(end_time, datetime):
+                raise SpanValidationError(
+                    "end_time must be datetime or None"
+                )
+
+            if (
+                self._start_time is not None
+                and end_time < self._start_time
+            ):
+                raise SpanValidationError(
+                    "end_time cannot be before start_time"
+                )
+
+            self._end_time = end_time
+        else:
+            self._end_time = self._now()
+
+        self._finished = True
+        self._state = "finished"
+
+        return self
+
+    def reset(self) -> "Span":
+        """
+        Reset the Span to its initial lifecycle state.
+        """
+
+        self._ensure_mutable()
+
+        self._state = "created"
+        self._started = False
+        self._finished = False
+        self._cancelled = False
+        self._closed = False
+
+        self._start_time = None
+        self._end_time = None
+        self._exception = None
+
+        return self
+
+    def restart(self) -> "Span":
+        """
+        Reset and start the Span again.
+        """
+
+        self.reset()
+        return self.start()
+
+    def cancel(self) -> "Span":
+        """
+        Cancel the Span.
+        """
+
+        self._ensure_mutable()
+
+        if not self._started:
+            raise SpanNotStartedError(
+                "Cannot cancel a Span that has not started"
+            )
+
+        if self._finished:
+            raise SpanAlreadyFinishedError(
+                "Finished Span cannot be cancelled"
+            )
+
+        self._cancelled = True
+        self._state = "cancelled"
+        self._end_time = self._now()
+
+        return self
+
+    def close(self) -> "Span":
+        """
+        Permanently close the Span.
+        """
+
+        if self._closed:
+            return self
+
+        if (
+            self._started
+            and not self._finished
+            and not self._cancelled
+            and self._auto_finish
+        ):
+            self.finish()
+
+        self._closed = True
+        self._state = "closed"
+        self._frozen = True
+
+        return self
+
+    def freeze(self) -> "Span":
+        """
+        Freeze the Span against further mutation.
+        """
+
+        self._ensure_not_closed()
+        self._frozen = True
+
+        return self
+
+    def unfreeze(self) -> "Span":
+        """
+        Unfreeze the Span.
+        """
+
+        self._ensure_not_closed()
+        self._frozen = False
+
+        return self
+
+    # ==========================================================================
+    # Internal Utilities
+    # ==========================================================================
+
+    @staticmethod
+    def _generate_id() -> SpanId:
+        """
+        Generate a unique Span identifier.
+        """
+
+        return uuid4().hex
+
+    @staticmethod
+    def _now() -> Timestamp:
+        """
+        Return the current UTC timestamp.
+        """
+
+        return datetime.now().astimezone()
+
+    def _ensure_not_closed(self) -> None:
+        """
+        Ensure the Span has not been permanently closed.
+        """
+
+        if self._closed:
+            raise SpanClosedError(
+                "Span is closed"
+            )
+
+    def _ensure_mutable(self) -> None:
+        """
+        Ensure that the Span can still be mutated.
+        """
+
+        self._ensure_not_closed()
+
+        if self._frozen:
+            raise SpanFrozenError(
+                "Span is frozen"
+            )
+
+    def _ensure_started(self) -> None:
+        """
+        Ensure that the Span has been started.
+        """
+
+        self._ensure_not_closed()
+
+        if not self._started:
+            raise SpanNotStartedError(
+                "Span has not been started"
+            )
+
+
+
+    # ==========================================================================
+    # 4.4 State
+    # ==========================================================================
+
+    @property
+    def status(self) -> str:
+        return self._status
+
+    def set_status(
+        self,
+        status: str,
+        description: str | None = None,
+    ) -> "Span":
+        """
+        Set the Span status.
+
+        The public ``status`` property remains read-only;
+        mutation is performed through this method so that
+        Span lifecycle invariants are preserved.
+        """
+
+        self._ensure_mutable()
+
+        if not isinstance(status, str):
+            raise SpanValidationError(
+                "status must be a string"
+            )
+
+        status = status.strip()
+
+        if not status:
+            raise SpanValidationError(
+                "status cannot be empty"
+            )
+
+        self._status = status
+
+        self._status_description: str | None = None
+
+        if status.lower() in {
+            "error",
+            "failed",
+            "failure",
+        }:
+            self._state = "error"
+
+        # Keep the description optional and backward-compatible.
+        if description is not None:
+            if not isinstance(description, str):
+                raise SpanValidationError(
+                    "status description must be a string or None"
+                )
+
+            self._status_description = description
+
+        return self
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def started(self) -> bool:
+        return self._started
+
+    @property
+    def finished(self) -> bool:
+        return self._finished
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def frozen(self) -> bool:
+        return self._frozen
+
+    @property
+    def active(self) -> bool:
+        return (
+            self._started
+            and not self._finished
+            and not self._cancelled
+            and not self._closed
+        )
+
+    # ==========================================================================
+    # 4.5 Timing
+    # ==========================================================================
+
+    @property
+    def start_time(self) -> Timestamp | None:
+        return self._start_time
+
+
+    @property
+    def end_time(self) -> Timestamp | None:
+        return self._end_time
+
+
+    @property
+    def duration(self) -> float:
+        """
+        Return the completed Span duration in seconds.
+
+        A Span that has not started or has been reset has
+        zero duration.
+        """
+
+        if self._start_time is None:
+            return 0.0
+
+        if self._end_time is None:
+            return 0.0
+
+        return max(
+            0.0,
+            (
+                self._end_time - self._start_time
+            ).total_seconds(),
+        )
+
+
+    @property
+    def elapsed(self) -> float:
+        """
+        Return elapsed Span time in seconds.
+
+        A Span that has not started or has been reset
+        has zero elapsed time.
+
+        A running Span is measured until now.
+        A finished Span is measured until end_time.
+        """
+
+        if self._start_time is None:
+            return 0.0
+
+        end_time = self._end_time
+
+        if end_time is None:
+            end_time = datetime.now(
+                tz=self._start_time.tzinfo
+            ) if self._start_time.tzinfo is not None else datetime.now()
+
+        return max(
+            0.0,
+            (
+                end_time - self._start_time
+            ).total_seconds(),
+        )
+
+
+    # ==========================================================================
+    # 4.6 Attributes
+    # ==========================================================================
+
+    @property
+    def attributes(
+        self,
+    ) -> dict[
+        SpanAttributeKey,
+        SpanAttributeValue,
+    ]:
+        """
+        Return a copy of Span attributes.
+        """
+
+        return dict(
+            self._attributes,
+        )
+
+
+    def set_attribute(
+        self,
+        key: SpanAttributeKey,
+        value: SpanAttributeValue,
+    ) -> "Span":
+        """
+        Set a Span attribute.
+
+        Returns:
+            Span: self, enabling fluent mutation.
+        """
+
+        self._ensure_mutable()
+
+        if not isinstance(
+            key,
+            str,
+        ):
+            raise SpanValidationError(
+                "attribute key must be a string"
+            )
+
+        key = key.strip()
+
+        if not key:
+            raise SpanValidationError(
+                "attribute key cannot be empty"
+            )
+
+        self._attributes[key] = value
+
+        return self
+
+
+    def get_attribute(
+        self,
+        key: SpanAttributeKey,
+        default: Any = None,
+    ) -> Any:
+        """
+        Return an attribute value.
+        """
+
+        return self._attributes.get(
+            key,
+            default,
+        )
+
+
+    def has_attribute(
+        self,
+        key: SpanAttributeKey,
+    ) -> bool:
+        """
+        Return whether an attribute exists.
+        """
+
+        return key in self._attributes
+
+
+    def remove_attribute(
+        self,
+        key: SpanAttributeKey,
+    ) -> "Span":
+        """
+        Remove an attribute.
+
+        Returns:
+            Span: self, enabling fluent mutation.
+        """
+
+        self._ensure_mutable()
+
+        self._attributes.pop(
+            key,
+            None,
+        )
+
+        return self
+
+
+    def clear_attributes(
+        self,
+    ) -> "Span":
+        """
+        Remove all attributes.
+        """
+
+        self._ensure_mutable()
+
+        self._attributes.clear()
+
+        return self
+
+
+    # ==========================================================================
+    # 4.7 Tags
+    # ==========================================================================
+
+    @property
+    def tags(self) -> dict[str, Any]:
+        """
+        Return a copy of Span tags.
+
+        Tags are key/value metadata, consistent with attributes.
+        """
+
+        return dict(
+            self._tags
+        )
+
+
+    def set_tag(
+        self,
+        key: str,
+        value: Any = True,
+    ) -> "Span":
+        """
+        Set a Span tag.
+
+        Tags are represented as a dictionary.
+        """
+
+        self._ensure_mutable()
+
+        if not isinstance(
+            key,
+            str,
+        ):
+            raise SpanValidationError(
+                "tag key must be a string"
+            )
+
+        key = key.strip()
+
+        if not key:
+            raise SpanValidationError(
+                "tag key cannot be empty"
+            )
+
+        self._tags[key] = value
+
+        return self
+
+
+    def get_tag(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        """
+        Return a Span tag.
+        """
+
+        return self._tags.get(
+            key,
+            default,
+        )
+
+
+    def has_tag(
+        self,
+        key: str,
+    ) -> bool:
+        """
+        Return whether a tag exists.
+        """
+
+        return key in self._tags
+
+
+    def remove_tag(
+        self,
+        key: str,
+    ) -> "Span":
+        """
+        Remove a Span tag.
+
+        Mutation methods use fluent API semantics.
+        """
+
+        self._ensure_mutable()
+
+        self._tags.pop(
+            key,
+            None,
+        )
+
+        return self
+
+
+    def clear_tags(
+        self,
+    ) -> "Span":
+        """
+        Remove all Span tags.
+        """
+
+        self._ensure_mutable()
+
+        self._tags.clear()
+
+        return self
+
+
+    # ==========================================================================
+    # 4.8 Baggage
+    # ==========================================================================
+
+    @property
+    def baggage(self) -> dict[str, Any]:
+        """
+        Return a copy of Span baggage.
+        """
+
+        return dict(
+            self._baggage,
+        )
+
+    def set_baggage(
+        self,
+        key: str,
+        value: Any,
+    ) -> "Span":
+        """
+        Set a baggage item.
+        """
+
+        self._ensure_mutable()
+
+        if not isinstance(
+            key,
+            str,
+        ):
+            raise SpanValidationError(
+                "baggage key must be a string"
+            )
+
+        key = key.strip()
+
+        if not key:
+            raise SpanValidationError(
+                "baggage key cannot be empty"
+            )
+
+        self._baggage[key] = value
+
+        return self
+
+    def get_baggage(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        """
+        Return a baggage value.
+        """
+
+        return self._baggage.get(
+            key,
+            default,
+        )
+
+    def has_baggage(
+        self,
+        key: str,
+    ) -> bool:
+        """
+        Return whether a baggage item exists.
+        """
+
+        return key in self._baggage
+
+    def remove_baggage(
+        self,
+        key: str,
+    ) -> "Span":
+        """
+        Remove a baggage item.
+
+        Returns:
+            Span: self, enabling fluent mutation.
+        """
+
+        self._ensure_mutable()
+
+        self._baggage.pop(
+            key,
+            None,
+        )
+
+        return self
+
+    def clear_baggage(
+        self,
+    ) -> "Span":
+        """
+        Remove all baggage.
+        """
+
+        self._ensure_mutable()
+
+        self._baggage.clear()
+
+        return self
+
+
+    # ==========================================================================
+    # 4.9 Events
+    # ==========================================================================
+
+    @property
+    def events(self) -> list[Any]:
+        """
+        Return a copy of all Span events.
+        """
+
+        return list(
+            self._events,
+        )
+
+    def add_event(
+        self,
+        event: Any,
+        attributes: Mapping[str, Any] | None = None,
+        timestamp: Timestamp | None = None,
+    ) -> "Span":
+        """
+        Add an event to the Span.
+
+        Supported forms:
+
+            add_event("started")
+
+            add_event(
+                "started",
+                attributes={"source": "test"},
+            )
+
+            add_event(existing_event)
+
+        String event names are converted into a lightweight
+        event object exposing:
+
+            event.name
+            event.attributes
+            event.timestamp
+        """
+
+        self._ensure_mutable()
+
+        if event is None:
+            raise SpanValidationError(
+                "event cannot be None"
+            )
+
+        if isinstance(
+            event,
+            str,
+        ):
+            from types import SimpleNamespace
+
+            event = SimpleNamespace(
+                name=event,
+                attributes=dict(
+                    attributes or {},
+                ),
+                timestamp=timestamp
+                if timestamp is not None
+                else datetime.now(),
+            )
+
+        elif attributes is not None:
+            existing_attributes = getattr(
+                event,
+                "attributes",
+                None,
+            )
+
+            if isinstance(
+                existing_attributes,
+                Mapping,
+            ):
+                existing_attributes.update(
+                    attributes,
+                )
+
+            else:
+                try:
+                    setattr(
+                        event,
+                        "attributes",
+                        dict(
+                            attributes,
+                        ),
+                    )
+                except Exception:
+                    pass
+
+        self._events.append(
+            event,
+        )
+
+        return self
+
+    def get_event(
+        self,
+        identifier: Any,
+        default: Any = None,
+    ) -> Any:
+        """
+        Return an event by index or event name.
+
+        Supported forms:
+
+            get_event(0)
+
+            get_event("started")
+        """
+
+        if isinstance(
+            identifier,
+            int,
+        ):
+            try:
+                return self._events[
+                    identifier
+                ]
+            except IndexError:
+                return default
+
+        if isinstance(
+            identifier,
+            str,
+        ):
+            for event in self._events:
+                event_name = getattr(
+                    event,
+                    "name",
+                    None,
+                )
+
+                if event_name == identifier:
+                    return event
+
+            return default
+
+        raise SpanValidationError(
+            "event identifier must be an integer or string"
+        )
+
+    def clear_events(
+        self,
+    ) -> "Span":
+        """
+        Remove all events from the Span.
+        """
+
+        self._ensure_mutable()
+
+        self._events.clear()
+
+        return self
+
+
+    # ==========================================================================
+    # 4.10 Links
+    # ==========================================================================
+
+    @property
+    def links(self) -> list[Any]:
+        """
+        Return a copy of all Span links.
+        """
+
+        return list(
+            self._links,
+        )
+
+    def add_link(
+        self,
+        link: Any,
+    ) -> "Span":
+        """
+        Add a link to the Span.
+        """
+
+        self._ensure_mutable()
+
+        if link is None:
+            raise SpanValidationError(
+                "link cannot be None"
+            )
+
+        self._links.append(
+            link,
+        )
+
+        return self
+
+    def clear_links(
+        self,
+    ) -> "Span":
+        """
+        Remove all links from the Span.
+        """
+
+        self._ensure_mutable()
+
+        self._links.clear()
+
+        return self
+
+
+    # ==========================================================================
+    # 4.11 Context
+    # ==========================================================================
+
+    @property
+    def context(
+        self,
+    ) -> Any | None:
+        """
+        Return the Span context.
+        """
+
+        return getattr(
+            self,
+            "_context",
+            None,
+        )
+
+
+    @context.setter
+    def context(
+        self,
+        value: Any | None,
+    ) -> None:
+        """
+        Set the Span context.
+
+        A context assignment also establishes
+        a context_id when the supplied context
+        does not already provide one.
+        """
+
+        self._ensure_mutable()
+
+        self._context = value
+
+        if value is None:
+            self._context_id = None
+            return
+
+        context_id = getattr(
+            value,
+            "id",
+            None,
+        )
+
+        if context_id is None:
+            context_id = getattr(
+                value,
+                "context_id",
+                None,
+            )
+
+        if context_id is None and isinstance(
+            value,
+            Mapping,
+        ):
+            context_id = value.get(
+                "context_id",
+            )
+
+            if context_id is None:
+                context_id = value.get(
+                    "id",
+                )
+
+        if context_id is None:
+            context_id = str(
+                uuid4(),
+            )
+
+        self._context_id = str(
+            context_id,
+        )
+
+
+    @property
+    def context_id(
+        self,
+    ) -> str | None:
+        """
+        Return the context identifier.
+        """
+
+        context_id = getattr(
+            self,
+            "_context_id",
+            None,
+        )
+
+        if context_id is not None:
+            return str(
+                context_id,
+            )
+
+        context = getattr(
+            self,
+            "_context",
+            None,
+        )
+
+        if context is None:
+            return None
+
+        context_id = getattr(
+            context,
+            "id",
+            None,
+        )
+
+        if context_id is not None:
+            return str(
+                context_id,
+            )
+
+        context_id = getattr(
+            context,
+            "context_id",
+            None,
+        )
+
+        if context_id is not None:
+            return str(
+                context_id,
+            )
+
+        if isinstance(
+            context,
+            Mapping,
+        ):
+            context_id = context.get(
+                "context_id",
+            )
+
+            if context_id is None:
+                context_id = context.get(
+                    "id",
+                )
+
+            if context_id is not None:
+                return str(
+                    context_id,
+                )
+
+        return None
+
+
+    # ==========================================================================
+    # 4.12 Parent / Children
+    # ==========================================================================
+
+    @property
+    def parent(self) -> Any | None:
+        """
+        Return the parent Span.
+        """
+
+        return getattr(
+            self,
+            "_parent",
+            None,
+        )
+
+    @parent.setter
+    def parent(
+        self,
+        value: Any | None,
+    ) -> None:
+        """
+        Set the parent Span.
+        """
+
+        self._ensure_mutable()
+
+        self._parent = value
+
+        if value is None:
+            return
+
+        parent_id = getattr(
+            value,
+            "id",
+            None,
+        )
+
+        if parent_id is not None:
+            self._parent_id = str(
+                parent_id,
+            )
+
+    @property
+    def children(self) -> list[Any]:
+        """
+        Return a copy of child Spans.
+        """
+
+        return list(
+            getattr(
+                self,
+                "_children",
+                [],
+            ),
+        )
+
+    def add_child(
+        self,
+        child: Any,
+    ) -> "Span":
+        """
+        Add a child Span and establish the
+        parent/child relationship.
+        """
+
+        self._ensure_mutable()
+
+        if child is None:
+            raise SpanValidationError(
+                "child cannot be None"
+            )
+
+        if child is self:
+            raise SpanValidationError(
+                "Span cannot be its own child"
+            )
+
+        if not hasattr(
+            self,
+            "_children",
+        ):
+            self._children = []
+
+        if child not in self._children:
+            self._children.append(
+                child
+            )
+
+        if isinstance(
+            child,
+            Span,
+        ):
+            child.parent = self
+
+        return self
+
+    def remove_child(
+        self,
+        child: Any,
+    ) -> "Span":
+        """
+        Remove a child Span and clear its parent
+        when this Span is its parent.
+        """
+
+        self._ensure_mutable()
+
+        children = getattr(
+            self,
+            "_children",
+            [],
+        )
+
+        if child in children:
+            children.remove(
+                child
+            )
+
+        if isinstance(
+            child,
+            Span,
+        ):
+            if child.parent is self:
+                child._parent = None
+                child._parent_id = None
+
+        return self
+
+    @property
+    def child_count(self) -> int:
+        """
+        Return the number of child Spans.
+        """
+
+        return len(
+            getattr(
+                self,
+                "_children",
+                [],
+            ),
+        )
+
+
+    # ==========================================================================
+    # 4.13 Error / Exception
+    # ==========================================================================
+
+    @property
+    def exception(self) -> BaseException | None:
+        """
+        Return the attached exception.
+        """
+
+        return self._exception
+
+    @property
+    def error(self) -> bool:
+        """
+        Return whether the Span is in an error state.
+        """
+
+        return (
+            self._exception is not None
+            or self._status.lower()
+            in {
+                "error",
+                "failed",
+                "failure",
+            }
+        )
+
+    @property
+    def failed(self) -> bool:
+        """
+        Alias for error state.
+        """
+
+        return self.error
+
+    def attach_exception(
+        self,
+        exception: BaseException,
+    ) -> "Span":
+        """
+        Attach an exception to the Span
+        and transition it into an error state.
+        """
+
+        self._ensure_mutable()
+
+        if not isinstance(
+            exception,
+            BaseException,
+        ):
+            raise SpanValidationError(
+                "exception must be BaseException"
+            )
+
+        self._exception = exception
+
+        self._status = "error"
+
+        self._state = "error"
+
+        return self
+
+
+    # ==========================================================================
+    # 4.14 Diagnostics
+    # ==========================================================================
+
+    def summary(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return a compact Span summary.
+        """
+
+        return {
+            "span": self.__class__.__name__,
+            "id": self.id,
+            "span_id": self.span_id,
+            "trace_id": self.trace_id,
+            "parent_id": self.parent_id,
+            "name": self.name,
+            "kind": self.kind,
+            "status": self.status,
+            "state": self.state,
+            "started": self.started,
+            "finished": self.finished,
+            "cancelled": self.cancelled,
+            "closed": self.closed,
+            "frozen": self.frozen,
+            "active": self.active,
+            "duration": self.duration,
+            "elapsed": self.elapsed,
+            "attribute_count": len(
+                self._attributes,
+            ),
+            "tag_count": len(
+                self._tags,
+            ),
+            "baggage_count": len(
+                self._baggage,
+            ),
+            "event_count": len(
+                self._events,
+            ),
+            "link_count": len(
+                self._links,
+            ),
+            "child_count": self.child_count,
+            "context_id": self.context_id,
+            "has_exception": (
+                self._exception is not None
+            ),
+            "error": self.error,
+        }
+
+
+    def diagnostics(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return detailed Span diagnostics.
+
+        The returned structure is observational only and
+        does not mutate the Span.
+        """
+
+        return {
+            "summary": self.summary(),
+            "attributes": self.attributes,
+            "tags": self.tags,
+            "baggage": self.baggage,
+            "events": self.events,
+            "links": self.links,
+            "context_id": self.context_id,
+            "exception": (
+                repr(
+                    self.exception,
+                )
+                if self.exception is not None
+                else None
+            ),
+        }
+
+
+    def validate(
+        self,
+    ) -> bool:
+        try:
+            if not isinstance(self._id, str) or not self._id.strip():
+                return False
+
+            if not isinstance(self._name, str) or not self._name.strip():
+                return False
+
+            if self._trace_id is not None and not isinstance(
+                self._trace_id,
+                str,
+            ):
+                return False
+
+            if self._parent_id is not None and not isinstance(
+                self._parent_id,
+                str,
+            ):
+                return False
+
+            if self._started and self._start_time is None:
+                return False
+
+            if self._finished and self._end_time is None:
+                return False
+
+            if (
+                self._start_time is not None
+                and self._end_time is not None
+                and self._end_time < self._start_time
+            ):
+                return False
+
+            if (
+                self._closed
+                and not self._finished
+                and not self._cancelled
+            ):
+                return False
+
+            if self._frozen and not self._closed:
+                return False
+
+            if not isinstance(self._attributes, dict):
+                return False
+
+            if not isinstance(self._tags, dict):
+                return False
+
+            if not isinstance(self._baggage, dict):
+                return False
+
+            if not isinstance(self._events, list):
+                return False
+
+            if not isinstance(self._links, list):
+                return False
+
+            return True
+
+        except Exception:
+            return False
+
+
+    def health(
+        self,
+    ) -> bool:
+        """
+        Return whether the Span is internally healthy.
+        """
+
+        try:
+            return self.validate()
+
+        except Exception:
+            return False
+
+
+    # ==========================================================================
+    # 4.15 Serialization
+    # ==========================================================================
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Serialize the Span into a dictionary.
+        """
+
+        return {
+            "id": self.id,
+            "span_id": self.span_id,
+            "trace_id": self.trace_id,
+            "parent_id": self.parent_id,
+
+            "name": self.name,
+            "kind": self.kind,
+            "status": self.status,
+            "state": self.state,
+
+            "started": self.started,
+            "finished": self.finished,
+            "cancelled": self.cancelled,
+            "closed": self.closed,
+            "frozen": self.frozen,
+            "active": self.active,
+
+            "start_time": (
+                self.start_time.isoformat()
+                if self.start_time is not None
+                else None
+            ),
+
+            "end_time": (
+                self.end_time.isoformat()
+                if self.end_time is not None
+                else None
+            ),
+
+            "duration": self.duration,
+            "elapsed": self.elapsed,
+
+            "attributes": copy.deepcopy(
+                self.attributes,
+            ),
+
+            "tags": copy.deepcopy(
+                self._tags,
+            ),
+
+            "baggage": copy.deepcopy(
+                self.baggage,
+            ),
+
+            "events": [
+                {
+                    "name": getattr(
+                        event,
+                        "name",
+                        None,
+                    ),
+                    "attributes": copy.deepcopy(
+                        getattr(
+                            event,
+                            "attributes",
+                            {},
+                        ),
+                    ),
+                    "timestamp": (
+                        getattr(
+                            event,
+                            "timestamp",
+                            None,
+                        ).isoformat()
+                        if getattr(
+                            event,
+                            "timestamp",
+                            None,
+                        ) is not None
+                        else None
+                    ),
+                }
+                if hasattr(
+                    event,
+                    "name",
+                )
+                else copy.deepcopy(
+                    event,
+                )
+                for event in self._events
+            ],
+
+            "links": copy.deepcopy(
+                self._links,
+            ),
+
+            "context_id": self.context_id,
+
+            "child_count": self.child_count,
+
+            "exception": (
+                repr(
+                    self.exception,
+                )
+                if self.exception is not None
+                else None
+            ),
+
+            "error": self.error,
+        }
+
+
+    def snapshot(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return an independent Span snapshot.
+        """
+
+        return copy.deepcopy(
+            self.to_dict(),
+        )
+
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: Mapping[str, Any],
+    ) -> "Span":
+        """
+        Restore a Span from a serialized snapshot.
+        """
+
+        if not isinstance(
+            snapshot,
+            Mapping,
+        ):
+            raise SpanValidationError(
+                "snapshot must be a mapping",
+            )
+
+        # ----------------------------------------------------------------------
+        # Timestamps
+        # ----------------------------------------------------------------------
+
+        start_time = snapshot.get(
+            "start_time",
+        )
+
+        end_time = snapshot.get(
+            "end_time",
+        )
+
+        if isinstance(
+            start_time,
+            str,
+        ):
+            try:
+                start_time = datetime.fromisoformat(
+                    start_time,
+                )
+            except ValueError as exc:
+                raise SpanValidationError(
+                    "invalid start_time",
+                ) from exc
+
+        if isinstance(
+            end_time,
+            str,
+        ):
+            try:
+                end_time = datetime.fromisoformat(
+                    end_time,
+                )
+            except ValueError as exc:
+                raise SpanValidationError(
+                    "invalid end_time",
+                ) from exc
+
+        # ----------------------------------------------------------------------
+        # Identity
+        # ----------------------------------------------------------------------
+
+        span_id = snapshot.get(
+            "span_id",
+            snapshot.get(
+                "id",
+            ),
+        )
+
+        # ----------------------------------------------------------------------
+        # Construction
+        # ----------------------------------------------------------------------
+
+        restored = cls(
+            name=snapshot.get(
+                "name",
+                DEFAULT_SPAN_NAME,
+            ),
+
+            span_id=span_id,
+
+            trace_id=snapshot.get(
+                "trace_id",
+            ),
+
+            parent_id=snapshot.get(
+                "parent_id",
+            ),
+
+            kind=snapshot.get(
+                "kind",
+                DEFAULT_SPAN_KIND,
+            ),
+
+            status=snapshot.get(
+                "status",
+                DEFAULT_SPAN_STATUS,
+            ),
+
+            auto_start=False,
+
+            auto_finish=snapshot.get(
+                "auto_finish",
+                DEFAULT_SPAN_AUTO_FINISH,
+            ),
+
+            attributes=copy.deepcopy(
+                snapshot.get(
+                    "attributes",
+                    {},
+                ),
+            ),
+        )
+
+        # ----------------------------------------------------------------------
+        # Identity fallback
+        # ----------------------------------------------------------------------
+
+        if span_id is not None:
+            restored._id = str(
+                span_id,
+            )
+
+        # ----------------------------------------------------------------------
+        # Version
+        # ----------------------------------------------------------------------
+
+        if hasattr(
+            restored,
+            "_version",
+        ):
+            restored._version = snapshot.get(
+                "version",
+                restored._version,
+            )
+
+        # ----------------------------------------------------------------------
+        # Lifecycle
+        # ----------------------------------------------------------------------
+
+        restored._state = snapshot.get(
+            "state",
+            "created",
+        )
+
+        restored._started = bool(
+            snapshot.get(
+                "started",
+                False,
+            ),
+        )
+
+        restored._finished = bool(
+            snapshot.get(
+                "finished",
+                False,
+            ),
+        )
+
+        restored._cancelled = bool(
+            snapshot.get(
+                "cancelled",
+                False,
+            ),
+        )
+
+        restored._closed = bool(
+            snapshot.get(
+                "closed",
+                False,
+            ),
+        )
+
+        restored._frozen = bool(
+            snapshot.get(
+                "frozen",
+                False,
+            ),
+        )
+
+        # ----------------------------------------------------------------------
+        # Timing
+        # ----------------------------------------------------------------------
+
+        restored._start_time = start_time
+
+        restored._end_time = end_time
+
+        # ----------------------------------------------------------------------
+        # Metadata
+        # ----------------------------------------------------------------------
+
+        restored._attributes = copy.deepcopy(
+            snapshot.get(
+                "attributes",
+                {},
+            ),
+        )
+
+        restored._tags = copy.deepcopy(
+            snapshot.get(
+                "tags",
+                {},
+            ),
+        )
+
+        restored._baggage = copy.deepcopy(
+            snapshot.get(
+                "baggage",
+                {},
+            ),
+        )
+
+        # ----------------------------------------------------------------------
+        # Events
+        # ----------------------------------------------------------------------
+
+        restored._events = []
+
+        for event_data in snapshot.get(
+            "events",
+            [],
+        ):
+
+            if isinstance(
+                event_data,
+                Mapping,
+            ):
+                from types import SimpleNamespace
+
+                event_timestamp = event_data.get(
+                    "timestamp",
+                )
+
+                if isinstance(
+                    event_timestamp,
+                    str,
+                ):
+                    try:
+                        event_timestamp = datetime.fromisoformat(
+                            event_timestamp,
+                        )
+                    except ValueError as exc:
+                        raise SpanValidationError(
+                            "invalid event timestamp",
+                        ) from exc
+
+                restored._events.append(
+                    SimpleNamespace(
+                        name=event_data.get(
+                            "name",
+                        ),
+                        attributes=copy.deepcopy(
+                            event_data.get(
+                                "attributes",
+                                {},
+                            ),
+                        ),
+                        timestamp=event_timestamp,
+                    ),
+                )
+
+            else:
+                restored._events.append(
+                    copy.deepcopy(
+                        event_data,
+                    ),
+                )
+
+        # ----------------------------------------------------------------------
+        # Links
+        # ----------------------------------------------------------------------
+
+        restored._links = copy.deepcopy(
+            snapshot.get(
+                "links",
+                [],
+            ),
+        )
+
+        # ----------------------------------------------------------------------
+        # Context
+        # ----------------------------------------------------------------------
+
+        restored._context_id = snapshot.get(
+            "context_id",
+        )
+
+        restored._context = None
+
+        # ----------------------------------------------------------------------
+        # Hierarchy
+        # ----------------------------------------------------------------------
+
+        restored._parent = None
+
+        restored._children = []
+
+        # ----------------------------------------------------------------------
+        # Error state
+        # ----------------------------------------------------------------------
+
+        restored._exception = None
+
+        return restored
+
+
+    @classmethod
+    def restore(
+        cls,
+        snapshot: Mapping[str, Any],
+    ) -> "Span":
+        """
+        Compatibility alias for from_snapshot().
+        """
+
+        return cls.from_snapshot(
+            snapshot,
+        )
+
+
+    def clone(
+        self,
+    ) -> "Span":
+        """
+        Create an independent Span clone.
+        """
+
+        return self.__class__.from_snapshot(
+            self.snapshot(),
+        )
+
+
+    # ==========================================================================
+    # 4.16 Python Protocols
+    # ==========================================================================
+
+    def __repr__(
+        self,
+    ) -> str:
+        return (
+            f"Span("
+            f"id={self.id!r}, "
+            f"name={self.name!r}, "
+            f"state={self.state!r}"
+            f")"
+        )
+
+
+    def __str__(
+        self,
+    ) -> str:
+        return (
+            f"Span("
+            f"{self.name}"
+            f")"
+        )
+
+
+    def __bool__(
+        self,
+    ) -> bool:
+        return self.health()
+
+
+    def __eq__(
+        self,
+        other: Any,
+    ) -> bool:
+
+        if self is other:
+            return True
+
+        if not isinstance(
+            other,
+            Span,
+        ):
+            return NotImplemented
+
+        return (
+            self.id
+            == other.id
+        )
+
+
+    def __hash__(
+        self,
+    ) -> int:
+        return hash(
+            self.id,
+        )
+
+
+    def __len__(
+        self,
+    ) -> int:
+        """
+        Return the logical size of the Span.
+
+        The count represents the number of
+        attached metadata collections.
+        """
+
+        return (
+            len(self._attributes)
+            + len(self._tags)
+            + len(self._baggage)
+            + len(self._events)
+            + len(self._links)
+        )
+
+
+# ==========================================================================
+# Part 5. Public API
+# ==========================================================================
+
+__all__ += [
+    "Span",
 ]

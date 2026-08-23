@@ -1,5 +1,5 @@
 """
-Tests for event instrumentation of TracingPlugin.
+Tests for event instrumentation of TracePlugin.
 
 Responsibilities
 ----------------
@@ -17,7 +17,10 @@ from __future__ import annotations
 import pytest
 
 from .builders import PluginBuilder
-from .fakes import FakeEvent
+from .fakes import (
+    FakeEvent,
+    FakeStatus,
+)
 
 
 # ==========================================================
@@ -139,7 +142,7 @@ def test_record_exception_marks_error(plugin):
 
     span = plugin.manager.current_span
 
-    assert span.status == "ERROR"
+    assert span.status == FakeStatus.ERROR
 
 
 # ==========================================================
@@ -199,7 +202,7 @@ def test_processor_receives_event(
         phase="runtime",
     )
 
-    assert fake_processor.events == 1
+    assert fake_processor.event_processed == 1
 
 
 # ==========================================================

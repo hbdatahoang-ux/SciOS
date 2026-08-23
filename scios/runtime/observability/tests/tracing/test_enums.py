@@ -1,4 +1,4 @@
-"""
+﻿"""
 SciOS Runtime Observability
 Tracing Test - Enums
 
@@ -13,13 +13,12 @@ Tests:
 - Enum comparison
 - Public API
 
+Python 3.11+
 """
 
 from __future__ import annotations
 
-
 import pytest
-
 
 from scios.runtime.observability.tracing.enums import (
     ExecutionPhase,
@@ -30,16 +29,13 @@ from scios.runtime.observability.tracing.enums import (
 )
 
 
-
-# ============================================================
+# ==============================================================================
 # ExecutionPhase
-# ============================================================
+# ==============================================================================
 
 
 def test_execution_phase_exists():
-
     assert ExecutionPhase is not None
-
 
 
 @pytest.mark.parametrize(
@@ -79,39 +75,30 @@ def test_execution_phase_values(
     phase,
     value,
 ):
-
     assert phase.value == value
 
 
-
 def test_execution_phase_string_behavior():
-
     assert (
         ExecutionPhase.STARTED
-        ==
-        "started"
+        == "started"
     )
-
 
 
 def test_execution_phase_conversion():
-
     phase = ExecutionPhase(
-        "running"
+        "running",
     )
-
 
     assert (
         phase
-        ==
-        ExecutionPhase.RUNNING
+        == ExecutionPhase.RUNNING
     )
 
 
-
-# ============================================================
+# ==============================================================================
 # SpanKind
-# ============================================================
+# ==============================================================================
 
 
 @pytest.mark.parametrize(
@@ -143,26 +130,19 @@ def test_span_kind_values(
     kind,
     value,
 ):
-
     assert kind.value == value
 
 
-
 def test_span_kind_conversion():
-
     assert (
-        SpanKind(
-            "client"
-        )
-        ==
-        SpanKind.CLIENT
+        SpanKind("client")
+        == SpanKind.CLIENT
     )
 
 
-
-# ============================================================
+# ==============================================================================
 # TraceState
-# ============================================================
+# ==============================================================================
 
 
 @pytest.mark.parametrize(
@@ -190,14 +170,12 @@ def test_trace_state_values(
     state,
     value,
 ):
-
     assert state.value == value
 
 
-
-# ============================================================
+# ==============================================================================
 # SamplingDecision
-# ============================================================
+# ==============================================================================
 
 
 @pytest.mark.parametrize(
@@ -221,14 +199,12 @@ def test_sampling_decision_values(
     decision,
     value,
 ):
-
     assert decision.value == value
 
 
-
-# ============================================================
+# ==============================================================================
 # Severity
-# ============================================================
+# ==============================================================================
 
 
 @pytest.mark.parametrize(
@@ -260,23 +236,19 @@ def test_severity_values(
     severity,
     value,
 ):
-
     assert severity.value == value
 
 
-
-# ============================================================
+# ==============================================================================
 # Common Enum Behavior
-# ============================================================
+# ==============================================================================
 
 
 def test_enum_is_string_based():
-
     assert isinstance(
         ExecutionPhase.CREATED,
         str,
     )
-
 
     assert isinstance(
         Severity.ERROR,
@@ -284,55 +256,40 @@ def test_enum_is_string_based():
     )
 
 
-
 def test_invalid_execution_phase():
-
     with pytest.raises(
-        ValueError
+        ValueError,
     ):
-
         ExecutionPhase(
-            "invalid"
+            "invalid",
         )
-
 
 
 def test_invalid_span_kind():
-
     with pytest.raises(
-        ValueError
+        ValueError,
     ):
-
         SpanKind(
-            "invalid"
+            "invalid",
         )
 
 
-
 def test_enum_iteration():
-
     values = [
         item.value
         for item in ExecutionPhase
     ]
 
-
-    assert (
-        "created"
-        in values
-    )
+    assert "created" in values
 
 
-
-# ============================================================
+# ==============================================================================
 # Public API
-# ============================================================
+# ==============================================================================
 
 
 def test_public_exports():
-
     from scios.runtime.observability.tracing import enums
-
 
     assert (
         "ExecutionPhase"

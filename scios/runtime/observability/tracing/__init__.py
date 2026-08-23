@@ -1,103 +1,128 @@
 # ==============================================================================
-# SciOS-NG
-# Runtime Observability - Tracing
-#
-# File:
-#     scios/runtime/observability/tracing/__init__.py
-#
-# Description
-# ------------------------------------------------------------------------------
-# Public API for the tracing subsystem.
+# SciOS Runtime Observability
+# Tracing Package
 # ==============================================================================
 
-from .manager import (
-    TraceManager,
-    ManagerType,
-    ManagerState,
-    ManagerMode,
-    ManagerCapability,
-    ManagerStatistics,
-    ManagerReport,
+"""
+SciOS Runtime Observability
+===========================
+
+Tracing package public API.
+
+Python 3.11+
+"""
+
+from .serialization import (
+    # Dataclasses
+    SerializationMetadata,
+    SerializationResult,
+    TracePayload,
+
+    # Serializers
+    TraceSerializer,
+    SpanSerializer,
+    ContextSerializer,
+    MiddlewareSerializer,
+
+    # Serialization functions
+    serialize_trace,
+    deserialize_trace,
+    serialize_span,
+    deserialize_span,
+    serialize_context,
+    deserialize_context,
+    serialize_middleware,
+    deserialize_middleware,
+    serialize_trace_payload,
+
+    # JSON
+    serialize_json,
+    deserialize_json,
+    to_json,
+    from_json,
+
+    # Validation / helpers
+    validate_serialized_data,
+    copy_serialized_data,
+    get_serialization_type,
+
+    # Default serializers
+    DEFAULT_TRACE_SERIALIZER,
+    DEFAULT_SPAN_SERIALIZER,
+    DEFAULT_CONTEXT_SERIALIZER,
+    DEFAULT_MIDDLEWARE_SERIALIZER,
+
+    # Exceptions
+    SerializationError,
+    SerializationTypeError,
+    SerializationValueError,
+    SerializationFormatError,
+    SerializationDecodeError,
+    SerializationEncodeError,
+    SerializationValidationError,
+
+    # Enums
+    SerializationFormat,
+    SerializationType,
+    SerializationStatus,
+    SerializationDirection,
+    SerializationMode,
 )
 
-from .sampler import (
-    TraceSampler,
-    SamplerType,
-    SamplerState,
-    SamplingDecision,
-    SamplerCapability,
-    SamplingRecord,
-    SamplingStatistics,
-    SamplingResult,
-)
-
-from .processor import (
-    TraceProcessor,
-    ProcessorType,
-    ProcessorState,
-    ProcessorMode,
-    ProcessorCapability,
-    ProcessingStatistics,
-)
-
-
-from .provider import (
-    TraceProvider,
-    ProviderType,
-    ProviderState,
-    ProviderCapability,
-    ProviderStatistics,
-    ProviderReport,
-)
 
 __all__ = [
+    # Dataclasses
+    "SerializationMetadata",
+    "SerializationResult",
+    "TracePayload",
 
-    # ------------------------------------------------------------------
-    # Manager
-    # ------------------------------------------------------------------
+    # Serializers
+    "TraceSerializer",
+    "SpanSerializer",
+    "ContextSerializer",
+    "MiddlewareSerializer",
 
-    "TraceManager",
-    "ManagerType",
-    "ManagerState",
-    "ManagerMode",
-    "ManagerCapability",
-    "ManagerStatistics",
-    "ManagerReport",
+    # Serialization functions
+    "serialize_trace",
+    "deserialize_trace",
+    "serialize_span",
+    "deserialize_span",
+    "serialize_context",
+    "deserialize_context",
+    "serialize_middleware",
+    "deserialize_middleware",
+    "serialize_trace_payload",
 
-    # ------------------------------------------------------------------
-    # Sampler
-    # ------------------------------------------------------------------
+    # JSON
+    "serialize_json",
+    "deserialize_json",
+    "to_json",
+    "from_json",
 
-    "TraceSampler",
-    "SamplerType",
-    "SamplerState",
-    "SamplingDecision",
-    "SamplerCapability",
-    "SamplingRecord",
-    "SamplingStatistics",
-    "SamplingResult",
+    # Validation / helpers
+    "validate_serialized_data",
+    "copy_serialized_data",
+    "get_serialization_type",
 
-    # ------------------------------------------------------------------
-    # Processor
-    # ------------------------------------------------------------------
+    # Default serializers
+    "DEFAULT_TRACE_SERIALIZER",
+    "DEFAULT_SPAN_SERIALIZER",
+    "DEFAULT_CONTEXT_SERIALIZER",
+    "DEFAULT_MIDDLEWARE_SERIALIZER",
 
-    "TraceProcessor",
-    "ProcessorType",
-    "ProcessorState",
-    "ProcessorMode",
-    "ProcessorCapability",
-    "ProcessingStatistics",
+    # Exceptions
+    "SerializationError",
+    "SerializationTypeError",
+    "SerializationValueError",
+    "SerializationFormatError",
+    "SerializationDecodeError",
+    "SerializationEncodeError",
+    "SerializationValidationError",
 
-
-    # ------------------------------------------------------------------
-    # Provider
-    # ------------------------------------------------------------------
-
-    "TraceProvider",
-    "ProviderType",
-    "ProviderState",
-    "ProviderCapability",
-    "ProviderStatistics",
-    "ProviderReport",
-
+    # Enums
+    "SerializationFormat",
+    "SerializationType",
+    "SerializationStatus",
+    "SerializationDirection",
+    "SerializationMode",
 ]

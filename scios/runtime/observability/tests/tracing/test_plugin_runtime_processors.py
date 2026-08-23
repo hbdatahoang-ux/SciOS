@@ -220,7 +220,6 @@ def test_processor_exception_isolated(
     fake_manager,
     fake_exporter,
 ):
-
     from .builders import PluginBuilder
 
     plugin = (
@@ -231,16 +230,14 @@ def test_processor_exception_isolated(
         .build()
     )
 
-    #
-    # Production plugins should isolate
-    # processor failures.
-    #
-    # Remove pytest.raises() if isolation
-    # has already been implemented.
-    #
+    plugin.before_runtime(
+        runtime_name="Runtime",
+    )
 
-    with pytest.raises(RuntimeError):
+    # Processor failures are isolated by the production plugin.
+    # The exception must not escape from after_runtime().
+    plugin.after_runtime()
 
-        plugin.before_runtime(
-            runtime_name="Runtime",
-        )
+    # Export must still happen despite the processor failure.
+    assert fake_exporter.trace_exports == 1
+    assert fake_exporter.last_trace is not None

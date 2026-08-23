@@ -1,1669 +1,1515 @@
-# ==============================================================================
-# Imports
-# ==============================================================================
+﻿"""
+SciOS Runtime Observability
+TraceManager tests
+===================
 
+Tests for the public TraceManager contract.
+"""
 from __future__ import annotations
 
-import copy
-import json
+
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
+
+from typing import Any
 
 import pytest
 
-from scios.runtime.observability.tracing.manager import (
-    TraceManager,
-)
+from scios.runtime.observability.tracing.event import Event
+
+from scios.runtime.observability.tracing.manager import TraceManager
 
 
 # ==============================================================================
-# Test Utilities
+# Part 2. Fixtures & Fakes
 # ==============================================================================
 
 
-class MockTracer:
+class FakeProcessor:
+    """Minimal processor fake for TraceManager tests."""
+
+    def __init__(self) -> None:
+        self.started = []
+        self.finished = []
+        self.processed = []
+
+    def trace_started(self, trace: Any) -> None:
+        self.started.append(trace)
+
+    def trace_finished(self, trace: Any) -> None:
+        self.finished.append(trace)
+
+    def process(self, value: Any) -> Any:
+        self.processed.append(value)
+        return value
+
+
+class FakeExporter:
+    """Minimal exporter fake for TraceManager tests."""
+
+    def __init__(self) -> None:
+        self.exported = []
+        self.flushed = 0
+        self.shutdowns = 0
+
+    def export(self, value: Any) -> Any:
+        self.exported.append(value)
+        return value
+
+    def flush(self) -> None:
+        self.flushed += 1
+
+    def shutdown(self) -> None:
+        self.shutdowns += 1
+
+
+class FakeSampler:
+    """Minimal sampler fake for TraceManager tests."""
+
+    def __init__(self, decision: bool = True) -> None:
+        self.decision = decision
+        self.calls = []
+
+    def should_sample(self, value: Any = None) -> bool:
+        self.calls.append(value)
+        return self.decision
+
+
+def create_manager(
+    *,
+    name: str = "test",
+    service_name: str = "scios",
+    enabled: bool = True,
+    sampler: Any = None,
+    processor: Any = None,
+    exporters: Any = None,
+) -> TraceManager:
+    """Create a minimal TraceManager for tests."""
+
+    return TraceManager(
+        name=name,
+        service_name=service_name,
+        enabled=enabled,
+        sampler=sampler,
+        processor=processor,
+        exporters=exporters,
+    )
+
+
+def create_populated_manager() -> TraceManager:
     """
-    Minimal tracer implementation for TraceManager tests.
+    Create a manager with all optional components configured.
     """
 
-    def __init__(self):
-        self.traces = {}
+    sampler = FakeSampler()
+    processor = FakeProcessor()
+    exporter = FakeExporter()
 
-    def start_trace(
-        self,
-        name,
-        context=None,
-        **kwargs,
-    ):
-        trace = {
-            "name": name,
-            "context": context,
-            "spans": [],
-            **kwargs,
-        }
-
-        self.traces[name] = trace
-
-        return trace
-
-    def finish_trace(
-        self,
-        trace,
-        **kwargs,
-    ):
-        return trace
+    return create_manager(
+        sampler=sampler,
+        processor=processor,
+        exporters=[exporter],
+    )
 
 
 # ==============================================================================
-# Part 1 – Fixtures
+# Part 3. Constructor
 # ==============================================================================
 
 
-@pytest.fixture
-def manager():
-    """
-    Create default TraceManager instance.
-    """
+# ------------------------------------------------------------------------------
+# 3.1 Default construction
+# ------------------------------------------------------------------------------
 
+
+def test_default_construction() -> None:
     manager = TraceManager()
 
-    manager.initialize()
-
-    manager.register_tracer(
-        "default",
-        MockTracer(),
-    )
-
-    return manager
-
-
-@pytest.fixture
-def sample_trace():
-    """
-    Create sample trace object.
-    """
-
-    manager = TraceManager()
-
-    manager.initialize()
-
-    manager.register_tracer(
-        "default",
-        MockTracer(),
-    )
-
-    trace = (
-        manager
-        .start_trace(
-            name="sample_trace",
-        )
-    )
-
-    return trace
+    assert isinstance(manager, TraceManager)
+    assert manager.name == "tracer"
+    assert manager.service_name == "scios"
+    assert manager.enabled is True
+    assert manager.active is False
+    assert manager.current_trace is None
+    assert manager.current_span is None
 
 
-@pytest.fixture
-def sample_span():
-    """
-    Create sample span object.
-    """
-
-    manager = TraceManager()
-
-    manager.initialize()
-
-    manager.register_tracer(
-        "default",
-        MockTracer(),
-    )
-
-    manager.start_trace(
-        name="sample_trace",
-    )
-
-    span = (
-        manager
-        .start_span(
-            name="sample_span",
-        )
-    )
-
-    return span
+# ------------------------------------------------------------------------------
+# 3.2 Custom name
+# ------------------------------------------------------------------------------
 
 
-@pytest.fixture
-def populated_manager():
-    """
-    Create TraceManager with populated runtime state.
-
-    Contains:
-    - initialized manager
-    - registered tracer
-    - multiple traces
-    - active trace
-    - active span
-    """
-
-    manager = TraceManager()
-
-    manager.initialize()
-
-    manager.register_tracer(
-        "default",
-        MockTracer(),
-    )
-
-    manager.start_trace(
-        name="runtime",
-    )
-
-    manager.start_span(
-        name="planner",
-    )
-
-    manager.finish_span()
-
-    manager.start_trace(
-        name="secondary",
-    )
-
-    manager.start_span(
-        name="executor",
-    )
-
-    return manager
-# ==============================================================================
-# Part 2 – Creation
-# ==============================================================================
-
-
-def test_create_default():
-    """
-    Create default TraceManager.
-    """
-
-    manager = TraceManager()
-
-    assert isinstance(
-        manager,
-        TraceManager,
-    )
-
-    assert (
-        manager.name
-        is not None
-    )
-
-
-def test_create_custom_name():
-    """
-    Create TraceManager with custom name.
-    """
-
+def test_custom_name() -> None:
     manager = TraceManager(
-        name="custom_manager",
+        name="custom-tracer",
     )
 
-    assert (
-        manager.name
-        ==
-        "custom_manager"
+    assert manager.name == "custom-tracer"
+
+
+def test_name_must_be_string() -> None:
+    with pytest.raises(TypeError):
+        TraceManager(
+            name=123,  # type: ignore[arg-type]
+        )
+
+
+def test_name_cannot_be_empty() -> None:
+    with pytest.raises(ValueError):
+        TraceManager(
+            name="",
+        )
+
+
+def test_name_is_stripped() -> None:
+    manager = TraceManager(
+        name="  tracer  ",
     )
 
+    assert manager.name == "tracer"
 
-def test_create_disabled():
-    """
-    Create disabled TraceManager.
-    """
 
+# ------------------------------------------------------------------------------
+# 3.3 service_name
+# ------------------------------------------------------------------------------
+
+
+def test_service_name() -> None:
+    manager = TraceManager(
+        service_name="my-service",
+    )
+
+    assert manager.service_name == "my-service"
+
+
+def test_service_name_must_be_string() -> None:
+    with pytest.raises(TypeError):
+        TraceManager(
+            service_name=123,  # type: ignore[arg-type]
+        )
+
+
+def test_service_name_cannot_be_empty() -> None:
+    with pytest.raises(ValueError):
+        TraceManager(
+            service_name="",
+        )
+
+
+def test_service_name_is_stripped() -> None:
+    manager = TraceManager(
+        service_name="  my-service  ",
+    )
+
+    assert manager.service_name == "my-service"
+
+
+# ------------------------------------------------------------------------------
+# 3.4 enabled
+# ------------------------------------------------------------------------------
+
+
+def test_enabled_defaults_to_true() -> None:
+    manager = TraceManager()
+
+    assert manager.enabled is True
+
+
+def test_enabled_can_be_disabled() -> None:
     manager = TraceManager(
         enabled=False,
     )
 
-    assert (
-        manager.enabled
-        is False
+    assert manager.enabled is False
+    assert manager.active is False
+
+
+def test_enabled_must_be_bool() -> None:
+    with pytest.raises(TypeError):
+        TraceManager(
+            enabled=1,  # type: ignore[arg-type]
+        )
+
+
+# ------------------------------------------------------------------------------
+# 3.5 sampler
+# ------------------------------------------------------------------------------
+
+
+def test_sampler_is_stored() -> None:
+    sampler = FakeSampler()
+
+    manager = create_manager(
+        sampler=sampler,
     )
 
+    assert manager._sampler is sampler
 
-def test_create_custom_options():
-    """
-    Create TraceManager with custom options.
-    """
 
-    manager = TraceManager(
-        name="custom",
-        enabled=True,
-        auto_initialize=False,
-        auto_flush=False,
+# ------------------------------------------------------------------------------
+# 3.6 processor
+# ------------------------------------------------------------------------------
+
+
+def test_processor_is_stored() -> None:
+    processor = FakeProcessor()
+
+    manager = create_manager(
+        processor=processor,
     )
 
-    assert (
-        manager.name
-        ==
-        "custom"
+    assert manager._processor is processor
+
+
+def test_set_processor() -> None:
+    manager = create_manager()
+
+    processor = FakeProcessor()
+
+    result = manager.set_processor(
+        processor,
     )
 
-    assert (
-        manager.enabled
-        is True
+    assert result is manager
+    assert manager._processor is processor
+
+
+def test_set_processor_can_clear_processor() -> None:
+    processor = FakeProcessor()
+
+    manager = create_manager(
+        processor=processor,
     )
 
-    assert (
-        manager.auto_initialize
-        is False
+    result = manager.set_processor(
+        None,
     )
 
-    assert (
-        manager.auto_flush
-        is False
-    )
+    assert result is manager
+    assert manager._processor is None
 
 
-def test_initial_state():
-    """
-    Verify initial manager state.
-    """
+# ------------------------------------------------------------------------------
+# 3.7 exporters
+# ------------------------------------------------------------------------------
 
+
+def test_exporters_default_to_empty_list() -> None:
     manager = TraceManager()
 
-    assert (
-        manager.enabled
-        is True
+    assert manager._exporters == []
+
+
+def test_exporters_are_stored_as_list() -> None:
+    exporter = FakeExporter()
+
+    manager = create_manager(
+        exporters=[exporter],
     )
 
-    assert (
-        manager.initialized
-        is False
-        or
-        manager.initialized
-        is True
+    assert isinstance(
+        manager._exporters,
+        list,
     )
 
-    assert (
-        manager.closed
-        is False
+    assert manager._exporters == [exporter]
+
+
+def test_exporters_iterable_is_materialized() -> None:
+    exporter = FakeExporter()
+
+    manager = create_manager(
+        exporters=(item for item in [exporter]),
     )
 
-    assert (
-        manager.frozen
-        is False
-    )
+    assert manager._exporters == [exporter]
 
-    assert (
-        manager.trace_count
-        == 0
-    )
 
-    assert (
-        manager.span_count
-        == 0
-    )
+# ------------------------------------------------------------------------------
+# 3.8 Populated construction
+# ------------------------------------------------------------------------------
+
+
+def test_populated_manager() -> None:
+    manager = create_populated_manager()
+
+    assert manager.enabled is True
+    assert manager._sampler is not None
+    assert manager._processor is not None
+    assert len(manager._exporters) == 1
+
+
+# ------------------------------------------------------------------------------
+# 3.9 Initial state
+# ------------------------------------------------------------------------------
+
+
+def test_initial_trace_state() -> None:
+    manager = TraceManager()
+
+    assert manager.current_trace is None
+    assert manager.trace is None
+    assert manager.active is False
+
+
+def test_initial_span_state() -> None:
+    manager = TraceManager()
+
+    assert manager.current_span is None
+    assert manager.span_stack == []
+    assert manager.span_depth == 0
+
+
+def test_initial_context_state() -> None:
+    manager = TraceManager()
+
+    assert manager.current_context() is None
+
+
+def test_initial_metadata_state() -> None:
+    manager = TraceManager()
+
+    assert manager.metadata == {}
+
+
+def test_initial_statistics_state() -> None:
+    manager = TraceManager()
+
+    assert manager.trace_count() == 0
+    assert manager.completed_trace_count() == 0
+    assert manager.span_count() == 0
+    assert manager.active_span_count() == 0
+    assert manager.exported_count() == 0
+    assert manager.error_count() == 0
+
+
 # ==============================================================================
-# Part 3 – Trace Management
+# Part 4. Core Properties
 # ==============================================================================
 
 
-def test_start_trace(
-    manager,
-):
-    """
-    Start a new trace.
-    """
+def test_name_property() -> None:
+    manager = TraceManager(name="runtime")
 
-    trace = manager.start_trace(
-        name="runtime",
+    assert manager.name == "runtime"
+
+
+def test_service_name_property() -> None:
+    manager = TraceManager(service_name="scios-runtime")
+
+    assert manager.service_name == "scios-runtime"
+
+
+def test_enabled_property() -> None:
+    enabled = TraceManager(enabled=True)
+    disabled = TraceManager(enabled=False)
+
+    assert enabled.enabled is True
+    assert disabled.enabled is False
+
+
+def test_active_initially_false() -> None:
+    manager = TraceManager()
+
+    assert manager.active is False
+
+
+def test_trace_alias_matches_current_trace() -> None:
+    manager = TraceManager()
+
+    assert manager.trace is manager.current_trace
+    assert manager.trace is None
+
+
+def test_current_trace_after_start() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("test")
+
+    assert trace is not None
+    assert manager.current_trace is trace
+    assert manager.trace is trace
+
+
+def test_current_span_initially_none() -> None:
+    manager = TraceManager()
+
+    assert manager.current_span is None
+
+
+def test_span_stack_initially_empty() -> None:
+    manager = TraceManager()
+
+    assert manager.span_stack == []
+
+
+def test_span_stack_returns_copy() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    stack = manager.span_stack
+    stack.clear()
+
+    assert manager.span_depth == 1
+
+
+def test_span_depth_initially_zero() -> None:
+    manager = TraceManager()
+
+    assert manager.span_depth == 0
+
+
+def test_span_depth_after_start() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    assert manager.span_depth == 1
+
+
+# ==============================================================================
+# Part 5. Trace Lifecycle
+# ==============================================================================
+
+
+def test_start_trace_creates_trace() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("test")
+
+    assert trace is not None
+    assert manager.active is True
+    assert manager.current_trace is trace
+
+
+def test_start_trace_uses_given_name() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("experiment")
+
+    assert trace is not None
+    assert getattr(trace, "name", None) == "experiment"
+
+
+def test_start_trace_default_name() -> None:
+    manager = TraceManager(name="default-tracer")
+
+    trace = manager.start_trace()
+
+    assert trace is not None
+    assert getattr(trace, "name", None) == "default-tracer"
+
+
+def test_start_trace_increments_trace_counter() -> None:
+    manager = TraceManager()
+
+    assert manager.trace_count() == 0
+
+    manager.start_trace("one")
+
+    assert manager.trace_count() == 1
+
+
+def test_start_trace_resets_span_state() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("one")
+    manager.start_span("root")
+
+    assert manager.span_depth == 1
+
+    manager.start_trace("two")
+
+    assert manager.span_depth == 0
+    assert manager.current_span is None
+
+
+def test_start_trace_restarts_active_trace() -> None:
+    manager = TraceManager()
+
+    first = manager.start_trace("first")
+    second = manager.start_trace("second")
+
+    assert first is not None
+    assert second is not None
+    assert second is not first
+    assert manager.current_trace is second
+    assert manager.active is True
+
+
+def test_finish_trace_returns_trace() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("test")
+
+    finished = manager.finish_trace()
+
+    assert finished is trace
+
+
+def test_finish_trace_clears_current_trace() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.finish_trace()
+
+    assert manager.current_trace is None
+    assert manager.trace is None
+    assert manager.active is False
+
+
+def test_finish_trace_clears_span_state() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+    manager.start_span("child")
+
+    manager.finish_trace()
+
+    assert manager.current_span is None
+    assert manager.span_depth == 0
+    assert manager.active_span_count() == 0
+
+
+def test_finish_trace_increments_completed_counter() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.finish_trace()
+
+    assert manager.completed_trace_count() == 1
+
+
+def test_finish_trace_without_active_trace_is_safe() -> None:
+    manager = TraceManager()
+
+    assert manager.finish_trace() is None
+
+    assert manager.active is False
+    assert manager.current_trace is None
+
+
+def test_cancel_trace_returns_trace() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("test")
+
+    cancelled = manager.cancel_trace()
+
+    assert cancelled is trace
+
+
+def test_cancel_trace_clears_state() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    manager.cancel_trace()
+
+    assert manager.current_trace is None
+    assert manager.current_span is None
+    assert manager.span_depth == 0
+    assert manager.active is False
+
+
+def test_cancel_trace_without_active_trace_is_safe() -> None:
+    manager = TraceManager()
+
+    assert manager.cancel_trace() is None
+
+
+def test_multiple_trace_cycles() -> None:
+    manager = TraceManager()
+
+    for index in range(5):
+        manager.start_trace(f"trace-{index}")
+        manager.finish_trace()
+
+    assert manager.trace_count() == 5
+    assert manager.completed_trace_count() == 5
+
+
+# ==============================================================================
+# Part 6. Span Lifecycle
+# ==============================================================================
+
+def test_start_span_requires_active_trace() -> None:
+    manager = TraceManager()
+
+    with pytest.raises(
+        RuntimeError,
+        match="cannot start span without an active trace",
+    ):
+        manager.start_span("orphan")
+
+
+def test_start_span_creates_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    assert span is not None
+    assert manager.current_span is span
+
+
+def test_start_span_increments_span_count() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    assert manager.span_count() == 1
+    assert manager.active_span_count() == 1
+
+
+def test_finish_span_returns_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    finished = manager.finish_span()
+
+    assert finished is span
+
+
+def test_finish_span_clears_current_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+    manager.finish_span()
+
+    assert manager.current_span is None
+    assert manager.span_depth == 0
+    assert manager.active_span_count() == 0
+
+
+def test_cancel_span_clears_current_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    manager.cancel_span()
+
+    assert manager.current_span is None
+    assert manager.span_depth == 0
+
+
+def test_cancel_span_without_span_is_safe() -> None:
+    manager = TraceManager()
+
+    assert manager.cancel_span() is manager
+
+
+def test_nested_spans() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    root = manager.start_span("root")
+    child = manager.start_span("child")
+
+    assert root is not None
+    assert child is not None
+    assert manager.current_span is child
+    assert manager.span_depth == 2
+
+
+def test_nested_span_parent_child_relationship() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    root = manager.start_span("root")
+    child = manager.start_span("child")
+
+    assert root is not None
+    assert child is not None
+
+    root_id = getattr(root, "span_id", None)
+
+    child_parent_id = getattr(
+        child,
+        "parent_span_id",
+        None,
     )
+
+    if root_id is not None:
+        assert child_parent_id == root_id
+
+
+def test_finish_child_restores_parent() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    root = manager.start_span("root")
+    child = manager.start_span("child")
+
+    assert root is not None
+    assert child is not None
+
+    manager.finish_span()
+
+    assert manager.current_span is root
+    assert manager.span_depth == 1
+
+
+def test_finish_root_clears_stack() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    manager.finish_span()
+
+    assert manager.current_span is None
+    assert manager.span_depth == 0
+
+
+def test_push_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    span = manager.start_span("root")
+
+    assert span is not None
+
+    manager.pop_span()
+
+    manager.push_span(span)
+
+    assert manager.current_span is span
+    assert manager.span_depth == 1
+
+
+def test_pop_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    assert span is not None
+
+    popped = manager.pop_span()
+
+    assert popped is span
+    assert manager.current_span is None
+    assert manager.span_depth == 0
+
+
+def test_pop_empty_stack_is_safe() -> None:
+    manager = TraceManager()
+
+    assert manager.pop_span() is None
+
+
+# ==============================================================================
+# Part 7. Context Management
+# ==============================================================================
+
+
+def test_context_initially_none() -> None:
+    manager = TraceManager()
+
+    assert manager.context() is None
+    assert manager.current_context() is None
+
+
+def test_current_context_after_start_trace() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    context = manager.current_context()
+
+    assert context is not None
+
+
+def test_set_context() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    context = manager.current_context()
+
+    assert context is not None
+
+    result = manager.set_context(context)
+
+    assert result is manager
+    assert manager.current_context() is context
+
+
+def test_set_context_none_clears_context() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    manager.set_context(None)
+
+    assert manager.current_context() is None
+
+
+def test_update_context() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+
+    result = manager.update_context(
+        component="runtime",
+    )
+
+    assert result is manager
+
+
+def test_clear_context() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.update_context(
+        component="runtime",
+    )
+
+    result = manager.clear_context()
+
+    assert result is manager
+
+
+# ==============================================================================
+# Part 8. Metadata & Events
+# ==============================================================================
+
+
+def test_set_metadata() -> None:
+    manager = TraceManager()
+
+    result = manager.set_metadata(
+        "dataset",
+        "demo",
+    )
+
+    assert result is manager
+    assert manager.get_metadata("dataset") == "demo"
+
+
+def test_update_metadata() -> None:
+    manager = TraceManager()
+
+    result = manager.update_metadata(
+        {
+            "project": "SciOS",
+            "version": "1",
+        },
+    )
+
+    assert result is manager
+    assert manager.get_metadata("project") == "SciOS"
+    assert manager.get_metadata("version") == "1"
+
+
+def test_update_metadata_kwargs() -> None:
+    manager = TraceManager()
+
+    manager.update_metadata(
+        project="SciOS",
+        dataset="demo",
+    )
+
+    assert manager.get_metadata("project") == "SciOS"
+    assert manager.get_metadata("dataset") == "demo"
+
+
+def test_metadata_returns_copy() -> None:
+    manager = TraceManager()
+
+    manager.set_metadata(
+        "project",
+        "SciOS",
+    )
+
+    metadata = manager.metadata
+    metadata["project"] = "modified"
+
+    assert manager.get_metadata("project") == "SciOS"
+
+
+def test_set_attribute_without_span() -> None:
+    manager = TraceManager()
+
+    result = manager.set_attribute(
+        "component",
+        "runtime",
+    )
+
+    assert result is manager
+
+
+def test_set_attribute_on_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    assert span is not None
+
+    result = manager.set_attribute(
+        "component",
+        "runtime",
+    )
+
+    assert result is manager
+
+
+def test_add_event_without_active_span_raises() -> None:
+    manager = TraceManager()
+
+    with pytest.raises(RuntimeError):
+        manager.add_event(
+            "test",
+        )
+
+
+def test_add_event_on_active_span() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    result = manager.add_event(
+        "test",
+    )
+
+    assert result.name == "test"
+    assert manager.current_span.events[-1] is result
+
+
+# ==============================================================================
+# Part 9. Processing & Sampling
+# ==============================================================================
+
+
+def test_process_span_without_processor() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    assert span is not None
+
+    result = manager.process_span(span)
+
+    assert result is span
+
+
+def test_process_trace_without_processor() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("test")
 
     assert trace is not None
 
-    assert (
-        manager.current_trace
-        is not None
+    result = manager.process_trace(trace)
+
+    assert result is trace
+
+
+def test_process_without_processor() -> None:
+    manager = TraceManager()
+
+    value = object()
+
+    result = manager.process(value)
+
+    assert result is value
+
+
+def test_process_span_with_processor(
+    processor: FakeProcessor,
+) -> None:
+    manager = TraceManager(
+        processor=processor,
     )
 
-    assert (
-        manager.current_trace.name
-        ==
-        "runtime"
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    assert span is not None
+
+    result = manager.process_span(span)
+
+    assert result is span
+    assert processor.processed
+
+
+def test_should_sample_without_sampler() -> None:
+    manager = TraceManager()
+
+    result = manager.should_sample()
+
+    assert isinstance(result, bool)
+
+
+def test_should_sample_with_sampler() -> None:
+    sampler = FakeSampler(
+        decision=True,
     )
 
-
-def test_finish_trace(
-    manager,
-):
-    """
-    Finish current trace.
-    """
-
-    manager.start_trace(
-        name="runtime",
+    manager = TraceManager(
+        sampler=sampler,
     )
 
-    result = manager.finish_trace()
+    result = manager.should_sample()
 
-    assert result is not None
-
-    assert (
-        manager.current_trace
-        is None
-    )
+    assert result is True
+    assert len(sampler.calls) == 1
 
 
-def test_add_trace(
-    manager,
-):
-    """
-    Add trace manually.
-    """
+def test_sampling_decision() -> None:
+    manager = TraceManager()
 
-    trace = manager.start_trace(
-        name="runtime",
-    )
+    result = manager.sampling_decision()
 
-    manager.clear_current()
-
-    result = manager.add_trace(
-        trace,
-    )
-
-    assert result is not None
-
-    assert (
-        manager.trace_count
-        >= 1
-    )
+    assert isinstance(result, bool)
 
 
-def test_remove_trace(
-    manager,
-):
-    """
-    Remove existing trace.
-    """
-
-    trace = manager.start_trace(
-        name="runtime",
-    )
-
-    trace_id = trace.id
-
-    manager.remove_trace(
-        trace_id,
-    )
-
-    assert (
-        manager.get_trace(
-            trace_id,
-        )
-        is None
-    )
-
-
-def test_get_trace(
-    manager,
-):
-    """
-    Get trace by id.
-    """
-
-    trace = manager.start_trace(
-        name="runtime",
-    )
-
-    result = manager.get_trace(
-        trace.id,
-    )
-
-    assert (
-        result
-        is trace
-    )
-
-
-def test_trace_count(
-    manager,
-):
-    """
-    Verify trace count.
-    """
-
-    assert (
-        manager.trace_count
-        == 0
-    )
-
-    manager.start_trace(
-        name="runtime",
-    )
-
-    assert (
-        manager.trace_count
-        == 1
-    )
-
-    manager.start_trace(
-        name="worker",
-    )
-
-    assert (
-        manager.trace_count
-        == 2
-    )
 # ==============================================================================
-# Part 4 – Current Trace
+# Part 10. Exporting
 # ==============================================================================
 
 
-def test_set_current(
-    manager,
-):
-    """
-    Set current trace manually.
-    """
+def test_export_span_without_exporters() -> None:
+    manager = TraceManager()
 
-    trace = manager.start_trace(
-        name="runtime",
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    assert span is not None
+
+    result = manager.export_span(span)
+
+    assert result == []
+
+
+def test_export_trace_without_exporters() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("test")
+
+    assert trace is not None
+
+    result = manager.export_trace(trace)
+
+    assert result == []
+
+
+def test_export_without_exporters() -> None:
+    manager = TraceManager()
+
+    assert manager.export() is None
+
+
+def test_export_span_with_exporter(
+    exporter: FakeExporter,
+) -> None:
+    manager = TraceManager(
+        exporters=[exporter],
     )
 
-    manager.clear_current()
+    manager.start_trace("test")
+    span = manager.start_span("root")
 
-    result = manager.set_current(
-        trace,
+    assert span is not None
+
+    manager.export_span(span)
+
+    assert exporter.exported
+
+
+def test_export_trace_with_exporter(
+    exporter: FakeExporter,
+) -> None:
+    manager = TraceManager(
+        exporters=[exporter],
     )
 
-    assert result is manager
+    trace = manager.start_trace("test")
 
-    assert (
-        manager.current_trace
-        is trace
+    assert trace is not None
+
+    manager.export_trace(trace)
+
+    assert exporter.exported
+
+
+def test_flush_calls_exporter(
+    exporter: FakeExporter,
+) -> None:
+    manager = TraceManager(
+        exporters=[exporter],
     )
-
-
-def test_get_current(
-    manager,
-):
-    """
-    Get current trace.
-    """
-
-    trace = manager.start_trace(
-        name="runtime",
-    )
-
-    result = manager.get_current()
-
-    assert (
-        result
-        is trace
-    )
-
-
-def test_clear_current(
-    manager,
-):
-    """
-    Clear current trace.
-    """
-
-    manager.start_trace(
-        name="runtime",
-    )
-
-    result = manager.clear_current()
-
-    assert result is manager
-
-    assert (
-        manager.current_trace
-        is None
-    )
-
-
-def test_current_trace_property(
-    manager,
-):
-    """
-    Verify current_trace property.
-    """
-
-    assert (
-        manager.current_trace
-        is None
-    )
-
-    trace = manager.start_trace(
-        name="runtime",
-    )
-
-    assert (
-        manager.current_trace
-        is trace
-    )
-
-
-def test_active_traces_property(
-    manager,
-):
-    """
-    Verify active_traces property.
-    """
-
-    assert isinstance(
-        manager.active_traces,
-        dict,
-    )
-
-    manager.start_trace(
-        name="runtime",
-    )
-
-    assert (
-        len(manager.active_traces)
-        >= 1
-    )
-# ==============================================================================
-# Part 5 – Bulk Operations
-# ==============================================================================
-
-
-def test_update(
-    manager,
-):
-    """
-    Update manager attributes.
-    """
-
-    result = manager.update(
-        {
-            "description": "updated manager",
-        }
-    )
-
-    assert result is manager
-
-    assert (
-        manager.description
-        ==
-        "updated manager"
-    )
-
-
-def test_merge(
-    manager,
-):
-    """
-    Merge another TraceManager.
-    """
-
-    other = TraceManager(
-        name="other",
-    )
-
-    other.start_trace(
-        name="other_trace",
-    )
-
-    result = manager.merge(
-        other,
-    )
-
-    assert result is manager
-
-    assert (
-        manager.trace_count
-        >= 1
-    )
-
-
-def test_clear(
-    manager,
-):
-    """
-    Clear manager runtime data.
-    """
-
-    manager.start_trace(
-        name="runtime",
-    )
-
-    result = manager.clear()
-
-    assert result is manager
-
-    assert (
-        manager.current_trace
-        is None
-    )
-
-
-def test_flush(
-    manager,
-):
-    """
-    Flush manager data.
-    """
 
     result = manager.flush()
 
     assert result is manager
+    assert exporter.flushed == 1
 
 
-def test_compact(
-    manager,
-):
-    """
-    Compact manager storage.
-    """
-
-    result = manager.compact()
-
-    assert result is manager
-
-
-def test_cleanup(
-    manager,
-):
-    """
-    Cleanup manager resources.
-    """
-
-    result = manager.cleanup()
-
-    assert result is manager
-
-
-def test_optimize(
-    manager,
-):
-    """
-    Optimize manager runtime.
-    """
-
-    result = manager.optimize()
-
-    assert result is manager
 # ==============================================================================
-# Part 6 – Validation
+# Part 11. State Management
 # ==============================================================================
 
 
-def test_validate(
-    manager,
-):
-    """
-    Validate manager state.
-    """
-
-    result = manager.validate()
-
-    assert (
-        result
-        is True
-    )
-
-
-def test_validate_configuration(
-    manager,
-):
-    """
-    Validate manager configuration.
-    """
-
-    result = manager.validate_configuration()
-
-    assert (
-        result
-        is True
-    )
-
-
-def test_validate_components(
-    manager,
-):
-    """
-    Validate manager components.
-    """
-
-    result = manager.validate_components()
-
-    assert (
-        result
-        is True
-    )
-
-
-def test_validate_pipeline(
-    manager,
-):
-    """
-    Validate manager pipeline.
-    """
-
-    result = manager.validate_pipeline()
-
-    assert (
-        result
-        is True
-    )
-
-
-def test_check_integrity(
-    manager,
-):
-    """
-    Check manager integrity.
-    """
-
-    result = manager.check_integrity()
-
-    assert (
-        result
-        is True
-    )
-# ==============================================================================
-# Part 7 – Serialization
-# ==============================================================================
-
-
-def test_to_dict(
-    manager,
-):
-    """
-    Serialize manager to dictionary.
-    """
-
-    result = manager.to_dict()
-
-    assert isinstance(
-        result,
-        dict,
-    )
-
-    assert (
-        "identity"
-        in result
-        or
-        "name"
-        in result
-    )
-
-
-def test_from_dict(
-    manager,
-):
-    """
-    Restore manager from dictionary.
-    """
-
-    data = manager.to_dict()
-
-    restored = TraceManager.from_dict(
-        data,
-    )
-
-    assert isinstance(
-        restored,
-        TraceManager,
-    )
-
-
-def test_to_json(
-    manager,
-):
-    """
-    Serialize manager to JSON.
-    """
-
-    result = manager.to_json()
-
-    assert isinstance(
-        result,
-        str,
-    )
-
-    assert len(result) > 0
-
-
-def test_from_json(
-    manager,
-):
-    """
-    Restore manager from JSON.
-    """
-
-    data = manager.to_json()
-
-    restored = TraceManager.from_json(
-        data,
-    )
-
-    assert isinstance(
-        restored,
-        TraceManager,
-    )
-
-
-def test_snapshot(
-    manager,
-):
-    """
-    Create manager snapshot.
-    """
-
-    result = manager.snapshot()
-
-    assert isinstance(
-        result,
-        dict,
-    )
-
-
-def test_restore_from_dict(
-    manager,
-):
-    """
-    Restore manager using dictionary snapshot.
-    """
+def test_snapshot_empty_manager() -> None:
+    manager = TraceManager()
 
     snapshot = manager.snapshot()
 
-    restored = TraceManager.from_dict(
-        snapshot,
+    assert isinstance(snapshot, dict)
+    assert snapshot["active"] is False
+    assert snapshot["trace"] is None
+
+
+def test_snapshot_active_manager() -> None:
+    manager = create_populated_manager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    snapshot = manager.snapshot()
+
+    assert snapshot["active"] is True
+    assert snapshot["trace"] is not None
+    assert snapshot["current_span"] is not None
+
+
+def test_restore_snapshot() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    manager.start_span("root")
+
+    snapshot = manager.snapshot()
+
+    manager.finish_trace()
+
+    assert manager.active is False
+
+    result = manager.restore(snapshot)
+
+    assert result is manager
+    assert manager.active is True
+    assert manager.current_trace is not None
+    assert manager.current_span is not None
+
+
+def test_restore_does_not_use_same_metadata_object() -> None:
+    manager = TraceManager()
+
+    manager.set_metadata(
+        "project",
+        "SciOS",
     )
 
-    assert isinstance(
-        restored,
-        TraceManager,
+    snapshot = manager.snapshot()
+
+    manager.set_metadata(
+        "project",
+        "changed",
     )
-# ==============================================================================
-# Part 8 – Clone / Copy
-# ==============================================================================
+
+    manager.restore(snapshot)
+
+    assert manager.get_metadata("project") == "SciOS"
 
 
-def test_copy(
-    manager,
-):
-    """
-    Create shallow copy using manager.copy().
-    """
+def test_copy_returns_manager() -> None:
+    manager = create_manager()
 
     copied = manager.copy()
 
-    assert isinstance(
-        copied,
-        TraceManager,
+    assert isinstance(copied, TraceManager)
+    assert copied is not manager
+
+
+def test_copy_preserves_configuration() -> None:
+    manager = TraceManager(
+        name="test",
+        service_name="service",
+        enabled=True,
     )
 
-    assert (
-        copied
-        is not manager
-    )
+    copied = manager.copy()
+
+    assert copied.name == manager.name
+    assert copied.service_name == manager.service_name
+    assert copied.enabled == manager.enabled
 
 
-def test_clone(
-    manager,
-):
-    """
-    Create deep clone using manager.clone().
-    """
+def test_clone_returns_independent_manager() -> None:
+    manager = create_manager()
 
     cloned = manager.clone()
 
-    assert isinstance(
-        cloned,
-        TraceManager,
-    )
-
-    assert (
-        cloned
-        is not manager
-    )
+    assert isinstance(cloned, TraceManager)
+    assert cloned is not manager
 
 
-def test_shallow_copy(
-    manager,
-):
-    """
-    Verify Python shallow copy protocol.
-    """
-
-    copied = copy.copy(
-        manager,
-    )
-
-    assert isinstance(
-        copied,
-        TraceManager,
-    )
-
-    assert (
-        copied
-        is not manager
-    )
-
-
-def test_deep_copy(
-    manager,
-):
-    """
-    Verify Python deep copy protocol.
-    """
-
-    copied = copy.deepcopy(
-        manager,
-    )
-
-    assert isinstance(
-        copied,
-        TraceManager,
-    )
-
-    assert (
-        copied
-        is not manager
-    )
-
-
-def test_copy_equality(
-    manager,
-):
-    """
-    Verify copied manager equality.
-    """
-
-    copied = manager.copy()
-
-    assert (
-        copied
-        ==
-        manager
-    )
 # ==============================================================================
-# Part 9 – Diagnostics
+# Part 12. Validation & Diagnostics
 # ==============================================================================
 
 
-def test_summary(
-    manager,
-):
-    """
-    Generate manager summary.
-    """
+def test_validate_empty_manager() -> None:
+    manager = TraceManager()
 
-    result = manager.summary()
-
-    assert isinstance(
-        result,
-        dict,
-    )
+    assert manager.validate() is True
 
 
-def test_report(
-    manager,
-):
-    """
-    Generate manager report.
-    """
+def test_validate_active_manager() -> None:
+    manager = TraceManager()
 
-    result = manager.report()
+    manager.start_trace("test")
+    manager.start_span("root")
 
-    assert result is not None
+    assert manager.validate() is True
 
 
-def test_diagnostics(
-    manager,
-):
-    """
-    Generate diagnostics information.
-    """
+def test_validate_span_stack_empty() -> None:
+    manager = TraceManager()
 
-    result = manager.diagnostics()
-
-    assert isinstance(
-        result,
-        dict,
-    )
+    assert manager.validate_span_stack() is True
 
 
-def test_health(
-    manager,
-):
-    """
-    Check manager health.
-    """
+def test_validate_span_stack_active() -> None:
+    manager = TraceManager()
 
-    result = manager.health()
+    manager.start_trace("test")
+    manager.start_span("root")
 
-    assert isinstance(
-        result,
-        dict,
-    )
+    assert manager.validate_span_stack() is True
 
 
-def test_metrics(
-    manager,
-):
-    """
-    Collect manager metrics.
-    """
+def test_validate_state_empty_manager() -> None:
+    manager = TraceManager()
 
-    result = manager.metrics()
+    assert manager.validate_state() is True
 
-    assert isinstance(
-        result,
-        dict,
-    )
+
+def test_validate_trace_active() -> None:
+    manager = TraceManager()
+
+    trace = manager.start_trace("test")
+
+    assert trace is not None
+    assert manager.validate_trace(trace) is True
+
+
+def test_validate_span_active() -> None:
+    manager = TraceManager()
+
+    manager.start_trace("test")
+    span = manager.start_span("root")
+
+    assert span is not None
+    assert manager.validate_span(span) is True
+
+
+def test_health_returns_mapping() -> None:
+    manager = TraceManager()
+
+    health = manager.health()
+
+    assert isinstance(health, dict)
+    assert "healthy" in health
+    assert "enabled" in health
+    assert "active" in health
+
+
+def test_health_empty_manager() -> None:
+    manager = TraceManager()
+
+    health = manager.health()
+
+    assert health["healthy"] is True
+    assert health["active"] is False
+
+
+def test_diagnostics_returns_mapping() -> None:
+    manager = TraceManager()
+
+    diagnostics = manager.diagnostics()
+
+    assert isinstance(diagnostics, dict)
+    assert "name" in diagnostics
+    assert "service_name" in diagnostics
+    assert "statistics" in diagnostics
+
+
+def test_summary_returns_mapping() -> None:
+    manager = TraceManager()
+
+    summary = manager.summary()
+
+    assert isinstance(summary, dict)
+    assert summary["name"] == manager.name
+    assert summary["service_name"] == manager.service_name
+    assert summary["trace_count"] == 0
+
+
 # ==============================================================================
-# Part 10 – Python Protocols
-# ==============================================================================
-
-
-def test_repr(
-    manager,
-):
-    """
-    Verify __repr__ protocol.
-    """
-
-    result = repr(manager)
-
-    assert isinstance(
-        result,
-        str,
-    )
-
-    assert len(result) > 0
-
-
-def test_str(
-    manager,
-):
-    """
-    Verify __str__ protocol.
-    """
-
-    result = str(manager)
-
-    assert isinstance(
-        result,
-        str,
-    )
-
-    assert len(result) > 0
-
-
-def test_len(
-    manager,
-):
-    """
-    Verify __len__ protocol.
-    """
-
-    result = len(manager)
-
-    assert isinstance(
-        result,
-        int,
-    )
-
-    assert result >= 0
-
-
-def test_iter(
-    manager,
-):
-    """
-    Verify iteration protocol.
-    """
-
-    result = list(manager)
-
-    assert isinstance(
-        result,
-        list,
-    )
-
-
-def test_contains(
-    manager,
-):
-    """
-    Verify contains protocol.
-    """
-
-    result = (
-        "unknown"
-        in manager
-    )
-
-    assert isinstance(
-        result,
-        bool,
-    )
-
-
-def test_getitem(
-    manager,
-):
-    """
-    Verify item access protocol.
-    """
-
-    manager.start_trace(
-        name="runtime",
-    )
-
-    trace_id = (
-        manager.current_trace.id
-    )
-
-    result = manager[trace_id]
-
-    assert result is not None
-
-
-def test_call(
-    manager,
-):
-    """
-    Verify callable manager.
-    """
-
-    result = manager()
-
-    assert result is not None
-
-
-def test_bool(
-    manager,
-):
-    """
-    Verify boolean protocol.
-    """
-
-    result = bool(manager)
-
-    assert isinstance(
-        result,
-        bool,
-    )
-
-
-def test_copy_protocol(
-    manager,
-):
-    """
-    Verify __copy__ protocol.
-    """
-
-    copied = manager.__copy__()
-
-    assert isinstance(
-        copied,
-        TraceManager,
-    )
-
-    assert (
-        copied
-        is not manager
-    )
-
-
-def test_deepcopy_protocol(
-    manager,
-):
-    """
-    Verify __deepcopy__ protocol.
-    """
-
-    copied = manager.__deepcopy__(
-        {},
-    )
-
-    assert isinstance(
-        copied,
-        TraceManager,
-    )
-
-    assert (
-        copied
-        is not manager
-    )
-
-
-def test_eq(
-    manager,
-):
-    """
-    Verify equality protocol.
-    """
-
-    copied = manager.copy()
-
-    assert (
-        copied
-        ==
-        manager
-    )
-
-
-def test_hash(
-    manager,
-):
-    """
-    Verify hash protocol.
-    """
-
-    result = hash(manager)
-
-    assert isinstance(
-        result,
-        int,
-    )
-
-
-def test_context_manager(
-    manager,
-):
-    """
-    Verify context manager enter.
-    """
-
-    with manager as runtime:
-
-        assert (
-            runtime
-            is manager
-        )
-
-
-def test_exit_context(
-    manager,
-):
-    """
-    Verify context manager exit.
-    """
-
-    with manager:
-
-        pass
-
-    assert (
-        manager.closed
-        is True
-    )
-# ==============================================================================
-# Part 11 – Runtime Lifecycle
+# Part 13. Representation & Edge Cases
 # ==============================================================================
 
 
-def test_initialize():
-    """
-    Initialize TraceManager runtime.
-    """
-
+def test_repr() -> None:
     manager = TraceManager(
-        auto_initialize=False,
+        name="test",
+        service_name="service",
     )
 
-    result = manager.initialize()
+    value = repr(manager)
 
-    assert result is manager
-
-    assert (
-        manager.initialized
-        is True
-    )
+    assert "TraceManager" in value
+    assert "test" in value
+    assert "service" in value
 
 
-def test_start():
-    """
-    Start TraceManager runtime.
-    """
-
+def test_str() -> None:
     manager = TraceManager(
-        auto_initialize=False,
+        name="test",
     )
 
-    manager.initialize()
+    value = str(manager)
 
-    result = manager.start()
+    assert "TraceManager" in value
+    assert "test" in value
 
-    assert result is manager
 
-    assert (
-        manager.running
-        is True
+def test_disabled_manager_start_trace() -> None:
+    manager = TraceManager(
+        enabled=False,
     )
 
+    trace = manager.start_trace("test")
 
-def test_stop(
-):
-    """
-    Stop TraceManager runtime.
-    """
+    assert trace is None
+    assert manager.active is False
+    assert manager.current_trace is None
 
+
+def test_disabled_manager_start_span() -> None:
+    manager = TraceManager(
+        enabled=False,
+    )
+
+    span = manager.start_span("test")
+
+    assert span is None
+    assert manager.current_span is None
+
+
+def test_empty_manager_finish_trace() -> None:
     manager = TraceManager()
 
-    manager.start()
-
-    result = manager.stop()
-
-    assert result is manager
-
-    assert (
-        manager.running
-        is False
-    )
+    assert manager.finish_trace() is None
 
 
-def test_restart(
-):
-    """
-    Restart TraceManager runtime.
-    """
-
+def test_empty_manager_cancel_trace() -> None:
     manager = TraceManager()
 
-    result = manager.restart()
-
-    assert result is manager
+    assert manager.cancel_trace() is None
 
 
-def test_shutdown(
-):
-    """
-    Shutdown TraceManager runtime.
-    """
-
+def test_repeated_finish_trace_is_safe() -> None:
     manager = TraceManager()
 
-    result = manager.shutdown()
+    manager.start_trace("test")
 
-    assert result is manager
+    manager.finish_trace()
+    manager.finish_trace()
+    manager.finish_trace()
+
+    assert manager.active is False
+    assert manager.current_trace is None
 
 
-def test_reset(
-):
-    """
-    Reset TraceManager state.
-    """
-
+def test_repeated_cancel_trace_is_safe() -> None:
     manager = TraceManager()
 
-    manager.start_trace(
-        name="runtime",
-    )
+    manager.start_trace("test")
 
-    result = manager.reset()
+    manager.cancel_trace()
+    manager.cancel_trace()
+    manager.cancel_trace()
 
-    assert result is manager
+    assert manager.active is False
+    assert manager.current_trace is None
 
 
-def test_enable_disable(
-):
-    """
-    Enable and disable manager.
-    """
-
+def test_repeated_finish_span_is_safe() -> None:
     manager = TraceManager()
 
-    result = manager.disable()
+    manager.start_trace("test")
+    manager.start_span("root")
 
-    assert result is manager
+    manager.finish_span()
+    manager.finish_span()
+    manager.finish_span()
 
-    assert (
-        manager.enabled
-        is False
-    )
-
-    result = manager.enable()
-
-    assert result is manager
-
-    assert (
-        manager.enabled
-        is True
-    )
+    assert manager.current_span is None
+    assert manager.span_depth == 0
 
 
-def test_pause_resume(
-):
-    """
-    Pause and resume manager.
-    """
-
+def test_cleanup_after_trace_failure() -> None:
     manager = TraceManager()
 
-    result = manager.pause()
+    manager.start_trace("test")
+    manager.start_span("root")
 
-    assert result is manager
+    manager.finish_trace()
 
-    result = manager.resume()
+    assert manager.active is False
+    assert manager.current_trace is None
+    assert manager.current_span is None
+    assert manager.span_depth == 0
 
-    assert result is manager
 
-
-def test_activate_deactivate(
-):
-    """
-    Activate and deactivate manager.
-    """
-
+def test_manager_can_be_reused_after_finish() -> None:
     manager = TraceManager()
 
-    result = manager.deactivate()
+    first = manager.start_trace("first")
+    manager.start_span("root")
+    manager.finish_trace()
 
-    assert result is manager
+    second = manager.start_trace("second")
 
-    result = manager.activate()
+    assert first is not None
+    assert second is not None
+    assert second is not first
+    assert manager.active is True
 
-    assert result is manager
 
-
-def test_freeze_unfreeze(
-):
-    """
-    Freeze and unfreeze manager.
-    """
-
+def test_manager_can_be_reused_after_cancel() -> None:
     manager = TraceManager()
 
-    result = manager.freeze()
+    first = manager.start_trace("first")
+    manager.start_span("root")
+    manager.cancel_trace()
 
-    assert result is manager
+    second = manager.start_trace("second")
 
-    assert (
-        manager.frozen
-        is True
-    )
-
-    result = manager.unfreeze()
-
-    assert result is manager
-
-    assert (
-        manager.frozen
-        is False
-    )
-
-
-def test_close(
-):
-    """
-    Close TraceManager runtime.
-    """
-
-    manager = TraceManager()
-
-    result = manager.close()
-
-    assert result is manager
-
-    assert (
-        manager.closed
-        is True
-    )
-# ==============================================================================
-# Part 12 – Edge Cases
-# ==============================================================================
-
-
-def test_empty_manager():
-    """
-    Test empty manager behavior.
-    """
-
-    manager = TraceManager()
-
-    assert (
-        manager.trace_count
-        == 0
-    )
-
-    assert (
-        manager.current_trace
-        is None
-    )
-
-
-def test_duplicate_trace(
-    manager,
-):
-    """
-    Test duplicate trace handling.
-    """
-
-    trace = manager.start_trace(
-        name="runtime",
-    )
-
-    with pytest.raises(Exception):
-        manager.add_trace(
-            trace,
-        )
-
-
-def test_missing_trace(
-    manager,
-):
-    """
-    Test missing trace lookup.
-    """
-
-    result = manager.get_trace(
-        "missing-id",
-    )
-
-    assert (
-        result
-        is None
-    )
-
-
-def test_invalid_snapshot(
-    manager,
-):
-    """
-    Test invalid snapshot input.
-    """
-
-    with pytest.raises(Exception):
-        manager.restore(
-            None,
-        )
-
-
-def test_invalid_json():
-    """
-    Test invalid JSON restore.
-    """
-
-    with pytest.raises(Exception):
-        TraceManager.from_json(
-            "{invalid-json}",
-        )
-
-
-def test_invalid_dict():
-    """
-    Test invalid dictionary restore.
-    """
-
-    with pytest.raises(Exception):
-        TraceManager.from_dict(
-            None,
-        )
-
-
-def test_restore_empty_snapshot(
-    manager,
-):
-    """
-    Restore from empty snapshot.
-    """
-
-    result = manager.restore(
-        {},
-    )
-
-    assert result is manager
-
-
-def test_remove_unknown_trace(
-    manager,
-):
-    """
-    Remove unknown trace.
-    """
-
-    result = manager.remove_trace(
-        "unknown-trace",
-    )
-
-    assert (
-        result
-        is None
-        or
-        result
-        is manager
-    )
-
-
-def test_closed_manager():
-    """
-    Test closed manager behavior.
-    """
-
-    manager = TraceManager()
-
-    manager.close()
-
-    assert (
-        manager.closed
-        is True
-    )
-
-    with pytest.raises(Exception):
-        manager.start_trace(
-            name="runtime",
-        )
-
-
-def test_frozen_manager():
-    """
-    Test frozen manager behavior.
-    """
-
-    manager = TraceManager()
-
-    manager.freeze()
-
-    assert (
-        manager.frozen
-        is True
-    )
-
-    with pytest.raises(Exception):
-        manager.start_trace(
-            name="runtime",
-        )                                            
+    assert first is not None
+    assert second is not None
+    assert second is not first
+    assert manager.active is True

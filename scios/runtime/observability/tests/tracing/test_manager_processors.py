@@ -19,7 +19,7 @@ import pytest
 
 from scios.runtime.observability.tracing.event import Event
 from scios.runtime.observability.tracing.manager import TraceManager
-
+from scios.runtime.observability.tracing.enums import ExecutionPhase
 
 # ==========================================================
 # Dummy Processor
@@ -208,7 +208,7 @@ def test_event_callback():
     manager.add_event(
         Event(
             name="compute",
-            phase="runtime",
+            phase=ExecutionPhase.RUNNING,
         )
     )
 

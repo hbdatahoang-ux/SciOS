@@ -1,2728 +1,1680 @@
-"""
-SciOS Observability Tests
-=========================
+﻿"""
+SciOS Tracing Test Fakes
+========================
 
-Tracing Fake Core Types
+Deterministic fake implementations used by the tracing test-suite.
 
-Shared type definitions used by the tracing test harness.
+This module intentionally contains no production tracing logic.
 
-These objects intentionally mirror a subset of the real tracing API
-while remaining lightweight and deterministic for unit testing.
+Python 3.11+
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, TypeAlias
-from copy import deepcopy
+from time import monotonic
+from typing import Any, Callable, Iterator
 
-# =============================================================================
+
+# ============================================================================
 # Type aliases
-# =============================================================================
+# ============================================================================
 
-Attributes: TypeAlias = dict[str, Any]
-"""
-Generic attribute mapping attached to traces, spans, and events.
-"""
+Attributes = dict[str, Any]
+Metadata = dict[str, Any]
 
-Metadata: TypeAlias = dict[str, Any]
-"""
-Metadata describing runtime, provenance, execution context, etc.
-"""
 
-# =============================================================================
-# Fake status
-# =============================================================================
+# ============================================================================
+# FakeStatus
+# ============================================================================
 
 
 class FakeStatus(str, Enum):
     """
-    Simplified execution status used by fake tracing objects.
-
-    Mirrors the lifecycle states commonly used by tracing systems.
+    Minimal status model shared by fake traces and spans.
     """
 
-    CREATED = "CREATED"
+    UNSET = "unset"
+    SUCCESS = "success"
+    ERROR = "error"
 
-    RUNNING = "RUNNING"
-
-    SUCCESS = "SUCCESS"
-
-    FAILURE = "FAILURE"
-
-    CANCELLED = "CANCELLED"
+    # Compatibility aliases commonly used by tracing tests.
+    OK = "success"
 
 
-# =============================================================================
-# Fake Event
-# =============================================================================
-
-
-@dataclass(slots=True)
-class FakeEvent:
-    """
-    Lightweight tracing event.
-
-    Parameters
-    ----------
-    name:
-        Event name.
-
-    attributes:
-        Structured event attributes.
-    """
-
-    name: str
-
-    attributes: Attributes = field(default_factory=dict)
-
-    timestamp: float | None = None
-
-    def set_attribute(
-        self,
-        key: str,
-        value: Any,
-    ) -> None:
-        """
-        Set or replace an attribute.
-        """
-
-        self.attributes[key] = value
-
-    def update(
-        self,
-        **attributes: Any,
-    ) -> None:
-        """
-        Update multiple attributes.
-        """
-
-        self.attributes.update(attributes)
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Serialize event.
-        """
-
-        return {
-            "name": self.name,
-            "timestamp": self.timestamp,
-            "attributes": dict(self.attributes),
-        }
-
-
-# =============================================================================
-# Manager call history
-# =============================================================================
+# ============================================================================
+# CallRecord
+# ============================================================================
 
 
 @dataclass(slots=True)
 class CallRecord:
     """
-    Records one API invocation.
+    Record of a FakeTraceManager method invocation.
 
-    Useful for asserting lifecycle order.
+    Both ``args``/``kwargs`` and the legacy ``arguments`` view are supported.
     """
 
     method: str
-
-    args: tuple[Any, ...] = field(default_factory=tuple)
-
+    args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
-
-        return {
-            "method": self.method,
-            "args": self.args,
-            "kwargs": self.kwargs,
-        }
-
-
-# =============================================================================
-# Processor callback history
-# =============================================================================
-
-
-@dataclass(slots=True)
-class ProcessorCall:
-    """
-    Records a processor callback.
-
-    Used to verify callback ordering and parameters.
-    """
-
-    method: str
-
-    target: Any
-
-    success: bool | None = None
-
-    error: Exception | None = None
-
-    metadata: Metadata = field(default_factory=dict)
-
-    def failed(self) -> bool:
+    @property
+    def arguments(self) -> dict[str, Any]:
         """
-        True if callback contains an exception.
+        Compatibility view used by older tests.
         """
-
-        return self.error is not None
-
-    def to_dict(self) -> dict[str, Any]:
-
-        return {
-            "method": self.method,
-            "target": repr(self.target),
-            "success": self.success,
-            "error": (
-                None
-                if self.error is None
-                else repr(self.error)
-            ),
-            "metadata": dict(self.metadata),
-        }
+        return self.kwargs
 
 
-# =============================================================================
-# Public exports
-# =============================================================================
-
-__all__ = [
-    "Attributes",
-    "Metadata",
-    "FakeStatus",
-    "FakeEvent",
-    "CallRecord",
-    "ProcessorCall",
-]
-"""
-SciOS Observability Tests
-=========================
-
-FakeTrace - Core
-
-Core fake implementation used by tracing unit tests.
-
-Responsibilities
-----------------
-- Deterministic lifecycle
-- Timing
-- Status management
-- Reset support
-
-This object intentionally mirrors the public contract of the real
-Trace implementation while remaining lightweight.
-"""
+# ============================================================================
+# FakeTrace
+# ============================================================================
 
 
-from dataclasses import dataclass, field
-
-
-
-@dataclass(slots=True)
 class FakeTrace:
     """
-    Fake Trace used by unit tests.
+    Deterministic fake trace.
 
-    Only lifecycle behaviour is implemented here.
-
-    Attributes, events, serialization and exception recording
-    are implemented in later sections of FakeTrace.
+    The object intentionally exposes a small, stable API suitable for
+    assertions in tracing tests.
     """
 
-    # ==========================================================
-    # Identity
-    # ==========================================================
+    _counter = 0
 
-    name: str
-
-    trace_id: str | None = None
-
-    parent_id: str | None = None
-
-    # ==========================================================
-    # Lifecycle
-    # ==========================================================
-
-    status: FakeStatus = FakeStatus.CREATED
-
-    finished: bool = False
-
-    # ==========================================================
-    # Timing
-    # ==========================================================
-
-    started_at: float | None = None
-
-    ended_at: float | None = None
-
-    # ==========================================================
-    # Internal
-    # ==========================================================
-
-    _running: bool = field(
-        default=False,
-        init=False,
-        repr=False,
-    )
-
-    # ==========================================================
-    # Lifecycle
-    # ==========================================================
-
-    def start(
+    def __init__(
         self,
-        timestamp: float = 0.0,
-    ) -> "FakeTrace":
-        """
-        Start the trace.
+        name: str = "trace",
+        *,
+        trace_id: str | None = None,
+        metadata: Metadata | None = None,
+        attributes: Attributes | None = None,
+        **extra_attributes: Any,
+    ) -> None:
+        type(self)._counter += 1
 
-        Calling start() more than once has no effect.
-        """
+        self.trace_id = (
+            trace_id
+            or f"fake-trace-{type(self)._counter}"
+        )
 
-        if self._running:
-            return self
+        self.id = self.trace_id
+        self.name = name
 
-        self.started_at = timestamp
-        self.ended_at = None
+        self.metadata: Metadata = dict(
+            metadata or {}
+        )
 
+        self.attributes: Attributes = dict(
+            attributes or {}
+        )
+        self.attributes.update(
+            extra_attributes
+        )
+
+        self.spans: list[FakeSpan] = []
+        self.events: list[FakeEvent] = []
+
+        self.status = FakeStatus.UNSET
+
+        self.started = False
         self.finished = False
 
-        self.status = FakeStatus.RUNNING
+        self.start_time: float | None = None
+        self.end_time: float | None = None
 
-        self._running = True
+        self.exception: Exception | None = None
+        self.exceptions: list[Exception] = []
+
+    @property
+    def success(self) -> bool | None:
+        """
+        Runtime completion outcome.
+
+        Returns
+        -------
+        True
+            Trace finished successfully.
+
+        False
+            Trace finished with an error.
+
+        None
+            Trace has not been finished yet.
+        """
+        if self.status == FakeStatus.SUCCESS:
+            return True
+
+        if self.status == FakeStatus.ERROR:
+            return False
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> "FakeTrace":
+        self.started = True
+
+        if self.start_time is None:
+            self.start_time = monotonic()
 
         return self
 
     def finish(
         self,
+        *,
         status: FakeStatus = FakeStatus.SUCCESS,
-        timestamp: float | None = None,
     ) -> "FakeTrace":
-        """
-        Finish the trace.
-
-        Safe to call multiple times.
-        """
-
-        if not self._running:
-            return self
-
-        self.ended_at = (
-            self.started_at
-            if timestamp is None
-            else timestamp
-        )
-
         self.finished = True
-
         self.status = status
 
-        self._running = False
+        if self.end_time is None:
+            self.end_time = monotonic()
 
         return self
 
-    def reset(self) -> "FakeTrace":
-        """
-        Restore initial state.
-        """
+    # ------------------------------------------------------------------
+    # Status
+    # ------------------------------------------------------------------
 
-        self.status = FakeStatus.CREATED
+    def set_status(
+        self,
+        status: FakeStatus | str,
+    ) -> "FakeSpan":
+        if isinstance(status, str):
+            normalized = status.strip().lower()
 
-        self.finished = False
+            if normalized in {"success", "ok"}:
+                status = FakeStatus.SUCCESS
+            elif normalized in {"error", "failed", "failure"}:
+                status = FakeStatus.ERROR
+            elif normalized == "unset":
+                status = FakeStatus.UNSET
+            else:
+                raise ValueError(
+                    f"Unsupported span status: {status!r}"
+                )
 
-        self.started_at = None
-
-        self.ended_at = None
-
-        self._running = False
-
+        self.status = status
         return self
 
-    # ==========================================================
-    # Timing
-    # ==========================================================
+    def set_ok(self) -> "FakeSpan":
+        return self.set_status(FakeStatus.SUCCESS)
+
+    def set_error(self) -> "FakeSpan":
+        return self.set_status(FakeStatus.ERROR)
+
+    # ------------------------------------------------------------------
+    # Attributes / metadata
+    # ------------------------------------------------------------------
+
+    def set_attribute(
+        self,
+        key: str,
+        value: Any,
+    ) -> "FakeTrace":
+        self.attributes[key] = value
+        return self
+
+    def set_attributes(
+        self,
+        values: Attributes,
+    ) -> "FakeTrace":
+        self.attributes.update(values)
+        return self
+
+    def set_metadata(
+        self,
+        key: str,
+        value: Any,
+    ) -> "FakeTrace":
+        self.metadata[key] = value
+        return self
+
+    # ------------------------------------------------------------------
+    # Exceptions
+    # ------------------------------------------------------------------
+
+    def attach_exception(
+        self,
+        exc: BaseException,
+    ) -> FakeEvent:
+        return self.record_exception(exc)
+
+    def attach_exception(
+        self,
+        exc: Exception,
+    ) -> "FakeTrace":
+        return self.record_exception(exc)
+
+    # ------------------------------------------------------------------
+    # Span hierarchy
+    # ------------------------------------------------------------------
+
+    def add_span(
+        self,
+        span: "FakeSpan",
+    ) -> "FakeSpan":
+        if span not in self.spans:
+            self.spans.append(span)
+
+        return span
 
     @property
-    def is_running(self) -> bool:
-        """
-        True while trace is active.
-        """
+    def span_count(self) -> int:
+        return len(self.spans)
 
-        return self._running
+    # ------------------------------------------------------------------
+    # State
+    # ------------------------------------------------------------------
 
     @property
     def is_finished(self) -> bool:
-        """
-        True after finish().
-        """
-
         return self.finished
 
     @property
+    def is_active(self) -> bool:
+        return self.started and not self.finished
+
+    @property
     def duration(self) -> float | None:
-        """
-        Execution duration.
-
-        Returns
-        -------
-        float | None
-            None until the trace has both a start
-            and finish timestamp.
-        """
-
         if (
-            self.started_at is None
-            or self.ended_at is None
+            self.start_time is None
+            or self.end_time is None
         ):
             return None
 
-        return self.ended_at - self.started_at
-
-    # ==========================================================
-    # Helpers
-    # ==========================================================
-
-    def succeeded(self) -> bool:
-        """
-        True if finished successfully.
-        """
-
-        return self.status is FakeStatus.SUCCESS
-
-    def failed(self) -> bool:
-        """
-        True if failed.
-        """
-
-        return self.status is FakeStatus.FAILURE
-
-    def cancelled(self) -> bool:
-        """
-        True if cancelled.
-        """
-
-        return self.status is FakeStatus.CANCELLED
-# ==========================================================
-# Trace Data
-# ==========================================================
-
-attributes: Attributes = field(
-    default_factory=dict,
-)
-"""
-User-defined trace attributes.
-
-Examples
---------
-{
-    "runtime": "SciOS",
-    "kernel": "SciKernel",
-    "stage": "planner",
-}
-"""
-
-metadata: Metadata = field(
-    default_factory=dict,
-)
-"""
-System-generated metadata.
-
-Typically contains provenance information,
-runtime information, host information,
-workflow identifiers, etc.
-"""
-
-events: list[FakeEvent] = field(
-    default_factory=list,
-)
-"""
-Ordered event history.
-
-Events preserve insertion order.
-"""
-
-exceptions: list[Exception] = field(
-    default_factory=list,
-)
-"""
-Exceptions recorded during execution.
-
-The trace may finish successfully even if
-exceptions were captured and handled.
-"""
-# ==========================================================
-# Attributes
-# ==========================================================
-
-def set_attribute(
-    self,
-    key: str,
-    value: Any,
-) -> "FakeTrace":
-    """
-    Set or replace a trace attribute.
-
-    Parameters
-    ----------
-    key:
-        Attribute name.
-
-    value:
-        Attribute value.
-
-    Returns
-    -------
-    FakeTrace
-        Enables fluent API.
-    """
-
-    self.attributes[key] = value
-    return self
-
-
-def get_attribute(
-    self,
-    key: str,
-    default: Any = None,
-) -> Any:
-    """
-    Return an attribute.
-
-    Parameters
-    ----------
-    key:
-        Attribute name.
-
-    default:
-        Value returned when the attribute
-        does not exist.
-    """
-
-    return self.attributes.get(key, default)
-
-
-# ==========================================================
-# Metadata
-# ==========================================================
-
-def set_metadata(
-    self,
-    key: str,
-    value: Any,
-) -> "FakeTrace":
-    """
-    Set runtime metadata.
-    """
-
-    self.metadata[key] = value
-    return self
-
-
-def get_metadata(
-    self,
-    key: str,
-    default: Any = None,
-) -> Any:
-    """
-    Return metadata value.
-    """
-
-    return self.metadata.get(key, default)
-
-
-# ==========================================================
-# Events
-# ==========================================================
-
-def add_event(
-    self,
-    name: str,
-    *,
-    timestamp: float | None = None,
-    attributes: Attributes | None = None,
-) -> FakeEvent:
-    """
-    Create and append an event.
-
-    Returns
-    -------
-    FakeEvent
-        Newly created event.
-    """
-
-    event = FakeEvent(
-        name=name,
-        timestamp=timestamp,
-        attributes=dict(attributes or {}),
-    )
-
-    self.events.append(event)
-
-    return event
-
-
-def clear_events(self) -> "FakeTrace":
-    """
-    Remove every recorded event.
-    """
-
-    self.events.clear()
-
-    return self
-
-
-# ==========================================================
-# Exceptions
-# ==========================================================
-
-def record_exception(
-    self,
-    error: Exception,
-) -> "FakeTrace":
-    """
-    Record an exception raised while
-    executing the trace.
-
-    Notes
-    -----
-    Recording an exception does not
-    automatically fail the trace.
-
-    Tests may explicitly call finish()
-    with FAILURE if desired.
-    """
-
-    self.exceptions.append(error)
-
-    return self
-
-
-@property
-def has_exceptions(self) -> bool:
-    """
-    True if one or more exceptions
-    were recorded.
-    """
-
-    return bool(self.exceptions)
-# ==========================================================
-# Serialization
-# ==========================================================
-
-def to_dict(self) -> dict[str, Any]:
-    """
-    Serialize the trace into a plain dictionary.
-
-    Returns
-    -------
-    dict[str, Any]
-        JSON-friendly representation of the trace.
-    """
-
-    return {
-        "name": self.name,
-        "trace_id": self.trace_id,
-        "parent_id": self.parent_id,
-        "status": self.status.value,
-        "finished": self.finished,
-        "started_at": self.started_at,
-        "ended_at": self.ended_at,
-        "duration": self.duration,
-        "attributes": dict(self.attributes),
-        "metadata": dict(self.metadata),
-        "events": [
-            event.to_dict()
-            for event in self.events
-        ],
-        "exceptions": [
-            {
-                "type": type(exc).__name__,
-                "message": str(exc),
-            }
-            for exc in self.exceptions
-        ],
-    }
-
-
-@classmethod
-def from_dict(
-    cls,
-    data: dict[str, Any],
-) -> "FakeTrace":
-    """
-    Reconstruct a FakeTrace from a serialized dictionary.
-
-    Notes
-    -----
-    Exceptions are restored as RuntimeError objects
-    containing the original message because arbitrary
-    exception reconstruction is not generally possible.
-    """
-
-    trace = cls(
-        name=data["name"],
-        trace_id=data.get("trace_id"),
-        parent_id=data.get("parent_id"),
-    )
-
-    trace.status = FakeStatus(
-        data.get(
-            "status",
-            FakeStatus.CREATED.value,
-        )
-    )
-
-    trace.finished = data.get(
-        "finished",
-        False,
-    )
-
-    trace.started_at = data.get(
-        "started_at",
-    )
-
-    trace.ended_at = data.get(
-        "ended_at",
-    )
-
-    trace.attributes.update(
-        data.get(
-            "attributes",
-            {},
-        )
-    )
-
-    trace.metadata.update(
-        data.get(
-            "metadata",
-            {},
-        )
-    )
-
-    for event_data in data.get(
-        "events",
-        [],
-    ):
-        trace.events.append(
-            FakeEvent(
-                name=event_data["name"],
-                timestamp=event_data.get("timestamp"),
-                attributes=dict(
-                    event_data.get(
-                        "attributes",
-                        {},
-                    )
-                ),
-            )
+        return (
+            self.end_time
+            - self.start_time
         )
 
-    for exc in data.get(
-        "exceptions",
-        [],
-    ):
-        trace.exceptions.append(
-            RuntimeError(
-                exc.get(
-                    "message",
-                    "",
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trace_id": self.trace_id,
+            "name": self.name,
+            "metadata": dict(self.metadata),
+            "attributes": dict(self.attributes),
+            "spans": [
+                span.to_dict()
+                for span in self.spans
+            ],
+            "status": (
+                self.status.value
+                if isinstance(
+                    self.status,
+                    FakeStatus,
                 )
+                else str(self.status)
+            ),
+            "started": self.started,
+            "finished": self.finished,
+            "exception": (
+                repr(self.exception)
+                if self.exception is not None
+                else None
+            ),
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        return self.to_dict()
+
+    def copy(self) -> "FakeTrace":
+        return deepcopy(self)
+
+    def __repr__(self) -> str:
+        status = (
+            self.status.value
+            if isinstance(
+                self.status,
+                FakeStatus,
             )
+            else str(self.status)
         )
 
-    return trace
+        return (
+            f"FakeTrace("
+            f"name={self.name!r}, "
+            f"trace_id={self.trace_id!r}, "
+            f"status={status!r}, "
+            f"finished={self.finished}"
+            f")"
+        )
 
+# ============================================================================
+# FakeSpan
+# ============================================================================
 
-# ==========================================================
-# Copy
-# ==========================================================
+@dataclass
+class FakeEvent:
+    name: str
+    phase: str = "runtime"
+    attributes: Attributes = field(default_factory=dict)
 
-def copy(self) -> "FakeTrace":
-    """
-    Return a deep copy of the trace.
-    """
+    def __init__(
+        self,
+        name: str,
+        phase: str = "runtime",
+        attributes: Attributes | None = None,
+        **extra_attributes: Any,
+    ) -> None:
+        self.name = name
+        self.phase = phase
+        self.attributes = dict(attributes or {})
+        self.attributes.update(extra_attributes)
 
-    return self.from_dict(
-        self.to_dict()
-    )
+    def set_attribute(
+        self,
+        key: str,
+        value: Any,
+    ) -> "FakeEvent":
+        self.attributes[key] = value
+        return self
 
+    def set_attributes(
+        self,
+        values: Attributes,
+    ) -> "FakeEvent":
+        self.attributes.update(values)
+        return self
 
-# ==========================================================
-# Representation
-# ==========================================================
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "phase": self.phase,
+            "attributes": dict(self.attributes),
+        }
 
-def __repr__(self) -> str:
-    """
-    Developer-friendly representation.
-    """
+    def snapshot(self) -> dict[str, Any]:
+        return self.to_dict()
 
-    return (
-        f"{self.__class__.__name__}("
-        f"name={self.name!r}, "
-        f"status={self.status.value!r}, "
-        f"finished={self.finished}, "
-        f"events={len(self.events)}, "
-        f"exceptions={len(self.exceptions)})"
-    )
-# ==========================================================
-# Serialization
-# ==========================================================
+    def copy(self) -> "FakeEvent":
+        return deepcopy(self)
 
-def to_dict(self) -> dict[str, Any]:
-    """
-    Serialize this trace into a JSON-friendly dictionary.
-
-    Returns
-    -------
-    dict[str, Any]
-        Plain Python representation suitable for testing,
-        snapshot assertions, or JSON export.
-    """
-
-    return {
-        # Identity
-        "name": self.name,
-        "trace_id": self.trace_id,
-        "parent_id": self.parent_id,
-
-        # Lifecycle
-        "status": self.status.value,
-        "finished": self.finished,
-
-        # Timing
-        "started_at": self.started_at,
-        "ended_at": self.ended_at,
-        "duration": self.duration,
-
-        # User data
-        "attributes": dict(self.attributes),
-
-        # Runtime metadata
-        "metadata": dict(self.metadata),
-
-        # Events
-        "events": [
-            event.to_dict()
-            for event in self.events
-        ],
-
-        # Exceptions
-        "exceptions": [
-            {
-                "type": type(exc).__name__,
-                "message": str(exc),
-            }
-            for exc in self.exceptions
-        ],
-    }
-
-
-# ==========================================================
-# Cloning
-# ==========================================================
-
-def copy(self) -> "FakeTrace":
-    """
-    Return a deep copy of this trace.
-
-    The clone is completely independent of
-    the original object.
-    """
-
-    return deepcopy(self)
-
-
-# ==========================================================
-# Query Helpers
-# ==========================================================
-
-@property
-def event_count(self) -> int:
-    """Number of recorded events."""
-    return len(self.events)
-
-
-@property
-def attribute_count(self) -> int:
-    """Number of trace attributes."""
-    return len(self.attributes)
-
-
-@property
-def metadata_count(self) -> int:
-    """Number of metadata entries."""
-    return len(self.metadata)
-
-
-@property
-def exception_count(self) -> int:
-    """Number of recorded exceptions."""
-    return len(self.exceptions)
-
-
-@property
-def has_events(self) -> bool:
-    """True if at least one event exists."""
-    return bool(self.events)
-
-
-@property
-def has_attributes(self) -> bool:
-    """True if at least one attribute exists."""
-    return bool(self.attributes)
-
-
-@property
-def has_metadata(self) -> bool:
-    """True if metadata exists."""
-    return bool(self.metadata)
-
-
-@property
-def has_exceptions(self) -> bool:
-    """True if one or more exceptions were recorded."""
-    return bool(self.exceptions)
-
-
-@property
-def is_success(self) -> bool:
-    """True if trace completed successfully."""
-    return self.status is FakeStatus.SUCCESS
-
-
-@property
-def is_failure(self) -> bool:
-    """True if trace failed."""
-    return self.status is FakeStatus.FAILURE
-
-
-@property
-def is_cancelled(self) -> bool:
-    """True if trace was cancelled."""
-    return self.status is FakeStatus.CANCELLED
-
-
-# ==========================================================
-# Reset Helpers
-# ==========================================================
-
-def clear_attributes(self) -> "FakeTrace":
-    """
-    Remove all user attributes.
-    """
-
-    self.attributes.clear()
-    return self
-
-
-def clear_metadata(self) -> "FakeTrace":
-    """
-    Remove all runtime metadata.
-    """
-
-    self.metadata.clear()
-    return self
-
-
-def clear_exceptions(self) -> "FakeTrace":
-    """
-    Remove all recorded exceptions.
-    """
-
-    self.exceptions.clear()
-    return self
-
-
-# ==========================================================
-# Representation
-# ==========================================================
-
-def __repr__(self) -> str:
-    """
-    Developer-friendly representation used by failing tests,
-    debugging sessions, and assertion output.
-    """
-
-    return (
-        f"{self.__class__.__name__}("
-        f"name={self.name!r}, "
-        f"status={self.status.value}, "
-        f"running={self.is_running}, "
-        f"finished={self.finished}, "
-        f"duration={self.duration}, "
-        f"events={self.event_count}, "
-        f"attributes={self.attribute_count}, "
-        f"exceptions={self.exception_count})"
-    ) 
-# ==========================================================
-# FakeSpan - Core
-# ==========================================================
-
-@dataclass(slots=True)
 class FakeSpan:
     """
-    Fake Span used throughout the observability test suite.
-
-    This implementation mirrors the public contract of the real
-    Span while remaining deterministic and lightweight.
-
-    Hierarchy management, attributes, events and serialization
-    are implemented in later sections.
+    Deterministic fake span with parent/child hierarchy.
     """
 
-    # ==========================================================
-    # Identity
-    # ==========================================================
+    _counter = 0
 
-    name: str
-
-    span_id: str | None = None
-
-    trace_id: str | None = None
-
-    parent_span_id: str | None = None
-
-    # ==========================================================
-    # Hierarchy
-    # ==========================================================
-
-    parent: "FakeSpan | None" = None
-
-    # ==========================================================
-    # Lifecycle
-    # ==========================================================
-
-    status: FakeStatus = FakeStatus.CREATED
-
-    finished: bool = False
-
-    # ==========================================================
-    # Timing
-    # ==========================================================
-
-    started_at: float | None = None
-
-    ended_at: float | None = None
-
-    # ==========================================================
-    # Internal
-    # ==========================================================
-
-    _running: bool = field(
-        default=False,
-        init=False,
-        repr=False,
-    )
-
-    # ==========================================================
-    # Lifecycle
-    # ==========================================================
-
-    def start(
+    def __init__(
         self,
-        timestamp: float = 0.0,
-    ) -> "FakeSpan":
-        """
-        Start the span.
+        name: str,
+        phase: str | None = None,
+        *,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent: "FakeSpan | None" = None,
+        parent_span_id: str | None = None,
+        attributes: Attributes | None = None,
+        timestamp: float | None = None,
+        **extra_attributes: Any,
+    ) -> None:
+        type(self)._counter += 1
 
-        Calling start() multiple times is safe.
-        """
+        # Identity
+        self.span_id = (
+            span_id
+            or f"fake-span-{type(self)._counter}"
+        )
+        self.id = self.span_id
 
-        if self._running:
-            return self
+        self.trace_id = trace_id or (
+            parent.trace_id
+            if parent is not None
+            else ""
+        )
 
-        self.started_at = timestamp
-        self.ended_at = None
+        # Basic metadata
+        self.name = name
+        self.phase = phase
 
+        self.attributes: Attributes = dict(
+            attributes or {}
+        )
+        self.attributes.update(extra_attributes)
+
+        self.timestamp = (
+            timestamp
+            if timestamp is not None
+            else monotonic()
+        )
+
+        # Hierarchy
+        self.parent = parent
+
+        self.parent_span_id = (
+            parent_span_id
+            if parent_span_id is not None
+            else (
+                parent.span_id
+                if parent is not None
+                else None
+            )
+        )
+
+        self.children: list[FakeSpan] = []
+
+        # Events
+        self.events: list[FakeEvent] = []
+
+        # Status
+        self.status = FakeStatus.UNSET
+
+        # Lifecycle
+        self.started = False
         self.finished = False
+        self.start_time: float | None = None
+        self.end_time: float | None = None
 
-        self.status = FakeStatus.RUNNING
+        # Exceptions
+        self.exception: Exception | None = None
+        self.exceptions: list[Exception] = []
 
-        self._running = True
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> "FakeSpan":
+        self.started = True
+
+        if self.start_time is None:
+            self.start_time = monotonic()
 
         return self
 
     def finish(
         self,
+        *,
         status: FakeStatus = FakeStatus.SUCCESS,
-        timestamp: float | None = None,
     ) -> "FakeSpan":
-        """
-        Finish the span.
-
-        Safe to call multiple times.
-        """
-
-        if not self._running:
-            return self
-
-        self.ended_at = (
-            self.started_at
-            if timestamp is None
-            else timestamp
+        self.finished = True
+        self.status = (
+            status
+            if isinstance(status, FakeStatus)
+            else FakeStatus(status)
         )
 
-        self.finished = True
-
-        self.status = status
-
-        self._running = False
+        if self.end_time is None:
+            self.end_time = monotonic()
 
         return self
 
-    def reset(self) -> "FakeSpan":
-        """
-        Restore the initial lifecycle state.
+    # Compatibility alias.
+    end = finish
 
-        Data such as attributes/events is intentionally
-        preserved until the Data section adds optional
-        clear helpers.
-        """
+    # ------------------------------------------------------------------
+    # Status
+    # ------------------------------------------------------------------
 
-        self.status = FakeStatus.CREATED
+    def set_status(self, status: FakeStatus) -> "FakeSpan":
+        self.status = (
+            status.name
+            if isinstance(status, FakeStatus)
+            else str(status)
+        )
 
-        self.finished = False
+    def set_ok(self) -> "FakeSpan":
+        return self.set_status(FakeStatus.SUCCESS)
 
-        self.started_at = None
+    def set_error(self) -> "FakeSpan":
+        return self.set_status(FakeStatus.ERROR)
 
-        self.ended_at = None
+    # ------------------------------------------------------------------
+    # Hierarchy
+    # ------------------------------------------------------------------
 
-        self._running = False
+    def add_child(self, span: "FakeSpan") -> "FakeSpan":
+        if span not in self.children:
+            self.children.append(span)
+
+        span.parent = self
+        span.parent_span_id = self.span_id
+
+        return span
+
+    @property
+    def child_count(self) -> int:
+        return len(self.children)
+
+    # ------------------------------------------------------------------
+    # Attributes
+    # ------------------------------------------------------------------
+
+    def set_attribute(self, key: str, value: Any) -> "FakeSpan":
+        self.attributes[key] = value
+        return self
+
+    def set_attributes(self, values: Attributes) -> "FakeSpan":
+        self.attributes.update(values)
+        return self
+
+    # ------------------------------------------------------------------
+    # Events
+    # ------------------------------------------------------------------
+
+    def add_event(
+        self,
+        name: str,
+        *,
+        attributes: Attributes | None = None,
+        phase: str = "runtime",
+    ) -> "FakeSpan":
+        event = FakeEvent(
+            name=name,
+            phase=phase,
+            attributes=attributes,
+        )
+
+        self.events.append(event)
 
         return self
 
-    # ==========================================================
-    # Timing
-    # ==========================================================
+    # ------------------------------------------------------------------
+    # Exceptions
+    # ------------------------------------------------------------------
 
-    @property
-    def is_running(self) -> bool:
+    def record_exception(
+        self,
+        exc: BaseException,
+    ) -> FakeEvent:
         """
-        True while the span is active.
-        """
+        Record an exception directly on this span.
 
-        return self._running
-
-    @property
-    def is_finished(self) -> bool:
-        """
-        True once finish() has completed.
+        The span itself owns exception state. Scope resolution belongs to
+        FakeTraceManager, not FakeSpan.
         """
 
-        return self.finished
-
-    @property
-    def duration(self) -> float | None:
-        """
-        Span execution duration.
-
-        Returns
-        -------
-        float | None
-            None until both timestamps exist.
-        """
-
-        if (
-            self.started_at is None
-            or self.ended_at is None
+        if not isinstance(
+            exc,
+            BaseException,
         ):
-            return None
-
-        return self.ended_at - self.started_at
-
-    # ==========================================================
-    # Status Helpers
-    # ==========================================================
-
-    @property
-    def is_success(self) -> bool:
-        """
-        True if the span completed successfully.
-        """
-
-        return self.status is FakeStatus.SUCCESS
-
-    @property
-    def is_failure(self) -> bool:
-        """
-        True if the span completed with failure.
-        """
-
-        return self.status is FakeStatus.FAILURE
-
-    @property
-    def is_cancelled(self) -> bool:
-        """
-        True if the span was cancelled.
-        """
-
-        return self.status is FakeStatus.CANCELLED   
-# ==========================================================
-# Hierarchy
-# ==========================================================
-
-children: list["FakeSpan"] = field(
-    default_factory=list,
-)
-"""
-Direct child spans.
-
-Children preserve insertion order.
-"""
-
-
-# ==========================================================
-# Child Management
-# ==========================================================
-
-def add_child(
-    self,
-    child: "FakeSpan",
-) -> "FakeSpan":
-    """
-    Attach a child span.
-
-    If the child already exists, this
-    operation has no effect.
-    """
-
-    if child not in self.children:
-        child.parent = self
-        child.parent_span_id = self.span_id
-        self.children.append(child)
-
-    return child
-
-
-def remove_child(
-    self,
-    child: "FakeSpan",
-) -> bool:
-    """
-    Remove a child span.
-
-    Returns
-    -------
-    bool
-        True if removed.
-    """
-
-    if child not in self.children:
-        return False
-
-    self.children.remove(child)
-
-    child.parent = None
-    child.parent_span_id = None
-
-    return True
-
-
-def clear_children(self) -> "FakeSpan":
-    """
-    Remove every child span.
-    """
-
-    for child in self.children:
-        child.parent = None
-        child.parent_span_id = None
-
-    self.children.clear()
-
-    return self
-
-
-# ==========================================================
-# Hierarchy Helpers
-# ==========================================================
-
-@property
-def is_root(self) -> bool:
-    """
-    True if this span has no parent.
-    """
-
-    return self.parent is None
-
-
-@property
-def child_count(self) -> int:
-    """
-    Number of direct children.
-    """
-
-    return len(self.children)
-
-
-@property
-def depth(self) -> int:
-    """
-    Depth within the span tree.
-
-    Root span depth == 0.
-    """
-
-    depth = 0
-
-    current = self.parent
-
-    while current is not None:
-        depth += 1
-        current = current.parent
-
-    return depth
-
-
-# ==========================================================
-# Traversal
-# ==========================================================
-
-def iter_children(self):
-    """
-    Iterate over direct children.
-    """
-
-    yield from self.children
-
-
-def walk(self):
-    """
-    Depth-first traversal.
-
-    Yields
-    ------
-    FakeSpan
-        Self followed by descendants.
-    """
-
-    yield self
-
-    for child in self.children:
-        yield from child.walk() 
-# ==========================================================
-# Data
-# ==========================================================
-
-attributes: Attributes = field(
-    default_factory=dict,
-)
-"""
-User-defined span attributes.
-"""
-
-events: list[FakeEvent] = field(
-    default_factory=list,
-)
-"""
-Recorded span events.
-"""
-
-exceptions: list[BaseException] = field(
-    default_factory=list,
-)
-"""
-Recorded exceptions.
-"""
-
-
-# ==========================================================
-# Attributes
-# ==========================================================
-
-def set_attribute(
-    self,
-    key: str,
-    value: Any,
-) -> "FakeSpan":
-    """
-    Set or replace a span attribute.
-    """
-
-    self.attributes[key] = value
-    return self
-
-
-def get_attribute(
-    self,
-    key: str,
-    default: Any = None,
-) -> Any:
-    """
-    Retrieve a span attribute.
-    """
-
-    return self.attributes.get(key, default)
-
-
-# ==========================================================
-# Events
-# ==========================================================
-
-def add_event(
-    self,
-    name: str,
-    *,
-    timestamp: float | None = None,
-    attributes: Attributes | None = None,
-) -> FakeEvent:
-    """
-    Record an event on this span.
-    """
-
-    event = FakeEvent(
-        name=name,
-        timestamp=timestamp,
-        attributes=dict(attributes or {}),
-    )
-
-    self.events.append(event)
-
-    return event
-
-
-def clear_events(self) -> "FakeSpan":
-    """
-    Remove all recorded events.
-    """
-
-    self.events.clear()
-
-    return self
-
-
-# ==========================================================
-# Exceptions
-# ==========================================================
-
-def record_exception(
-    self,
-    exception: BaseException,
-    *,
-    record_event: bool = True,
-) -> BaseException:
-    """
-    Record an exception.
-
-    Optionally creates a matching span event.
-    """
-
-    self.exceptions.append(exception)
-
-    if record_event:
-        self.add_event(
-            "exception",
+            raise TypeError(
+                "exc must be a BaseException."
+            )
+
+        self.exception = exc
+        self.exceptions.append(
+            exc,
+        )
+
+        event = FakeEvent(
+            name="exception",
+            phase="exception",
             attributes={
-                "exception.type": type(exception).__name__,
-                "exception.message": str(exception),
+                "exception.type": type(exc).__name__,
+                "exception.message": str(exc),
             },
         )
 
-    return exception
+        self.events.append(
+            event,
+        )
+
+        self.status = FakeStatus.ERROR
+
+        return event
 
 
-# ==========================================================
-# Query Helpers
-# ==========================================================
 
-@property
-def attribute_count(self) -> int:
-    """
-    Number of span attributes.
-    """
+    def attach_exception(self, exc: Exception) -> "FakeSpan":
+        return self.record_exception(exc)
 
-    return len(self.attributes)
+    # ------------------------------------------------------------------
+    # State
+    # ------------------------------------------------------------------
 
+    @property
+    def is_finished(self) -> bool:
+        return self.finished
 
-@property
-def event_count(self) -> int:
-    """
-    Number of recorded events.
-    """
+    @property
+    def is_active(self) -> bool:
+        return self.started and not self.finished
 
-    return len(self.events)
+    @property
+    def duration(self) -> float | None:
+        if self.start_time is None or self.end_time is None:
+            return None
 
+        return self.end_time - self.start_time
 
-@property
-def exception_count(self) -> int:
-    """
-    Number of recorded exceptions.
-    """
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
 
-    return len(self.exceptions)
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "span_id": self.span_id,
+            "trace_id": self.trace_id,
+            "name": self.name,
+            "parent_span_id": self.parent_span_id,
+            "attributes": dict(self.attributes),
+            "events": [
+                event.to_dict()
+                for event in self.events
+            ],
+            "status": self.status.value,
+            "started": self.started,
+            "finished": self.finished,
+            "exception": (
+                repr(self.exception)
+                if self.exception is not None
+                else None
+            ),
+            "child_count": len(self.children),
+        }
 
+    def snapshot(self) -> dict[str, Any]:
+        return self.to_dict()
 
-@property
-def has_attributes(self) -> bool:
-    return bool(self.attributes)
+    def copy(self) -> "FakeSpan":
+        return deepcopy(self)
 
-
-@property
-def has_events(self) -> bool:
-    return bool(self.events)
-
-
-@property
-def has_exceptions(self) -> bool:
-    return bool(self.exceptions)
-
-
-def clear_attributes(self) -> "FakeSpan":
-    """
-    Remove all attributes.
-    """
-
-    self.attributes.clear()
-
-    return self
-
-
-def clear_exceptions(self) -> "FakeSpan":
-    """
-    Remove all recorded exceptions.
-    """
-
-    self.exceptions.clear()
-
-    return self
-# ==========================================================
-# Utilities
-# ==========================================================
-
-def to_dict(self) -> dict[str, Any]:
-    """
-    Serialize this span into a JSON-friendly dictionary.
-
-    Returns
-    -------
-    dict[str, Any]
-        Dictionary representation suitable for snapshot
-        testing, assertions and JSON export.
-    """
-
-    return {
-        # Identity
-        "name": self.name,
-        "span_id": self.span_id,
-        "trace_id": self.trace_id,
-        "parent_span_id": self.parent_span_id,
-
-        # Hierarchy
-        "depth": self.depth,
-        "child_count": self.child_count,
-
-        # Lifecycle
-        "status": self.status.value,
-        "finished": self.finished,
-
-        # Timing
-        "started_at": self.started_at,
-        "ended_at": self.ended_at,
-        "duration": self.duration,
-
-        # User data
-        "attributes": dict(self.attributes),
-
-        # Events
-        "events": [
-            event.to_dict()
-            for event in self.events
-        ],
-
-        # Exceptions
-        "exceptions": [
-            {
-                "type": type(exc).__name__,
-                "message": str(exc),
-            }
-            for exc in self.exceptions
-        ],
-    }
+    def __repr__(self) -> str:
+        return (
+            f"FakeSpan("
+            f"name={self.name!r}, "
+            f"span_id={self.span_id!r}, "
+            f"trace_id={self.trace_id!r}, "
+            f"status={self.status.value!r}, "
+            f"finished={self.finished}"
+            f")"
+        )
 
 
-# ==========================================================
-# Cloning
-# ==========================================================
-
-def copy(self) -> "FakeSpan":
-    """
-    Return a deep copy of this span.
-
-    The cloned span is completely independent of the
-    original, including children, events and attributes.
-    """
-
-    return deepcopy(self)
-
-
-# ==========================================================
-# Query Helpers
-# ==========================================================
-
-@property
-def event_count(self) -> int:
-    """
-    Number of recorded events.
-    """
-
-    return len(self.events)
-
-
-@property
-def attribute_count(self) -> int:
-    """
-    Number of span attributes.
-    """
-
-    return len(self.attributes)
-
-
-@property
-def exception_count(self) -> int:
-    """
-    Number of recorded exceptions.
-    """
-
-    return len(self.exceptions)
-
-
-# ==========================================================
-# Representation
-# ==========================================================
-
-def __repr__(self) -> str:
-    """
-    Developer-friendly representation.
-
-    Used heavily by pytest assertion output.
-    """
-
-    return (
-        f"{self.__class__.__name__}("
-        f"name={self.name!r}, "
-        f"span_id={self.span_id!r}, "
-        f"status={self.status.value}, "
-        f"depth={self.depth}, "
-        f"children={self.child_count}, "
-        f"running={self.is_running}, "
-        f"finished={self.finished}, "
-        f"duration={self.duration}, "
-        f"events={self.event_count}, "
-        f"attributes={self.attribute_count}, "
-        f"exceptions={self.exception_count})"
-    )
-# ==========================================================
+# ============================================================================
 # FakeTraceManager
-# Part 1 — Core
-# ==========================================================
+# ============================================================================
+
 
 class FakeTraceManager:
     """
     Production-quality fake implementation of a TraceManager.
 
-    The fake manager records state changes deterministically and
-    exposes helper APIs for assertions without depending on the
-    real tracing implementation.
+    The fake maintains:
 
-    Lifecycle methods (start_trace, finish_trace, start_span,
-    finish_span, etc.) are implemented in later sections.
+    - trace registry
+    - span registry
+    - active trace
+    - active span
+    - span stack
+    - call history
+    - parent/child relationships
     """
 
     def __init__(self) -> None:
-        # ======================================================
-        # Internal collections
-        # ======================================================
-
-        # All traces created during this manager lifetime.
         self._traces: list[FakeTrace] = []
-
-        # All spans created during this manager lifetime.
         self._spans: list[FakeSpan] = []
-
-        # Generic call history used by tests.
         self._calls: list[CallRecord] = []
 
-        # ======================================================
-        # Current execution state
-        # ======================================================
-
-        # Currently active trace.
         self._current_trace: FakeTrace | None = None
-
-        # Currently active span.
         self._current_span: FakeSpan | None = None
 
-        # ======================================================
-        # Span stack
-        # ======================================================
-
-        # Maintains nested span hierarchy.
         self._span_stack: list[FakeSpan] = []
 
-    # ==========================================================
-    # Current State
-    # ==========================================================
+        self._processor: FakeProcessor | None = None
+
+        # --------------------------------------------------------------
+        # Lifecycle observability
+        # --------------------------------------------------------------
+
+        self.start_trace_called = 0
+        self.finish_trace_called = 0
+        self.last_started_trace: FakeTrace | None = None
+        self.last_finished_trace: FakeTrace | None = None
+
+        self._completed_traces: dict[str, FakeTrace] = {}
+
+    # ------------------------------------------------------------------
+    # Observability properties
+    # ------------------------------------------------------------------
+
+    @property
+    def active_trace_count(self) -> int:
+        """Return the number of currently active traces."""
+        return 1 if self._current_trace is not None else 0
+
+    @property
+    def completed_trace_count(self) -> int:
+        """Return the number of completed traces."""
+        return len(self._completed_traces)
+
+    def set_processor(
+        self,
+        processor: "FakeProcessor | None",
+    ) -> "FakeTraceManager":
+        """
+        Set the processor used for manager-level event callbacks.
+        """
+
+        self._processor = processor
+
+        return self
+
+    # ==================================================================
+    # Current state
+    # ==================================================================
 
     @property
     def current_trace(self) -> FakeTrace | None:
-        """
-        Currently active trace.
-        """
         return self._current_trace
 
     @property
+    def active_trace(self) -> FakeTrace | None:
+        return self._current_trace
+
+    @property
+    def active_trace_count(self) -> int:
+        """Return the number of currently active traces."""
+        return 1 if self._current_trace is not None else 0
+
+    @property
+    def has_active_trace(self) -> bool:
+        return self._current_trace is not None
+
+    @property
     def current_span(self) -> FakeSpan | None:
-        """
-        Currently active span.
-        """
         return self._current_span
 
     @property
-    def span_stack(self) -> list[FakeSpan]:
-        """
-        Read-only access to the current span stack.
+    def active_span(self) -> FakeSpan | None:
+        return self._current_span
 
-        A shallow copy is returned to avoid accidental mutation
-        by test code.
-        """
-        return list(self._span_stack)
+    @property
+    def has_active_span(self) -> bool:
+        return self._current_span is not None
 
-    # ==========================================================
-    # Collection Views
-    # ==========================================================
+    # ==================================================================
+    # Collections
+    # ==================================================================
 
     @property
     def traces(self) -> list[FakeTrace]:
-        """
-        All traces managed by this instance.
-        """
         return list(self._traces)
 
     @property
     def spans(self) -> list[FakeSpan]:
-        """
-        All spans managed by this instance.
-        """
         return list(self._spans)
 
     @property
     def calls(self) -> list[CallRecord]:
-        """
-        Recorded API calls.
-        """
         return list(self._calls)
 
-    # ==========================================================
+    @property
+    def span_stack(self) -> list[FakeSpan]:
+        return list(self._span_stack)
+
+    @property
+    def stack(self) -> tuple[FakeSpan, ...]:
+        return tuple(self._span_stack)
+
+    @property
+    def completed_traces(self) -> dict[str, FakeTrace]:
+        """
+        Completed traces indexed by trace_id.
+        """
+        return dict(self._completed_traces)
+
+    @property
+    def completed_trace_count(self) -> int:
+        """
+        Number of completed traces.
+        """
+        return len(self._completed_traces)
+
+    # ==================================================================
+    # Counts
+    # ==================================================================
+
+    @property
+    def trace_count(self) -> int:
+        return len(self._traces)
+
+    @property
+    def span_count(self) -> int:
+        return len(self._spans)
+
+    @property
+    def stack_depth(self) -> int:
+        return len(self._span_stack)
+
+    @property
+    def span_depth(self) -> int:
+        return len(self._span_stack)
+
+    @property
+    def is_stack_empty(self) -> bool:
+        return not self._span_stack
+
+    # ==================================================================
+    # Last objects
+    # ==================================================================
+
+    @property
+    def last_trace(self) -> FakeTrace | None:
+        return self._traces[-1] if self._traces else None
+
+    @property
+    def last_span(self) -> FakeSpan | None:
+        return self._spans[-1] if self._spans else None
+
+    def root_span(self) -> FakeSpan | None:
+        if not self._spans:
+            return None
+        return self._spans[0]
+
+    # ==================================================================
+    # Call recording
+    # ==================================================================
+
+    def _record_call(
+        self,
+        method: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> CallRecord:
+        record = CallRecord(
+            method=method,
+            args=args,
+            kwargs=dict(kwargs),
+        )
+
+        self._calls.append(record)
+        return record
+
+    # ==================================================================
     # Reset
-    # ==========================================================
+    # ==================================================================
 
     def reset(self) -> "FakeTraceManager":
         """
-        Restore the manager to its initial state.
+        Reset the fake trace manager to a clean runtime state.
 
-        Removes all traces, spans, call history and execution
-        context so the same instance can be reused across tests.
+        Clears active tracing state, recorded objects, callback history,
+        completed-trace registry, and lifecycle observability fields.
         """
+
+        # --------------------------------------------------------------
+        # Recorded objects / call history
+        # --------------------------------------------------------------
 
         self._traces.clear()
         self._spans.clear()
         self._calls.clear()
 
+        # --------------------------------------------------------------
+        # Active runtime state
+        # --------------------------------------------------------------
+
         self._current_trace = None
         self._current_span = None
-
         self._span_stack.clear()
 
+        # --------------------------------------------------------------
+        # Completed trace registry
+        # --------------------------------------------------------------
+
+        self._completed_traces.clear()
+
+        # --------------------------------------------------------------
+        # Lifecycle observability
+        # --------------------------------------------------------------
+
+        self.start_trace_called = 0
+        self.finish_trace_called = 0
+
+        self.last_started_trace = None
+        self.last_finished_trace = None
+
         return self
-# ==========================================================
-# Trace Lifecycle
-# ==========================================================
-
-def start_trace(
-    self,
-    name: str,
-    *,
-    metadata: Metadata | None = None,
-    attributes: Attributes | None = None,
-) -> FakeTrace:
-    """
-    Create and activate a new trace.
-
-    The created trace becomes the current active trace.
-    Any previously active trace is replaced.
-
-    Parameters
-    ----------
-    name:
-        Trace name.
-
-    metadata:
-        Optional provenance metadata.
-
-    attributes:
-        Optional trace attributes.
-    """
-
-    trace = FakeTrace(name=name)
-
-    if metadata:
-        trace.metadata.update(metadata)
-
-    if attributes:
-        trace.attributes.update(attributes)
-
-    trace.start()
-
-    self._traces.append(trace)
-
-    self._current_trace = trace
-
-    self._calls.append(
-        CallRecord(
-            method="start_trace",
-            args=(name,),
-            kwargs={
-                "metadata": metadata,
-                "attributes": attributes,
-            },
-        )
-    )
-
-    return trace
 
 
-# ----------------------------------------------------------
+    # ==================================================================
+    # Trace lifecycle
+    # ==================================================================
 
+    def start_trace(
+        self,
+        name: str | None = None,
+        *,
+        metadata: Metadata | None = None,
+        attributes: Attributes | None = None,
+        **extra_attributes: Any,
+    ) -> FakeTrace:
 
-def finish_trace(
-    self,
-    trace: FakeTrace | None = None,
-    *,
-    status: FakeStatus = FakeStatus.SUCCESS,
-) -> FakeTrace | None:
-    """
-    Finish a trace.
+        self.start_trace_called += 1
 
-    If *trace* is omitted, the currently active trace
-    will be finished.
-    """
+        trace_attributes = dict(attributes or {})
+        trace_attributes.update(extra_attributes)
 
-    trace = trace or self._current_trace
-
-    if trace is None:
-        return None
-
-    trace.finish(status=status)
-
-    self._calls.append(
-        CallRecord(
-            method="finish_trace",
-            args=(trace,),
-            kwargs={
-                "status": status,
-            },
-        )
-    )
-
-    if trace is self._current_trace:
-        self._current_trace = None
-
-    return trace
-
-
-# ==========================================================
-# Active Trace Helpers
-# ==========================================================
-
-@property
-def active_trace(self) -> FakeTrace | None:
-    """
-    Alias for current_trace.
-
-    Mirrors APIs commonly found in tracing frameworks.
-    """
-
-    return self._current_trace
-
-
-@property
-def has_active_trace(self) -> bool:
-    """
-    True if a trace is currently active.
-    """
-
-    return self._current_trace is not None
-
-
-@property
-def trace_count(self) -> int:
-    """
-    Total number of created traces.
-    """
-
-    return len(self._traces)
-
-
-@property
-def last_trace(self) -> FakeTrace | None:
-    """
-    Most recently created trace.
-    """
-
-    if not self._traces:
-        return None
-
-    return self._traces[-1]
-
-
-# ==========================================================
-# Trace Queries
-# ==========================================================
-
-def get_trace(
-    self,
-    name: str,
-) -> FakeTrace | None:
-    """
-    Find the first trace having the given name.
-    """
-
-    for trace in self._traces:
-        if trace.name == name:
-            return trace
-
-    return None
-
-
-def iter_traces(self):
-    """
-    Iterate over all traces.
-    """
-
-    yield from self._traces
-# ==========================================================
-# Span Lifecycle
-# ==========================================================
-
-def start_span(
-    self,
-    name: str,
-    *,
-    trace: FakeTrace | None = None,
-    parent: FakeSpan | None = None,
-    attributes: Attributes | None = None,
-) -> FakeSpan:
-    """
-    Create and activate a new span.
-
-    Parent resolution order:
-
-        explicit parent
-            ↓
-        current active span
-            ↓
-        root span
-    """
-
-    trace = trace or self._current_trace
-
-    if trace is None:
-        raise RuntimeError(
-            "Cannot start a span without an active trace."
+        trace = FakeTrace(
+            name=name or "trace",
+            metadata=metadata,
+            attributes=trace_attributes,
         )
 
-    # ------------------------------------------------------
-    # Resolve parent
-    # ------------------------------------------------------
+        trace.start()
 
-    if parent is None:
-        parent = self._current_span
+        self._traces.append(trace)
+        self._current_trace = trace
 
-    span = FakeSpan(
-        name=name,
-        trace_id=trace.trace_id,
-        parent=parent,
-        parent_span_id=(
-            parent.span_id
-            if parent is not None
-            else None
-        ),
-    )
+        self.last_started_trace = trace
 
-    if attributes:
-        span.attributes.update(attributes)
+        self._current_span = None
+        self._span_stack.clear()
 
-    span.start()
-
-    # ------------------------------------------------------
-    # Attach hierarchy
-    # ------------------------------------------------------
-
-    if parent is not None:
-        parent.add_child(span)
-
-    # ------------------------------------------------------
-    # Register
-    # ------------------------------------------------------
-
-    self._spans.append(span)
-
-    self._current_span = span
-
-    self._span_stack.append(span)
-
-    self._calls.append(
-        CallRecord(
-            method="start_span",
-            args=(name,),
-            kwargs={
-                "trace": trace,
-                "parent": parent,
-                "attributes": attributes,
-            },
+        self._record_call(
+            "start_trace",
+            name,
+            metadata=metadata,
+            attributes=trace_attributes,
         )
-    )
 
-    return span
+        return trace
 
+    def set_status(
+        self,
+        status: FakeStatus | str,
+    ) -> "FakeTraceManager":
+        """
+        Set the status of the currently active trace.
 
-# ----------------------------------------------------------
+        Parameters
+        ----------
+        status:
+            A FakeStatus value or a supported string representation.
 
+        Returns
+        -------
+        FakeTraceManager
+            Self, for fluent usage.
 
-def finish_span(
-    self,
-    span: FakeSpan | None = None,
-    *,
-    status: FakeStatus = FakeStatus.SUCCESS,
-) -> FakeSpan | None:
-    """
-    Finish a span.
+        Raises
+        ------
+        ValueError
+            If the string status is not supported.
+        """
 
-    If span is omitted, the current active span
-    will be finished.
-    """
+        trace = self._current_trace
 
-    span = span or self._current_span
+        # No active trace: lifecycle operation is a safe no-op.
+        if trace is None:
+            return self
 
-    if span is None:
-        return None
+        # --------------------------------------------------------------
+        # Normalize string status
+        # --------------------------------------------------------------
 
-    span.finish(status=status)
+        if isinstance(status, str):
+            normalized = status.strip().lower()
 
-    self._calls.append(
-        CallRecord(
-            method="finish_span",
-            args=(span,),
-            kwargs={
-                "status": status,
-            },
+            if normalized == "success":
+                status = FakeStatus.SUCCESS
+
+            elif normalized in {
+                "error",
+                "failed",
+                "failure",
+            }:
+                status = FakeStatus.ERROR
+
+            else:
+                raise ValueError(
+                    f"Unsupported trace status: {status!r}"
+                )
+
+        # --------------------------------------------------------------
+        # Apply status
+        # --------------------------------------------------------------
+
+        trace.status = status
+
+        # --------------------------------------------------------------
+        # Record lifecycle operation
+        # --------------------------------------------------------------
+
+        self._record_call(
+            "set_status",
+            status,
         )
-    )
 
-    # ------------------------------------------------------
-    # Stack update
-    # ------------------------------------------------------
+        return self
 
-    if self._span_stack:
+    def finish_trace(
+        self,
+        trace: FakeTrace | None = None,
+        *,
+        status: FakeStatus | str | None = None,
+        **kwargs: Any,
+    ) -> FakeTrace | None:
+        self.finish_trace_called += 1
 
-        if self._span_stack[-1] is span:
+        trace = trace or self._current_trace
 
-            self._span_stack.pop()
+        if trace is None:
+            return None
 
-        else:
-            try:
-                self._span_stack.remove(span)
-            except ValueError:
-                pass
+        # --------------------------------------------------------------
+        # Resolve status.
+        # --------------------------------------------------------------
 
-    self._current_span = (
-        self._span_stack[-1]
-        if self._span_stack
-        else None
-    )
+        if status is None:
+            status = trace.status
 
-    return span
+        if isinstance(status, str):
+            normalized = status.strip().lower()
 
+            if normalized == "success":
+                status = FakeStatus.SUCCESS
 
-# ==========================================================
-# Active Span Helpers
-# ==========================================================
+            elif normalized in {
+                "error",
+                "failed",
+                "failure",
+            }:
+                status = FakeStatus.ERROR
 
-@property
-def active_span(self) -> FakeSpan | None:
-    """
-    Alias for current_span.
-    """
+            elif normalized in {
+                "unset",
+                "",
+            }:
+                status = FakeStatus.SUCCESS
 
-    return self._current_span
+            else:
+                raise ValueError(
+                    f"Unsupported trace status: {status!r}"
+                )
 
+        elif status is FakeStatus.UNSET:
+            # A trace that reaches normal completion without an
+            # explicit status is considered successful.
+            status = FakeStatus.SUCCESS
 
-@property
-def has_active_span(self) -> bool:
-    """
-    True if a span is currently active.
-    """
+        elif status not in {
+            FakeStatus.SUCCESS,
+            FakeStatus.ERROR,
+        }:
+            raise ValueError(
+                f"Unsupported trace status: {status!r}"
+            )
 
-    return self._current_span is not None
+        # --------------------------------------------------------------
+        # Record lifecycle call.
+        # --------------------------------------------------------------
 
+        self._record_call(
+            "finish_trace",
+            trace,
+            status=status,
+            **kwargs,
+        )
 
-@property
-def span_count(self) -> int:
-    """
-    Total number of spans.
-    """
+        self.last_finished_trace = trace
 
-    return len(self._spans)
+        # --------------------------------------------------------------
+        # Finalize trace.
+        # --------------------------------------------------------------
 
+        trace.finish(status=status)
 
-@property
-def last_span(self) -> FakeSpan | None:
-    """
-    Most recently created span.
-    """
+        self._completed_traces[trace.trace_id] = trace
 
-    if not self._spans:
-        return None
+        if trace is self._current_trace:
+            self._current_trace = None
+            self._current_span = None
+            self._span_stack.clear()
 
-    return self._spans[-1]
-
-
-# ==========================================================
-# Span Queries
-# ==========================================================
-
-def get_span(
-    self,
-    span_id: str,
-) -> FakeSpan | None:
-    """
-    Lookup a span by span_id.
-    """
-
-    for span in self._spans:
-        if span.span_id == span_id:
-            return span
-
-    return None
+        return trace
 
 
-def iter_spans(self):
-    """
-    Iterate over all spans.
-    """
+    # ==================================================================
+    # Span lifecycle
+    # ==================================================================
 
-    yield from self._spans
-# ==========================================================
-# Stack Management
-# ==========================================================
+    def start_span(
+        self,
+        name: str,
+        *,
+        trace: FakeTrace | None = None,
+        parent: FakeSpan | None = None,
+        attributes: Attributes | None = None,
+        **extra_attributes: Any,
+    ) -> FakeSpan:
+        """
+        Parent resolution:
 
-def push_span(self, span: FakeSpan) -> FakeSpan:
-    """
-    Push a span onto the active span stack.
+            explicit parent
+                â†“
+            current active span
+                â†“
+            root span
+        """
 
-    This method makes the supplied span the current active span.
-    It does not create or start the span.
-    """
+        trace = trace or self._current_trace
 
-    if span not in self._spans:
+        if trace is None:
+            raise RuntimeError(
+                "Cannot start a span without an active trace."
+            )
+
+        if parent is None:
+            parent = self._current_span
+
+        span_attributes = dict(attributes or {})
+        span_attributes.update(extra_attributes)
+
+        span = FakeSpan(
+            name=name,
+            trace_id=trace.trace_id,
+            parent=parent,
+            parent_span_id=(
+                parent.span_id
+                if parent is not None
+                else None
+            ),
+            attributes=span_attributes,
+        )
+
+        span.start()
+
+        if parent is not None:
+            parent.add_child(span)
+
+        trace.add_span(span)
+
         self._spans.append(span)
-
-    self._span_stack.append(span)
-    self._current_span = span
-
-    self._calls.append(
-        CallRecord(
-            method="push_span",
-            args=(span,),
-            kwargs={},
-        )
-    )
-
-    return span
-
-
-# ----------------------------------------------------------
-
-
-def pop_span(self) -> FakeSpan | None:
-    """
-    Pop the current active span from the stack.
-
-    Returns
-    -------
-    FakeSpan | None
-        Removed span or None if stack is empty.
-    """
-
-    if not self._span_stack:
-        return None
-
-    span = self._span_stack.pop()
-
-    self._current_span = (
-        self._span_stack[-1]
-        if self._span_stack
-        else None
-    )
-
-    self._calls.append(
-        CallRecord(
-            method="pop_span",
-            args=(span,),
-            kwargs={},
-        )
-    )
-
-    return span
-
-
-# ----------------------------------------------------------
-
-
-def peek_span(self) -> FakeSpan | None:
-    """
-    Return the current top span without removing it.
-    """
-
-    if not self._span_stack:
-        return None
-
-    return self._span_stack[-1]
-
-
-# ----------------------------------------------------------
-
-
-@property
-def stack_depth(self) -> int:
-    """
-    Current nesting depth of the span stack.
-    """
-
-    return len(self._span_stack)
-
-
-# ----------------------------------------------------------
-
-
-def clear_stack(self) -> None:
-    """
-    Remove every span from the active stack.
-
-    This does not delete spans from the manager registry.
-    Only execution context is cleared.
-    """
-
-    self._span_stack.clear()
-    self._current_span = None
-
-    self._calls.append(
-        CallRecord(
-            method="clear_stack",
-            args=(),
-            kwargs={},
-        )
-    )
-
-
-# ==========================================================
-# Convenience Helpers
-# ==========================================================
-
-@property
-def is_stack_empty(self) -> bool:
-    """
-    True if no active spans exist.
-    """
-
-    return not self._span_stack
-
-
-@property
-def stack(self) -> tuple[FakeSpan, ...]:
-    """
-    Immutable snapshot of the current stack.
-    """
-
-    return tuple(self._span_stack)
-
-
-def iter_stack(self):
-    """
-    Iterate from root span to current span.
-    """
-
-    yield from self._span_stack 
-# ==========================================================
-# Query API
-# ==========================================================
-
-@property
-def trace_count(self) -> int:
-    """
-    Total number of registered traces.
-    """
-    return len(self._traces)
-
-
-@property
-def span_count(self) -> int:
-    """
-    Total number of registered spans.
-    """
-    return len(self._spans)
-
-
-@property
-def last_trace(self) -> FakeTrace | None:
-    """
-    Return the most recently created trace.
-    """
-    if not self._traces:
-        return None
-
-    return self._traces[-1]
-
-
-@property
-def last_span(self) -> FakeSpan | None:
-    """
-    Return the most recently created span.
-    """
-    if not self._spans:
-        return None
-
-    return self._spans[-1]
-
-
-# ==========================================================
-# Trace Queries
-# ==========================================================
-
-def get_trace(
-    self,
-    *,
-    trace_id: str | None = None,
-    name: str | None = None,
-) -> FakeTrace | None:
-    """
-    Find a trace by identifier or name.
-
-    Parameters
-    ----------
-    trace_id:
-        Trace identifier.
-
-    name:
-        Trace name.
-
-    Notes
-    -----
-    If both arguments are supplied, trace_id has priority.
-    """
-
-    if trace_id is not None:
-        for trace in self._traces:
-            if trace.trace_id == trace_id:
-                return trace
-
-        return None
-
-    if name is not None:
-        for trace in self._traces:
-            if trace.name == name:
-                return trace
-
-    return None
-
-
-def has_trace(
-    self,
-    trace_id: str,
-) -> bool:
-    """
-    True if the specified trace exists.
-    """
-
-    return self.get_trace(trace_id=trace_id) is not None
-
-
-def iter_traces(self):
-    """
-    Iterate over traces in creation order.
-    """
-
-    yield from self._traces
-
-
-# ==========================================================
-# Span Queries
-# ==========================================================
-
-def get_span(
-    self,
-    *,
-    span_id: str | None = None,
-    name: str | None = None,
-) -> FakeSpan | None:
-    """
-    Find a span by identifier or name.
-    """
-
-    if span_id is not None:
-        for span in self._spans:
-            if span.span_id == span_id:
-                return span
-
-        return None
-
-    if name is not None:
-        for span in self._spans:
-            if span.name == name:
-                return span
-
-    return None
-
-
-def has_span(
-    self,
-    span_id: str,
-) -> bool:
-    """
-    True if the specified span exists.
-    """
-
-    return self.get_span(span_id=span_id) is not None
-
-
-def iter_spans(self):
-    """
-    Iterate over spans in creation order.
-    """
-
-    yield from self._spans
-
-
-# ==========================================================
-# Collection Helpers
-# ==========================================================
-
-def find_traces(
-    self,
-    predicate,
-):
-    """
-    Return every trace satisfying the predicate.
-    """
-
-    return [
-        trace
-        for trace in self._traces
-        if predicate(trace)
-    ]
-
-
-def find_spans(
-    self,
-    predicate,
-):
-    """
-    Return every span satisfying the predicate.
-    """
-
-    return [
-        span
-        for span in self._spans
-        if predicate(span)
-    ]
-
-
-def traces_by_status(
-    self,
-    status: FakeStatus,
-):
-    """
-    Return traces having the specified status.
-    """
-
-    return [
-        trace
-        for trace in self._traces
-        if trace.status == status
-    ]
-
-
-def spans_by_status(
-    self,
-    status: FakeStatus,
-):
-    """
-    Return spans having the specified status.
-    """
-
-    return [
-        span
-        for span in self._spans
-        if span.status == status
-    ]   
-
-
-from contextlib import contextmanager
-from typing import Iterator
-
-
-# ==========================================================
-# Context Managers
-# ==========================================================
-
-@contextmanager
-def trace_scope(
-    self,
-    name: str,
-    *,
-    metadata: Metadata | None = None,
-    attributes: Attributes | None = None,
-) -> Iterator[FakeTrace]:
-    """
-    Context manager for an entire trace.
-
-    Example
-    -------
-    >>> with manager.trace_scope("Runtime") as trace:
-    ...     ...
-
-    The trace is always finished, even if an exception occurs.
-    """
-
-    trace = self.start_trace(
-        name,
-        metadata=metadata,
-        attributes=attributes,
-    )
-
-    try:
-        yield trace
-
-    except Exception as exc:
-
-        trace.record_exception(exc)
-
-        self.finish_trace(
-            trace,
-            status=FakeStatus.ERROR,
+        self._span_stack.append(span)
+        self._current_span = span
+
+        self._record_call(
+            "start_span",
+            name,
+            trace=trace,
+            parent=parent,
+            attributes=span_attributes,
         )
 
-        raise
+        return span
 
-    else:
+    def finish_span(
+        self,
+        span: FakeSpan | None = None,
+        *,
+        status: FakeStatus = FakeStatus.SUCCESS,
+        **kwargs: Any,
+    ) -> FakeSpan | None:
+        span = span or self._current_span
 
-        self.finish_trace(
-            trace,
-            status=FakeStatus.SUCCESS,
+        self._record_call(
+            "finish_span",
+            span,
+            status=status,
+            **kwargs,
         )
 
+        if span is None:
+            return None
 
-# ----------------------------------------------------------
+        if not span.finished:
+            span.finish(status=status)
 
+        if self._span_stack:
+            if self._span_stack[-1] is span:
+                self._span_stack.pop()
+            else:
+                try:
+                    self._span_stack.remove(span)
+                except ValueError:
+                    pass
 
-@contextmanager
-def span_scope(
-    self,
-    name: str,
-    *,
-    trace: FakeTrace | None = None,
-    parent: FakeSpan | None = None,
-    attributes: Attributes | None = None,
-) -> Iterator[FakeSpan]:
-    """
-    Context manager for a span.
+        self._current_span = (
+            self._span_stack[-1]
+            if self._span_stack
+            else None
+        )
 
-    Parent resolution follows the same rules as
-    start_span().
-    """
+        return span
 
-    span = self.start_span(
-        name,
-        trace=trace,
-        parent=parent,
-        attributes=attributes,
-    )
+    # ==================================================================
+    # Stack management
+    # ==================================================================
 
-    try:
-        yield span
+    def push_span(self, span: FakeSpan) -> FakeSpan:
+        if span not in self._spans:
+            self._spans.append(span)
 
-    except Exception as exc:
+        if span not in self._span_stack:
+            self._span_stack.append(span)
+
+        self._current_span = span
+
+        self._record_call("push_span", span)
+
+        return span
+
+    def pop_span(self) -> FakeSpan | None:
+        if not self._span_stack:
+            return None
+
+        span = self._span_stack.pop()
+
+        self._current_span = (
+            self._span_stack[-1]
+            if self._span_stack
+            else None
+        )
+
+        self._record_call("pop_span", span)
+
+        return span
+
+    def peek_span(self) -> FakeSpan | None:
+        return self._span_stack[-1] if self._span_stack else None
+
+    # ==================================================================
+    # Events
+    # ==================================================================
+
+    def emit(
+        self,
+        name: str,
+        *,
+        phase: str = "runtime",
+        **attributes: Any,
+    ) -> FakeEvent:
+        """
+        Emit a tracing event through the manager's processor path.
+
+        Events require an active span.
+        """
+
+        target = self._current_span
+
+        if target is None:
+            raise RuntimeError(
+                "Cannot emit an event without an active span."
+            )
+
+        event = FakeEvent(
+            name=name,
+            phase=phase,
+            attributes=attributes,
+        )
+
+        events = getattr(target, "events", None)
+
+        if events is not None:
+            events.append(event)
+
+        processor = self._processor
+
+        if processor is not None:
+            processor.on_event(
+                target,
+                event,
+            )
+
+        self._record_call(
+            "emit",
+            name,
+            phase=phase,
+            attributes=dict(attributes),
+        )
+
+        return event
+
+    def add_event(
+        self,
+        event: FakeEvent,
+    ) -> FakeEvent:
+        span = self._current_span
+
+        if span is None:
+            raise RuntimeError(
+                "Cannot add an event without an active span."
+            )
+
+        if not isinstance(event, FakeEvent):
+            raise TypeError(
+                "event must be a FakeEvent instance."
+            )
+
+        span.events.append(event)
+
+        self._record_call(
+            "add_event",
+            event,
+        )
+
+        return event
+
+    def clear_stack(self) -> None:
+        self._span_stack.clear()
+        self._current_span = None
+
+        self._record_call("clear_stack")
+
+    def iter_stack(self) -> Iterator[FakeSpan]:
+        yield from self._span_stack
+
+    def record_exception(
+        self,
+        exc: BaseException,
+    ) -> FakeEvent:
+        span = self._current_span
+
+        if span is None:
+            raise RuntimeError(
+                "Cannot record an exception without an active span."
+            )
+
+        event = FakeEvent(
+            name="exception",
+            phase="exception",
+            attributes={
+                "exception.type": type(exc).__name__,
+                "exception.message": str(exc),
+            },
+        )
+
+        span.events.append(event)
 
         span.record_exception(exc)
 
-        self.finish_span(
-            span,
-            status=FakeStatus.ERROR,
+        self._record_call(
+            "record_exception",
+            exc,
         )
 
-        raise
+        return event
 
-    else:
+    def validate_span_stack(self) -> bool:
+        if not self._span_stack:
+            return True
 
-        self.finish_span(
-            span,
-            status=FakeStatus.SUCCESS,
+        return (
+            self.current_span is self._span_stack[-1]
+            and all(
+                self._span_stack[i].parent_span_id
+                == self._span_stack[i - 1].span_id
+                for i in range(1, len(self._span_stack))
+            )
         )
 
+    # ==================================================================
+    # Trace queries
+    # ==================================================================
 
-# ==========================================================
-# Convenience Helpers
-# ==========================================================
+    def get_trace(
+        self,
+        name: str | None = None,
+        *,
+        trace_id: str | None = None,
+    ) -> FakeTrace | None:
+        if trace_id is not None:
+            for trace in self._traces:
+                if trace.trace_id == trace_id:
+                    return trace
 
-def run_in_trace(
-    self,
-    name: str,
-    func,
-    *args,
-    **kwargs,
-):
-    """
-    Execute a callable inside a trace.
-    """
+            return None
 
-    with self.trace_scope(name):
-        return func(*args, **kwargs)
+        if name is not None:
+            for trace in self._traces:
+                if trace.name == name:
+                    return trace
 
+        return None
 
-def run_in_span(
-    self,
-    name: str,
-    func,
-    *args,
-    **kwargs,
-):
-    """
-    Execute a callable inside a span.
-    """
+    def has_trace(self, trace_id: str) -> bool:
+        return self.get_trace(trace_id=trace_id) is not None
 
-    with self.span_scope(name):
-        return func(*args, **kwargs)
-# ==========================================================
-# Utilities
-# ==========================================================
+    def iter_traces(self) -> Iterator[FakeTrace]:
+        yield from self._traces
 
-from copy import deepcopy
+    # ==================================================================
+    # Span queries
+    # ==================================================================
 
+    def get_span(
+        self,
+        name: str | None = None,
+        *,
+        span_id: str | None = None,
+    ) -> FakeSpan | None:
+        if span_id is not None:
+            for span in self._spans:
+                if span.span_id == span_id:
+                    return span
 
-def to_dict(self) -> dict[str, object]:
-    """
-    Serialize the manager into a dictionary suitable for
-    debugging, snapshot testing, and assertions.
+            return None
 
-    Returns
-    -------
-    dict
-        Serializable representation of the manager.
-    """
+        if name is not None:
+            for span in self._spans:
+                if span.name == name:
+                    return span
 
-    return {
-        "trace_count": self.trace_count,
-        "span_count": self.span_count,
-        "current_trace": (
-            self._current_trace.trace_id
-            if self._current_trace
-            else None
-        ),
-        "current_span": (
-            self._current_span.span_id
-            if self._current_span
-            else None
-        ),
-        "stack_depth": self.stack_depth,
-        "traces": [
-            trace.to_dict()
+        return None
+
+    def has_span(self, span_id: str) -> bool:
+        return self.get_span(span_id=span_id) is not None
+
+    def iter_spans(self) -> Iterator[FakeSpan]:
+        yield from self._spans
+
+    # ==================================================================
+    # Collection queries
+    # ==================================================================
+
+    def find_traces(
+        self,
+        predicate: Callable[[FakeTrace], bool],
+    ) -> list[FakeTrace]:
+        return [
+            trace
             for trace in self._traces
-        ],
-        "spans": [
-            span.to_dict()
+            if predicate(trace)
+        ]
+
+    def find_spans(
+        self,
+        predicate: Callable[[FakeSpan], bool],
+    ) -> list[FakeSpan]:
+        return [
+            span
             for span in self._spans
-        ],
-        "calls": [
-            {
-                "method": call.method,
-                "args": call.args,
-                "kwargs": call.kwargs,
-            }
-            for call in self._calls
-        ],
-    }
+            if predicate(span)
+        ]
+
+    def traces_by_status(
+        self,
+        status: FakeStatus,
+    ) -> list[FakeTrace]:
+        return [
+            trace
+            for trace in self._traces
+            if trace.status == status
+        ]
+
+    def spans_by_status(
+        self,
+        status: FakeStatus,
+    ) -> list[FakeSpan]:
+        return [
+            span
+            for span in self._spans
+            if span.status == status
+        ]
+
+    # ==================================================================
+    # Context managers
+    # ==================================================================
+
+    @contextmanager
+    def trace_scope(
+        self,
+        name: str,
+        *,
+        metadata: Metadata | None = None,
+        attributes: Attributes | None = None,
+    ) -> Iterator[FakeTrace]:
+        trace = self.start_trace(
+            name,
+            metadata=metadata,
+            attributes=attributes,
+        )
+
+        try:
+            yield trace
+
+        except Exception as exc:
+            trace.record_exception(exc)
+            self.finish_trace(
+                trace,
+                status=FakeStatus.ERROR,
+            )
+            raise
+
+        else:
+            self.finish_trace(
+                trace,
+                status=FakeStatus.SUCCESS,
+            )
+
+    @contextmanager
+    def span_scope(
+        self,
+        name: str,
+        *,
+        trace: FakeTrace | None = None,
+        parent: FakeSpan | None = None,
+        attributes: Attributes | None = None,
+    ) -> Iterator[FakeSpan]:
+        span = self.start_span(
+            name,
+            trace=trace,
+            parent=parent,
+            attributes=attributes,
+        )
+
+        try:
+            yield span
+
+        except Exception as exc:
+            span.record_exception(exc)
+            self.finish_span(
+                span,
+                status=FakeStatus.ERROR,
+            )
+            raise
+
+        else:
+            self.finish_span(
+                span,
+                status=FakeStatus.SUCCESS,
+            )
+
+    # ==================================================================
+    # Execution helpers
+    # ==================================================================
+
+    def run_in_trace(
+        self,
+        name: str,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        with self.trace_scope(name):
+            return func(*args, **kwargs)
+
+    def run_in_span(
+        self,
+        name: str,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        with self.span_scope(name):
+            return func(*args, **kwargs)
+
+    # ==================================================================
+    # Serialization / snapshots
+    # ==================================================================
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trace_count": self.trace_count,
+            "span_count": self.span_count,
+            "current_trace": (
+                self._current_trace.trace_id
+                if self._current_trace is not None
+                else None
+            ),
+            "current_span": (
+                self._current_span.span_id
+                if self._current_span is not None
+                else None
+            ),
+            "stack_depth": self.stack_depth,
+            "traces": [
+                trace.to_dict()
+                for trace in self._traces
+            ],
+            "spans": [
+                span.to_dict()
+                for span in self._spans
+            ],
+            "calls": [
+                {
+                    "method": call.method,
+                    "args": call.args,
+                    "kwargs": call.kwargs,
+                }
+                for call in self._calls
+            ],
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        return self.to_dict()
+
+    def copy(self) -> "FakeTraceManager":
+        return deepcopy(self)
+
+    def state_summary(self) -> dict[str, Any]:
+        return {
+            "trace_count": self.trace_count,
+            "span_count": self.span_count,
+            "active_trace": self.has_active_trace,
+            "active_span": self.has_active_span,
+            "stack_depth": self.stack_depth,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"traces={self.trace_count}, "
+            f"spans={self.span_count}, "
+            f"active_trace={self.has_active_trace}, "
+            f"active_span={self.has_active_span}, "
+            f"stack_depth={self.stack_depth}"
+            f")"
+        )
 
 
-# ----------------------------------------------------------
-
-
-def snapshot(self) -> dict[str, object]:
-    """
-    Alias for to_dict().
-
-    Intended for snapshot-based unit tests.
-    """
-
-    return self.to_dict()
-
-
-# ----------------------------------------------------------
-
-
-def copy(self) -> "FakeTraceManager":
-    """
-    Return a deep copy of the manager.
-
-    Useful when comparing state before/after an operation.
-    """
-
-    return deepcopy(self)
-
-
-# ----------------------------------------------------------
-
-
-def state_summary(self) -> dict[str, object]:
-    """
-    Lightweight summary of runtime state.
-
-    Suitable for assertions and debugging.
-    """
-
-    return {
-        "trace_count": self.trace_count,
-        "span_count": self.span_count,
-        "active_trace": self.has_active_trace,
-        "active_span": self.has_active_span,
-        "stack_depth": self.stack_depth,
-    }
-
-
-# ----------------------------------------------------------
-
-
-def __repr__(self) -> str:
-    """
-    Human-readable representation for debugging.
-    """
-
-    return (
-        f"{self.__class__.__name__}("
-        f"traces={self.trace_count}, "
-        f"spans={self.span_count}, "
-        f"active_trace={self.has_active_trace}, "
-        f"active_span={self.has_active_span}, "
-        f"stack_depth={self.stack_depth}"
-        f")"
-    )
 # ============================================================================
 # FakeProcessor
 # ============================================================================
-
-
-from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass(slots=True)
@@ -2732,54 +1684,268 @@ class ProcessorCall:
     """
 
     method: str
-    target: Any
+    target: Any = None
     success: bool | None = None
     error: Exception | None = None
     kwargs: dict[str, Any] = field(default_factory=dict)
 
 
+# ============================================================================
+# FakeProcessor
+# ============================================================================
+
 class FakeProcessor:
     """
-    Records every processor callback for assertions.
+    Test double for the tracing processor.
 
-    The fake intentionally performs no processing.
-    It only records callback history.
+    Records every processor callback without transforming tracing objects.
     """
 
     def __init__(self) -> None:
         self.calls: list[ProcessorCall] = []
+
+        # Legacy/helper counters
+        self._started_spans = 0
+        self._finished_spans = 0
+        self._events: list[str] = []
+
+        # Processing state
+        self.processed = False
+        self.processed_spans: list[Any] = []
+
+        # Runtime state
+        self._enabled = True
+        self._manager = None
+        self._trace = None
+        self._current_span = None
+        self._context = None
+        self._span_stack: list[Any] = []
+
+        # Lifecycle counters
+        self.trace_started = 0
+        self.trace_finished = 0
+
+        self.span_started = 0
+        self.span_finished = 0
+
+        self.event_processed = 0
+        self.attribute_processed = 0
+        self.status_processed = 0
+        self.exception_processed = 0
+
+        # Last callback payloads
+        self.last_trace = None
+        self.last_span = None
+        self.last_event = None
+
+    # ------------------------------------------------------------------
+    # Processing
+    # ------------------------------------------------------------------
+
+    def process(self, span) -> Any:
+        self.processed = True
+        self.processed_spans.append(span)
+
+        self.calls.append(
+            ProcessorCall(
+                method="process",
+                target=span,
+            )
+        )
+
+        return span
+
+    # ------------------------------------------------------------------
+    # Trace lifecycle
+    # ------------------------------------------------------------------
+
+    def on_trace_start(self, trace) -> None:
+        self.trace_started += 1
+        self.last_trace = trace
+        self._trace = trace
+        self._events.append("trace_start")
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_trace_start",
+                target=trace,
+            )
+        )
+
+    def on_trace_finish(
+        self,
+        trace,
+        *,
+        success: bool = True,
+    ) -> None:
+        self.trace_finished += 1
+        self.last_trace = trace
+        self._trace = trace
+        self._events.append("trace_finish")
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_trace_finish",
+                target=trace,
+                success=success,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Span lifecycle
+    # ------------------------------------------------------------------
+
+    def on_span_start(self, span) -> None:
+        self.span_started += 1
+        self._started_spans += 1
+        self.last_span = span
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_span_start",
+                target=span,
+            )
+        )
+
+    def on_span_finish(self, span) -> None:
+        self.span_finished += 1
+        self._finished_spans += 1
+        self.last_span = span
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_span_finish",
+                target=span,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Event / attribute / status / exception
+    # ------------------------------------------------------------------
+
+    def on_event(self, obj, event) -> None:
+        self._events.append("event")
+        self.event_processed += 1
+        self.last_event = event
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_event",
+                target=obj,
+                kwargs={"event": event},
+            )
+        )
+
+    def on_attribute(
+        self,
+        obj,
+        key,
+        value,
+    ) -> None:
+        self.attribute_processed += 1
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_attribute",
+                target=obj,
+                kwargs={
+                    "key": key,
+                    "value": value,
+                },
+            )
+        )
+
+    def on_status(
+        self,
+        obj,
+        status,
+    ) -> None:
+        self.status_processed += 1
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_status",
+                target=obj,
+                kwargs={
+                    "status": status,
+                },
+            )
+        )
+
+    def on_exception(
+        self,
+        obj,
+        exc: Exception,
+    ) -> None:
+        self.exception_processed += 1
+
+        self.calls.append(
+            ProcessorCall(
+                method="on_exception",
+                target=obj,
+                error=exc,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Runtime lifecycle
     # ------------------------------------------------------------------
 
     def before_runtime(self, trace) -> None:
+        """
+        Compatibility callback for runtime lifecycle.
+
+        Runtime tests should normally use on_trace_start/on_trace_finish.
+        """
+
+        self.trace_started += 1
+        self.last_trace = trace
+        self._trace = trace
+        self._events.append("trace_start")
+
         self.calls.append(
-            ProcessorCall("before_runtime", trace)
+            ProcessorCall(
+                method="before_runtime",
+                target=trace,
+            )
         )
 
     def after_runtime(
         self,
         trace,
-        success: bool,
+        success: bool = True,
         error: Exception | None = None,
     ) -> None:
+        """
+        Compatibility callback for runtime lifecycle.
+        """
+
+        self.trace_finished += 1
+        self.last_trace = trace
+        self._trace = trace
+        self._events.append("trace_finish")
+
         self.calls.append(
             ProcessorCall(
-                "after_runtime",
-                trace,
-                success,
-                error,
+                method="after_runtime",
+                target=trace,
+                success=success,
+                error=error,
             )
         )
 
     # ------------------------------------------------------------------
-    # Stage lifecycle
+    # Stage
     # ------------------------------------------------------------------
 
     def before_stage(self, span) -> None:
+        self._current_span = span
+
         self.calls.append(
-            ProcessorCall("before_stage", span)
+            ProcessorCall(
+                method="before_stage",
+                target=span,
+            )
         )
 
     def after_stage(
@@ -2790,20 +1956,27 @@ class FakeProcessor:
     ) -> None:
         self.calls.append(
             ProcessorCall(
-                "after_stage",
-                span,
-                success,
-                error,
+                method="after_stage",
+                target=span,
+                success=success,
+                error=error,
             )
         )
 
     # ------------------------------------------------------------------
-    # Task lifecycle
+    # Task
     # ------------------------------------------------------------------
 
     def before_task(self, span) -> None:
+        self._started_spans += 1
+        self.span_started += 1
+        self.last_span = span
+
         self.calls.append(
-            ProcessorCall("before_task", span)
+            ProcessorCall(
+                method="before_task",
+                target=span,
+            )
         )
 
     def after_task(
@@ -2812,65 +1985,76 @@ class FakeProcessor:
         success: bool,
         error: Exception | None = None,
     ) -> None:
+        self._finished_spans += 1
+        self.span_finished += 1
+        self.last_span = span
+
         self.calls.append(
             ProcessorCall(
-                "after_task",
-                span,
-                success,
-                error,
+                method="after_task",
+                target=span,
+                success=success,
+                error=error,
             )
         )
 
     # ------------------------------------------------------------------
-    # Generic callbacks
+    # Generic lifecycle
     # ------------------------------------------------------------------
 
     def on_start(self, obj) -> None:
         self.calls.append(
-            ProcessorCall("on_start", obj)
+            ProcessorCall(
+                method="on_start",
+                target=obj,
+            )
         )
 
     def on_end(self, obj) -> None:
         self.calls.append(
-            ProcessorCall("on_end", obj)
-        )
-
-    def on_event(self, obj, event) -> None:
-        self.calls.append(
             ProcessorCall(
-                "on_event",
-                obj,
-                kwargs={"event": event},
-            )
-        )
-
-    def on_exception(self, obj, exc: Exception) -> None:
-        self.calls.append(
-            ProcessorCall(
-                "on_exception",
-                obj,
-                error=exc,
+                method="on_end",
+                target=obj,
             )
         )
 
     def on_export(self, obj) -> None:
         self.calls.append(
-            ProcessorCall("on_export", obj)
+            ProcessorCall(
+                method="on_export",
+                target=obj,
+            )
         )
 
     def flush(self) -> None:
         self.calls.append(
-            ProcessorCall("flush", None)
+            ProcessorCall(method="flush")
         )
 
     def shutdown(self) -> None:
         self.calls.append(
-            ProcessorCall("shutdown", None)
+            ProcessorCall(method="shutdown")
         )
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @property
+    def events(self) -> list[str]:
+        return list(self._events)
+
+    @property
+    def started_spans(self) -> int:
+        return self._started_spans
+
+    @property
+    def finished_spans(self) -> int:
+        return self._finished_spans
 
     @property
     def call_count(self) -> int:
@@ -2880,21 +2064,65 @@ class FakeProcessor:
     def last_call(self) -> ProcessorCall | None:
         return self.calls[-1] if self.calls else None
 
-    def was_called(self, method: str) -> bool:
-        return any(c.method == method for c in self.calls)
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-    def calls_for(self, method: str) -> list[ProcessorCall]:
+    def was_called(self, method: str) -> bool:
+        return any(
+            call.method == method
+            for call in self.calls
+        )
+
+    def calls_for(
+        self,
+        method: str,
+    ) -> list[ProcessorCall]:
         return [
-            c
-            for c in self.calls
-            if c.method == method
+            call
+            for call in self.calls
+            if call.method == method
         ]
 
     def call_order(self) -> list[str]:
-        return [c.method for c in self.calls]
+        return [
+            call.method
+            for call in self.calls
+        ]
+
+    # ------------------------------------------------------------------
+    # Reset
+    # ------------------------------------------------------------------
 
     def clear(self) -> None:
         self.calls.clear()
+
+        self._started_spans = 0
+        self._finished_spans = 0
+        self._events.clear()
+
+        self.processed = False
+        self.processed_spans.clear()
+
+        self.trace_started = 0
+        self.trace_finished = 0
+
+        self.span_started = 0
+        self.span_finished = 0
+
+        self.event_processed = 0
+        self.attribute_processed = 0
+        self.status_processed = 0
+        self.exception_processed = 0
+
+        self.last_trace = None
+        self.last_span = None
+        self.last_event = None
+
+        self._trace = None
+        self._current_span = None
+        self._context = None
+        self._span_stack.clear()
 
     reset = clear
 
@@ -2906,59 +2134,149 @@ class FakeProcessor:
 
 class FakeExporter:
     """
-    Fake exporter recording export ordering.
+    Lightweight exporter fake for tracing tests.
+
+    Records trace exports explicitly so runtime plugin tests can assert:
+
+    - number of trace exports
+    - exported trace payload
+    - exporter ordering
+    - exactly-once semantics
+    - lifecycle calls
     """
 
     def __init__(self) -> None:
-
         self.exports: list[tuple[str, Any]] = []
 
-        self.exported_traces = []
-        self.exported_spans = []
-        self.exported_metrics = []
-        self.exported_logs = []
+        # --------------------------------------------------------------
+        # Exported payloads
+        # --------------------------------------------------------------
+
+        self.exported_traces: list[Any] = []
+        self.exported_spans: list[Any] = []
+        self.exported_metrics: list[Any] = []
+        self.exported_logs: list[Any] = []
+
+        # --------------------------------------------------------------
+        # General state
+        # --------------------------------------------------------------
+
+        self.exported = False
+
+        # --------------------------------------------------------------
+        # Lifecycle state
+        # --------------------------------------------------------------
 
         self.flushed = False
         self.closed = False
         self.shutdown_called = False
 
+        # Lifecycle counters
         self.flush_count = 0
         self.shutdown_count = 0
 
     # ------------------------------------------------------------------
+    # Trace export
+    # ------------------------------------------------------------------
 
-    def export_trace(self, trace) -> None:
-
+    def export_trace(self, trace: Any) -> None:
+        self.exported = True
         self.exported_traces.append(trace)
-        self.exports.append(("trace", trace))
 
-    def export_span(self, span) -> None:
+        self.exports.append(
+            ("trace", trace)
+        )
 
+    # ------------------------------------------------------------------
+    # Generic export
+    # ------------------------------------------------------------------
+
+    def export(self, item: Any) -> None:
+        self.exported = True
+
+        self.exports.append(
+            ("generic", item)
+        )
+
+        # Runtime TracePlugin currently calls export(trace).
+        self.exported_traces.append(item)
+
+    # ------------------------------------------------------------------
+    # Other export types
+    # ------------------------------------------------------------------
+
+    def export_span(self, span: Any) -> None:
+        self.exported = True
         self.exported_spans.append(span)
-        self.exports.append(("span", span))
 
-    def export_metric(self, metric) -> None:
+        self.exports.append(
+            ("span", span)
+        )
 
+    def export_metric(self, metric: Any) -> None:
+        self.exported = True
         self.exported_metrics.append(metric)
-        self.exports.append(("metric", metric))
 
-    def export_log(self, record) -> None:
+        self.exports.append(
+            ("metric", metric)
+        )
 
+    def export_log(self, record: Any) -> None:
+        self.exported = True
         self.exported_logs.append(record)
-        self.exports.append(("log", record))
 
+        self.exports.append(
+            ("log", record)
+        )
+
+    # ------------------------------------------------------------------
+    # Runtime-test compatibility
+    # ------------------------------------------------------------------
+
+    @property
+    def trace_exports(self) -> int:
+        return len(self.exported_traces)
+
+    @property
+    def last_trace(self) -> Any:
+        return (
+            self.exported_traces[-1]
+            if self.exported_traces
+            else None
+        )
+
+    # ------------------------------------------------------------------
+    # Lifecycle
     # ------------------------------------------------------------------
 
     def flush(self) -> None:
-
         self.flushed = True
         self.flush_count += 1
 
     def shutdown(self) -> None:
-
         self.shutdown_called = True
         self.closed = True
         self.shutdown_count += 1
+
+    # ------------------------------------------------------------------
+    # Compatibility aliases
+    # ------------------------------------------------------------------
+
+    @property
+    def flush_called(self) -> bool:
+        """
+        Backward-compatible alias.
+
+        ``flushed`` is the canonical lifecycle state.
+        """
+        return self.flushed
+
+    @property
+    def shutdown_called_flag(self) -> bool:
+        """
+        Compatibility alias for explicit lifecycle assertions.
+        """
+        return self.shutdown_called
 
     # ------------------------------------------------------------------
     # Helpers
@@ -2969,25 +2287,22 @@ class FakeExporter:
         return len(self.exports)
 
     @property
-    def last_export(self):
-
-        if not self.exports:
-            return None
-
-        return self.exports[-1]
+    def last_export(self) -> tuple[str, Any] | None:
+        return self.exports[-1] if self.exports else None
 
     @property
     def has_exports(self) -> bool:
         return bool(self.exports)
 
     def clear(self) -> None:
-
         self.exports.clear()
 
         self.exported_traces.clear()
         self.exported_spans.clear()
         self.exported_metrics.clear()
         self.exported_logs.clear()
+
+        self.exported = False
 
         self.flushed = False
         self.closed = False
@@ -2999,6 +2314,7 @@ class FakeExporter:
     reset = clear
 
 
+
 # ============================================================================
 # FakeClock
 # ============================================================================
@@ -3006,33 +2322,31 @@ class FakeExporter:
 
 class FakeClock:
     """
-    Deterministic clock for repeatable unit tests.
+    Deterministic clock for repeatable tests.
     """
 
     def __init__(self) -> None:
-
         self._time = 0.0
-
         self._frozen = False
 
         self.history: list[float] = []
-
         self.tick_count = 0
 
+    # ------------------------------------------------------------------
+    # Time
     # ------------------------------------------------------------------
 
     def now(self) -> float:
         return self._time
 
-    # ------------------------------------------------------------------
+    def time(self) -> float:
+        return self._time
 
-    def advance(
-        self,
-        seconds: float = 1.0,
-    ) -> float:
+    def advance(self, seconds: float = 1.0) -> float:
+        if seconds < 0:
+            raise ValueError("seconds must be non-negative")
 
         if not self._frozen:
-
             self._time += seconds
 
         self.tick_count += 1
@@ -3040,55 +2354,113 @@ class FakeClock:
 
         return self._time
 
-    def advance_ms(
-        self,
-        milliseconds: float,
-    ) -> float:
+    def advance_ms(self, milliseconds: float) -> float:
+        return self.advance(milliseconds / 1_000.0)
 
-        return self.advance(milliseconds / 1000.0)
+    def advance_ns(self, nanoseconds: int) -> float:
+        return self.advance(
+            nanoseconds / 1_000_000_000
+        )
 
-    def advance_ns(
-        self,
-        nanoseconds: int,
-    ) -> float:
-
-        return self.advance(nanoseconds / 1_000_000_000)
-
+    # ------------------------------------------------------------------
+    # Freeze
     # ------------------------------------------------------------------
 
     def freeze(self) -> None:
+        """
+        Freeze the clock at its current time.
+
+        While frozen, calls to ``advance()`` do not change the current
+        time, although the call is still recorded in ``history`` and
+        ``tick_count``.
+        """
         self._frozen = True
 
     def resume(self) -> None:
+        """
+        Resume normal clock advancement.
+        """
         self._frozen = False
 
+    @property
+    def trace_exports(self) -> int:
+        return len(self.exported_traces)
+
+
+    @property
+    def last_trace(self) -> Any | None:
+        return (
+            self.exported_traces[-1]
+            if self.exported_traces
+            else None
+        )
+
+    @property
+    def frozen(self) -> bool:
+        """
+        Return whether the clock is currently frozen.
+        """
+        return self._frozen
+
+    @contextmanager
+    def frozen_scope(self) -> Iterator["FakeClock"]:
+        """
+        Temporarily freeze the clock within a context.
+
+        The previous frozen state is restored when leaving the context,
+        including when an exception is raised.
+
+        Examples
+        --------
+        >>> clock = FakeClock()
+        >>> clock.advance(5.0)
+        5.0
+        >>> with clock.frozen_scope():
+        ...     clock.advance(10.0)
+        5.0
+        >>> clock.advance(2.0)
+        7.0
+        """
+        previous = self._frozen
+        self._frozen = True
+
+        try:
+            yield self
+        finally:
+            self._frozen = previous
+
+    # ------------------------------------------------------------------
+    # History
     # ------------------------------------------------------------------
 
     @property
     def last_tick(self) -> float | None:
+        return self.history[-1] if self.history else None
 
-        if not self.history:
-            return None
-
-        return self.history[-1]
-
-    # ------------------------------------------------------------------
-
-    def reset(self) -> None:
-
+    def reset(self) -> "FakeClock":
         self._time = 0.0
         self._frozen = False
-
         self.history.clear()
         self.tick_count = 0
 
-    # ------------------------------------------------------------------
+        return self
 
-    def __repr__(self) -> str:
 
-        return (
-            f"{self.__class__.__name__}("
-            f"time={self._time:.6f}, "
-            f"ticks={self.tick_count}, "
-            f"frozen={self._frozen})"
-        )                                                                       
+# ============================================================================
+# Public API
+# ============================================================================
+
+
+__all__ = [
+    "Attributes",
+    "Metadata",
+    "FakeStatus",
+    "CallRecord",
+    "FakeTrace",
+    "FakeSpan",
+    "FakeTraceManager",
+    "ProcessorCall",
+    "FakeProcessor",
+    "FakeExporter",
+    "FakeClock",
+]

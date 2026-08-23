@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, TypeAlias
 from uuid import uuid4
+from typing import Any, Mapping, Optional
+
 
 from .enums import (
     ExecutionPhase,
@@ -109,7 +111,7 @@ class Event:
 
     name: str = DEFAULT_EVENT_NAME
 
-    phase: ExecutionPhase = DEFAULT_EVENT_PHASE
+    phase: ExecutionPhase | str = DEFAULT_EVENT_PHASE
 
     timestamp: datetime = field(
         default_factory=utcnow
@@ -148,7 +150,16 @@ class Event:
     def __post_init__(self) -> None:
         """
         Validate and normalize the event.
+
+        ``phase`` supports both canonical ``ExecutionPhase`` values and
+        extensible string phases such as ``"runtime"``, ``"exception"``,
+        ``"io"``, or ``"network"``.
         """
+
+        # ------------------------------------------------------------------
+        # Name
+        # ------------------------------------------------------------------
+
         if not isinstance(
             self.name,
             str,
@@ -164,21 +175,76 @@ class Event:
                 "event name cannot be empty."
             )
 
-        if not isinstance(
+        # ------------------------------------------------------------------
+        # Phase
+        # ------------------------------------------------------------------
+
+        if isinstance(
             self.phase,
             ExecutionPhase,
         ):
+            pass
+
+        elif isinstance(
+            self.phase,
+            str,
+        ):
+            value = self.phase.strip().lower()
+
+            if not value:
+                raise EventValidationError(
+                    "event phase cannot be empty."
+                )
+
+            # Keep custom phases extensible.
+            #
+            # Canonical phases remain represented by ExecutionPhase,
+            # while domain/runtime-specific phases may remain strings.
+            try:
+                self.phase = ExecutionPhase(value)
+            except ValueError:
+                self.phase = value
+
+        else:
             raise EventValidationError(
-                "phase must be an ExecutionPhase."
+                "phase must be an ExecutionPhase or string."
             )
 
-        if not isinstance(
+        # ------------------------------------------------------------------
+        # Severity
+        # ------------------------------------------------------------------
+
+        if isinstance(
+            self.severity,
+            str,
+        ):
+            raw_severity = self.severity.strip().lower()
+
+            if not raw_severity:
+                raise EventValidationError(
+                    "event severity cannot be empty."
+                )
+
+            try:
+                self.severity = Severity(
+                    raw_severity
+                )
+            except ValueError as exc:
+                raise EventValidationError(
+                    f"invalid severity: {raw_severity!r}"
+                ) from exc
+
+        elif not isinstance(
             self.severity,
             Severity,
         ):
             raise EventValidationError(
-                "severity must be a Severity."
+                "severity must be a Severity or string."
             )
+
+        # ------------------------------------------------------------------
+        # Timestamp
+        # ------------------------------------------------------------------
 
         if not isinstance(
             self.timestamp,
@@ -193,8 +259,16 @@ class Event:
                 tzinfo=timezone.utc,
             )
 
+        # ------------------------------------------------------------------
+        # Mutable mappings
+        # ------------------------------------------------------------------
+
         self.attributes = dict(
             self.attributes
+        )
+
+        self.metadata = dict(
+            self.metadata
         )
 
         self.payload = dict(
@@ -204,6 +278,8 @@ class Event:
         self.tags = dict(
             self.tags
         )
+
+
 
     @property
     def has_attributes(self) -> bool:
@@ -513,27 +589,37 @@ class Event:
 
     def to_dict(self) -> EventJSON:
         """
-        Serialize event.
+        Serialize the event into a JSON-compatible dictionary.
+
+        Enum values are serialized using their string values and mutable
+        mappings are copied to prevent accidental mutation of the event.
         """
-        return {
-            "event_id": self.event_id,
-            "name": self.name,
-            "phase": self.phase.value,
-            "timestamp": self.timestamp.isoformat(),
-            "severity": self.severity.value,
-            "attributes": dict(self.attributes),
-            "metadata": dict(self.metadata),
-            "payload": dict(self.payload),
-            "tags": dict(self.tags),
-            "active": self.active,
-            "completed": self.completed,
-            "failed": self.failed,
-            "cancelled": self.cancelled,
-        }
+        try:
+            return {
+                "event_id": self.event_id,
+                "name": self.name,
+                "phase": self.phase.value,
+                "timestamp": self.timestamp.isoformat(),
+                "severity": self.severity.value,
+                "attributes": dict(self.attributes),
+                "metadata": dict(self.metadata),
+                "payload": dict(self.payload),
+                "tags": dict(self.tags),
+                "active": self.active,
+                "completed": self.completed,
+                "failed": self.failed,
+                "cancelled": self.cancelled,
+            }
+
+        except Exception as exc:
+            raise EventSerializationError(
+                "Failed to serialize Event."
+            ) from exc
+
 
     def to_json(self) -> str:
         """
-        Serialize event into JSON.
+        Serialize the event into a JSON string.
         """
         try:
             return json.dumps(
@@ -544,8 +630,9 @@ class Event:
 
         except Exception as exc:
             raise EventSerializationError(
-                "Failed to serialize Event."
+                "Failed to serialize Event to JSON."
             ) from exc
+
 
     @classmethod
     def from_dict(
@@ -553,84 +640,184 @@ class Event:
         data: EventJSON,
     ) -> "Event":
         """
-        Restore event from dictionary.
+        Restore an Event from a JSON-compatible dictionary.
+
+        Missing optional fields fall back to the canonical Event defaults.
+        Enum fields accept either enum instances or their serialized values.
         """
-        try:
-            event = cls(
-                event_id=data.get(
-                    "event_id",
-                    str(uuid4()),
-                ),
-                name=data.get(
-                    "name",
-                    DEFAULT_EVENT_NAME,
-                ),
-                phase=ExecutionPhase(
-                    data.get(
-                        "phase",
-                        DEFAULT_EVENT_PHASE.value,
-                    )
-                ),
-                timestamp=datetime.fromisoformat(
-                    data.get(
-                        "timestamp",
-                        utcnow().isoformat(),
-                    )
-                ),
-                severity=Severity(
-                    data.get(
-                        "severity",
-                        DEFAULT_EVENT_SEVERITY.value,
-                    )
-                ),
-                attributes=dict(
-                    data.get(
-                        "attributes",
-                        {},
-                    )
-                ),
-                metadata=dict(
-                    data.get(
-                        "metadata",
-                        {},
-                    )
-                ),
-                payload=dict(
-                    data.get(
-                        "payload",
-                        {},
-                    )
-                ),
-                tags=dict(
-                    data.get(
-                        "tags",
-                        {},
-                    )
-                ),
-                active=data.get(
-                    "active",
-                    False,
-                ),
-                completed=data.get(
-                    "completed",
-                    False,
-                ),
-                failed=data.get(
-                    "failed",
-                    False,
-                ),
-                cancelled=data.get(
-                    "cancelled",
-                    False,
-                ),
+        if not isinstance(data, Mapping):
+            raise EventSerializationError(
+                "Event data must be a mapping."
             )
 
-            return event
+        try:
+            # ------------------------------------------------------------------
+            # Identity
+            # ------------------------------------------------------------------
+
+            event_id = data.get(
+                "event_id",
+                str(uuid4()),
+            )
+
+            name = data.get(
+                "name",
+                DEFAULT_EVENT_NAME,
+            )
+
+            # ------------------------------------------------------------------
+            # Phase
+            # ------------------------------------------------------------------
+
+            phase_value = data.get(
+                "phase",
+                DEFAULT_EVENT_PHASE.value,
+            )
+
+            if isinstance(
+                phase_value,
+                ExecutionPhase,
+            ):
+                phase = phase_value
+            else:
+                phase = ExecutionPhase(
+                    str(phase_value).strip().lower()
+                )
+
+            # ------------------------------------------------------------------
+            # Timestamp
+            # ------------------------------------------------------------------
+
+            timestamp_value = data.get(
+                "timestamp",
+                None,
+            )
+
+            if timestamp_value is None:
+                timestamp = utcnow()
+
+            elif isinstance(
+                timestamp_value,
+                datetime,
+            ):
+                timestamp = timestamp_value
+
+            else:
+                timestamp = datetime.fromisoformat(
+                    str(timestamp_value)
+                )
+
+            # ------------------------------------------------------------------
+            # Severity
+            # ------------------------------------------------------------------
+
+            severity_value = data.get(
+                "severity",
+                DEFAULT_EVENT_SEVERITY.value,
+            )
+
+            if isinstance(
+                severity_value,
+                Severity,
+            ):
+                severity = severity_value
+            else:
+                severity = Severity(
+                    str(severity_value).strip().lower()
+                )
+
+            # ------------------------------------------------------------------
+            # Mappings
+            # ------------------------------------------------------------------
+
+            attributes = dict(
+                data.get(
+                    "attributes",
+                    {},
+                ) or {}
+            )
+
+            metadata = dict(
+                data.get(
+                    "metadata",
+                    {},
+                ) or {}
+            )
+
+            payload = dict(
+                data.get(
+                    "payload",
+                    {},
+                ) or {}
+            )
+
+            tags = dict(
+                data.get(
+                    "tags",
+                    {},
+                ) or {}
+            )
+
+            # ------------------------------------------------------------------
+            # Lifecycle state
+            # ------------------------------------------------------------------
+
+            active = bool(
+                data.get(
+                    "active",
+                    False,
+                )
+            )
+
+            completed = bool(
+                data.get(
+                    "completed",
+                    False,
+                )
+            )
+
+            failed = bool(
+                data.get(
+                    "failed",
+                    False,
+                )
+            )
+
+            cancelled = bool(
+                data.get(
+                    "cancelled",
+                    False,
+                )
+            )
+
+            # ------------------------------------------------------------------
+            # Construct Event
+            # ------------------------------------------------------------------
+
+            return cls(
+                event_id=event_id,
+                name=name,
+                phase=phase,
+                timestamp=timestamp,
+                severity=severity,
+                attributes=attributes,
+                metadata=metadata,
+                payload=payload,
+                tags=tags,
+                active=active,
+                completed=completed,
+                failed=failed,
+                cancelled=cancelled,
+            )
+
+        except EventSerializationError:
+            raise
 
         except Exception as exc:
             raise EventSerializationError(
-                "Failed to restore Event."
+                "Failed to restore Event from dictionary."
             ) from exc
+
 
     @classmethod
     def from_json(
@@ -638,17 +825,33 @@ class Event:
         value: str,
     ) -> "Event":
         """
-        Restore event from JSON.
+        Restore an Event from a JSON string.
         """
-        try:
-            return cls.from_dict(
-                json.loads(value)
+        if not isinstance(value, str):
+            raise EventSerializationError(
+                "Event JSON value must be a string."
             )
 
-        except Exception as exc:
+        try:
+            data = json.loads(value)
+
+        except (
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise EventSerializationError(
+                "Failed to decode Event JSON."
+            ) from exc
+
+        try:
+            return cls.from_dict(data)
+
+        except EventSerializationError as exc:
             raise EventSerializationError(
                 "Failed to restore Event from JSON."
             ) from exc
+
 # ==============================================================================
 # Part 9. Snapshot / Clone
 # ==============================================================================

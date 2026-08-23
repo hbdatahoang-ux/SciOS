@@ -1,23 +1,24 @@
-"""
-SciOS Observability - Memory Trace Exporter
-==========================================
-
-In-memory exporter for traces, spans and events.
-
-Useful for:
-
-- Unit testing
-- Runtime debugging
-- CLI inspection
-- Development
-"""
+# ==============================================================================
+# Part 1. Imports
+# ==============================================================================
 
 from __future__ import annotations
 
-from .event import Event
-from .exporter import TraceExporter
-from .span import Span
-from .trace import Trace
+from collections import OrderedDict
+from typing import Any, Mapping
+
+from .exporter import (
+    ExportError,
+    ExportFormat,
+    ExportPayload,
+    ExportResult,
+    Exporter,
+)
+
+
+# ==============================================================================
+# Part 2. Public API
+# ==============================================================================
 
 
 __all__ = [
@@ -25,164 +26,289 @@ __all__ = [
 ]
 
 
-class MemoryExporter(TraceExporter):
+# ==============================================================================
+# Part 3. MemoryExporter
+# ==============================================================================
+
+
+class MemoryExporter(Exporter):
     """
-    In-memory tracing exporter.
+    In-memory exporter for SciOS runtime observability data.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-
-        self.traces: list[Trace] = []
-
-        self.spans: list[Span] = []
-
-        self.events: list[Event] = []
-
-    # =====================================================
-    # Export
-    # =====================================================
-
-    def export_trace(
+    def __init__(
         self,
-        trace: Trace,
+        name: str = "memory",
+        *,
+        format: ExportFormat = ExportFormat.JSON,
+        encoding: str = "utf-8",
+        enabled: bool = True,
+        max_items: int | None = None,
+        options: Mapping[str, Any] | None = None,
     ) -> None:
 
-        self.traces.append(trace)
+        super().__init__(
+            name=name,
+            format=format,
+            encoding=encoding,
+            enabled=enabled,
+            options=options,
+        )
 
-    def export_span(
-        self,
-        span: Span,
-    ) -> None:
+        if max_items is not None:
+            if not isinstance(max_items, int):
+                raise TypeError(
+                    "max_items must be an int or None",
+                )
 
-        self.spans.append(span)
+            if max_items <= 0:
+                raise ValueError(
+                    "max_items must be greater than zero",
+                )
 
-    def export_event(
-        self,
-        event: Event,
-    ) -> None:
+        self._max_items = max_items
 
-        self.events.append(event)
+        # Ordered storage:
+        # key -> original payload
+        self._storage: OrderedDict[
+            int,
+            ExportPayload,
+        ] = OrderedDict()
 
-    # =====================================================
-    # Query
-    # =====================================================
+    # ==============================================================================
+    # Part 4. Core Properties
+    # ==============================================================================
 
-    def get_trace(
-        self,
-        trace_id: str,
-    ) -> Trace | None:
-
-        for trace in self.traces:
-            if trace.trace_id == trace_id:
-                return trace
-
-        return None
-
-    def get_span(
-        self,
-        span_id: str,
-    ) -> Span | None:
-
-        for span in self.spans:
-            if span.span_id == span_id:
-                return span
-
-        return None
-
-    def get_spans_by_trace(
-        self,
-        trace_id: str,
-    ) -> list[Span]:
-
-        return [
-            span
-            for span in self.spans
-            if span.trace_id == trace_id
-        ]
-
-    def get_events_by_span(
-        self,
-        span_id: str,
-    ) -> list[Event]:
-
-        return [
-            event
-            for event in self.events
-            if getattr(event, "span_id", None) == span_id
-        ]
-
-    # =====================================================
-    # Statistics
-    # =====================================================
 
     @property
-    def trace_count(self) -> int:
-        return len(self.traces)
-
-    @property
-    def span_count(self) -> int:
-        return len(self.spans)
-
-    @property
-    def event_count(self) -> int:
-        return len(self.events)
-
-    # =====================================================
-    # Maintenance
-    # =====================================================
-
-    def clear(self) -> None:
-
-        self.traces.clear()
-
-        self.spans.clear()
-
-        self.events.clear()
-
-    def flush(self) -> None:
+    def items(
+        self,
+    ) -> list[ExportPayload]:
         """
-        Nothing to flush for memory exporter.
+        Return stored payloads in insertion order.
         """
-        return
 
-    # =====================================================
-    # Serialization
-    # =====================================================
+        return list(
+            self._storage.values(),
+        )
 
-    def to_dict(self) -> dict:
+
+    @property
+    def size(
+        self,
+    ) -> int:
+        """
+        Return number of stored payloads.
+        """
+
+        return len(
+            self._storage,
+        )
+
+
+    @property
+    def max_items(
+        self,
+    ) -> int | None:
+        """
+        Return maximum number of stored payloads.
+        """
+
+        return self._max_items
+
+    # ==============================================================================
+    # Part 5. Export
+    # ==============================================================================
+
+
+    def export(
+        self,
+        payload: ExportPayload,
+        **options: Any,
+    ) -> ExportResult:
+        """
+        Export and retain one payload in memory.
+        """
+
+        result = super().export(
+            payload,
+            **options,
+        )
+
+        # Use export_count - 1 as stable zero-based storage key.
+        key = self.export_count - 1
+
+        self._storage[key] = payload
+
+        # Keep only the newest max_items entries.
+        if self._max_items is not None:
+            while len(self._storage) > self._max_items:
+                self._storage.popitem(
+                    last=False,
+                )
+
+        return result
+
+    # ==============================================================================
+    # Part 6. Storage API
+    # ==============================================================================
+
+
+    def clear(
+        self,
+    ) -> None:
+        """
+        Remove all stored payloads.
+        """
+
+        self._storage.clear()
+
+
+    def get(
+        self,
+        key: int,
+        default: Any = None,
+    ) -> Any:
+        """
+        Return a stored payload by storage key.
+        """
+
+        return self._storage.get(
+            key,
+            default,
+        )
+
+
+    def snapshot(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return a snapshot of the current memory state.
+        """
 
         return {
-            "trace_count": self.trace_count,
-            "span_count": self.span_count,
-            "event_count": self.event_count,
-            "traces": [
-                trace.to_dict()
-                for trace in self.traces
-            ],
-            "spans": [
-                span.to_dict()
-                for span in self.spans
-            ],
-            "events": [
-                event.to_dict()
-                for event in self.events
-            ],
+            "size": self.size,
+            "max_items": self.max_items,
+            "items": list(
+                self._storage.values(),
+            ),
         }
 
-    # =====================================================
-    # Representation
-    # =====================================================
 
-    def __len__(self) -> int:
+    # ==============================================================================
+    # Part 7. Lifecycle
+    # ==============================================================================
 
-        return self.trace_count
 
-    def __repr__(self) -> str:
+    def reset(
+        self,
+    ) -> "MemoryExporter":
+        """
+        Clear memory and reset exporter runtime state.
+        """
 
-        return (
-            f"{self.__class__.__name__}("
-            f"traces={self.trace_count}, "
-            f"spans={self.span_count}, "
-            f"events={self.event_count})"
+        if self._state == "closed":
+            raise ExportError(
+                "cannot reset a closed memory exporter",
+                exporter=self._name,
+            )
+
+        self._storage.clear()
+
+        super().reset()
+
+        return self
+
+
+    def close(
+        self,
+    ) -> "MemoryExporter":
+        """
+        Close the memory exporter.
+        """
+
+        if self._state == "closed":
+            return self
+
+        self._state = "closed"
+
+        return self
+
+
+    # ==============================================================================
+    # Part 8. Diagnostics / Representation
+    # ==============================================================================
+
+
+    def diagnostics(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return detailed memory exporter diagnostics.
+        """
+
+        data = super().diagnostics()
+
+        data.update(
+            {
+                "items": self.size,
+                "max_items": self.max_items,
+            }
         )
+
+        return data
+
+    def summary(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Return compact memory exporter summary.
+        """
+
+        data = super().summary()
+
+        data.update(
+            {
+                "items": self.size,
+                "max_items": self.max_items,
+            }
+        )
+
+        return data
+
+
+    def __repr__(
+        self,
+    ) -> str:
+        return (
+            f"{type(self).__name__}("
+            f"name={self._name!r}, "
+            f"items={self.size}, "
+            f"max_items={self._max_items!r}, "
+            f"state={self._state!r}, "
+            f"enabled={self._enabled!r}"
+            f")"
+        )
+
+
+    def __str__(
+        self,
+    ) -> str:
+        return (
+            f"{self._name}("
+            f"items={self.size}, "
+            f"max_items={self._max_items!r}, "
+            f"state={self._state}, "
+            f"enabled={self._enabled}"
+            f")"
+        )
+
+
+# ==============================================================================
+# Part 9. End
+# ==============================================================================
+
+
+__all__ = [
+    "MemoryExporter",
+]

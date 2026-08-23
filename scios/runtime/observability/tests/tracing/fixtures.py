@@ -1,4 +1,4 @@
-"""
+﻿"""
 scios.runtime.observability.tests.tracing.fixtures
 
 Shared pytest fixtures for tracing unit tests.
@@ -19,6 +19,7 @@ from .fakes import (
     FakeTrace,
     FakeTraceManager,
 )
+
 
 
 # ============================================================================
@@ -50,6 +51,53 @@ def fake_exporter() -> FakeExporter:
     return FakeExporter()
 
 
+@pytest.fixture
+def fake_exporter_two() -> FakeExporter:
+    """Fresh second fake exporter for multi-exporter tests."""
+    return FakeExporter()
+
+
+@pytest.fixture
+def disabled_plugin(fake_manager) -> TracePlugin:
+    """
+    Return a disabled TracePlugin for lifecycle tests.
+
+    The enabled flag is assigned after construction so this fixture
+    does not depend on PluginBuilder.build() exposing an ``enabled``
+    keyword argument.
+    """
+    plugin = (
+        PluginBuilder()
+        .with_manager(fake_manager)
+        .build()
+    )
+
+    plugin._enabled = False
+
+    return plugin
+
+
+# ============================================================================
+# Fixture Aliases
+# ============================================================================
+
+
+@pytest.fixture
+def processor(
+    fake_processor: FakeProcessor,
+) -> FakeProcessor:
+    """Processor fixture used by manager tests."""
+    return fake_processor
+
+
+@pytest.fixture
+def exporter(
+    fake_exporter: FakeExporter,
+) -> FakeExporter:
+    """Exporter fixture used by manager tests."""
+    return fake_exporter
+
+
 # ============================================================================
 # Core Domain Objects
 # ============================================================================
@@ -66,7 +114,9 @@ def trace() -> FakeTrace:
 
 
 @pytest.fixture
-def span(trace: FakeTrace) -> FakeSpan:
+def span(
+    trace: FakeTrace,
+) -> FakeSpan:
     """Default root span."""
     return (
         SpanBuilder()
@@ -109,7 +159,7 @@ def merged_metadata(
     runtime_metadata: dict[str, Any],
     provenance_metadata: dict[str, Any],
 ) -> dict[str, Any]:
-    """Merged metadata with call-level precedence."""
+    """Merged metadata with provenance values taking precedence."""
     return {
         **runtime_metadata,
         **provenance_metadata,
@@ -188,7 +238,9 @@ def value_exception() -> ValueError:
 
 
 @pytest.fixture
-def populated_trace(trace: FakeTrace) -> FakeTrace:
+def populated_trace(
+    trace: FakeTrace,
+) -> FakeTrace:
     """Trace populated with sample data."""
     trace.set_attribute("user", "tester")
     trace.set_attribute("session", "abc123")
@@ -203,8 +255,11 @@ def populated_trace(trace: FakeTrace) -> FakeTrace:
 
 
 @pytest.fixture
-def populated_span(span: FakeSpan) -> FakeSpan:
+def populated_span(
+    span: FakeSpan,
+) -> FakeSpan:
     """Span populated with sample data."""
     span.set_attribute("stage", "planner")
     span.add_event("entered")
-    return span 
+
+    return span

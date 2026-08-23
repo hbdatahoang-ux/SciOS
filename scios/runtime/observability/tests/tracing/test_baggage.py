@@ -1,15 +1,43 @@
-# ============================================================
-# Part 1 – Fixtures
-# ============================================================
+﻿"""
+SciOS Runtime Observability
+===========================
 
-import json
+Tracing Test - Baggage
+
+Tests:
+
+- Creation
+- Set / Get
+- Bulk operations
+- Validation
+- Serialization
+- Snapshot / Restore
+- Clone / Copy
+- Diagnostics
+- Python protocols
+- Equality / Hash
+
+Python 3.11+
+"""
+
+from __future__ import annotations
+
+
 import copy
+import json
+
 
 import pytest
+
 
 from scios.runtime.observability.tracing.baggage import (
     Baggage,
 )
+
+
+# ==============================================================================
+# Part 1. Fixtures
+# ==============================================================================
 
 
 @pytest.fixture
@@ -21,13 +49,13 @@ def baggage() -> Baggage:
     return Baggage()
 
 
-
 @pytest.fixture
 def populated_baggage() -> Baggage:
     """
     OpenTelemetry-style baggage fixture.
 
     Semantic keys:
+
     - service.name
     - service.version
     - deployment.environment
@@ -42,132 +70,107 @@ def populated_baggage() -> Baggage:
     )
 
 
-
-# ============================================================
-# Creation
-# ============================================================
+# ==============================================================================
+# Part 2. Creation
+# ==============================================================================
 
 
 def test_baggage_creation(
     baggage,
 ):
-
     assert baggage is not None
-
 
 
 def test_default_empty(
     baggage,
 ):
-
-    assert len(
-        baggage
-    ) == 0
+    assert len(baggage) == 0
 
 
-
-# ============================================================
-# Set / Get
-# ============================================================
+# ==============================================================================
+# Part 3. Set / Get
+# ==============================================================================
 
 
 def test_set_item(
     baggage,
 ):
-
     baggage.set(
         "user.id",
         "12345",
     )
 
-
     assert (
         baggage.get(
-            "user.id"
+            "user.id",
         )
-        ==
-        "12345"
+        == "12345"
     )
-
 
 
 def test_get_item(
     populated_baggage,
 ):
-
     assert (
         populated_baggage.get(
-            "service.name"
+            "service.name",
         )
-        ==
-        "SciOS"
+        == "SciOS"
     )
-
 
 
 def test_get_missing(
     baggage,
 ):
-
     assert (
         baggage.get(
-            "missing"
+            "missing",
         )
         is None
     )
 
 
-
 def test_default_value(
     baggage,
 ):
-
     assert (
         baggage.get(
             "missing",
             "default",
         )
-        ==
-        "default"
+        == "default"
     )
-
 
 
 def test_overwrite_item(
     baggage,
 ):
-
     baggage.set(
         "trace.id",
         "old",
     )
-
 
     baggage.set(
         "trace.id",
         "new",
     )
 
-
     assert (
         baggage.get(
-            "trace.id"
+            "trace.id",
         )
-        ==
-        "new"
+        == "new"
     )
 
 
-
-# ============================================================
-# Bulk Operations
-# ============================================================
+# ==============================================================================
+# Part 4. Bulk Operations
+# ==============================================================================
 
 
 def test_update(
     baggage,
 ):
-
     baggage.update(
         {
             "user.id": "1001",
@@ -175,35 +178,28 @@ def test_update(
         }
     )
 
+    assert (
+        baggage.get(
+            "user.id",
+        )
+        == "1001"
+    )
 
     assert (
         baggage.get(
-            "user.id"
+            "tenant.id",
         )
-        ==
-        "1001"
+        == "tenant-a"
     )
-
-
-    assert (
-        baggage.get(
-            "tenant.id"
-        )
-        ==
-        "tenant-a"
-    )
-
 
 
 def test_merge(
     baggage,
 ):
-
     baggage.set(
         "service.name",
         "SciOS",
     )
-
 
     baggage.merge(
         {
@@ -211,80 +207,66 @@ def test_merge(
         }
     )
 
+    assert (
+        baggage.get(
+            "service.name",
+        )
+        == "SciOS"
+    )
 
     assert (
         baggage.get(
-            "service.name"
+            "service.version",
         )
-        ==
-        "SciOS"
+        == "0.3"
     )
-
-
-    assert (
-        baggage.get(
-            "service.version"
-        )
-        ==
-        "0.3"
-    )
-
 
 
 def test_remove(
     populated_baggage,
 ):
-
     populated_baggage.remove(
-        "service.name"
+        "service.name",
     )
-
 
     assert (
         populated_baggage.get(
-            "service.name"
+            "service.name",
         )
         is None
     )
 
 
-
 def test_clear(
     populated_baggage,
 ):
-
     populated_baggage.clear()
 
-
     assert len(
-        populated_baggage
+        populated_baggage,
     ) == 0
-
 
 
 def test_count(
     populated_baggage,
 ):
-
     assert (
         populated_baggage.count()
-        ==
-        3
+        == 3
     )
 
-# ============================================================
-# Part 7 - Validation
-# ============================================================
+
+# ==============================================================================
+# Part 5. Validation
+# ==============================================================================
 
 
 def test_invalid_key(
     baggage,
 ):
-
     with pytest.raises(
         Exception,
     ):
-
         baggage.set(
             "",
             "value",
@@ -294,11 +276,9 @@ def test_invalid_key(
 def test_invalid_none_key(
     baggage,
 ):
-
     with pytest.raises(
         Exception,
     ):
-
         baggage.set(
             None,
             "value",
@@ -308,22 +288,20 @@ def test_invalid_none_key(
 def test_validate(
     populated_baggage,
 ):
-
     assert (
         populated_baggage.validate()
         is True
     )
 
 
-# ============================================================
-# Part 8 - Serialization
-# ============================================================
+# ==============================================================================
+# Part 6. Serialization
+# ==============================================================================
 
 
 def test_to_dict(
     populated_baggage,
 ):
-
     data = (
         populated_baggage
         .to_dict()
@@ -336,15 +314,13 @@ def test_to_dict(
 
     assert (
         data["service.name"]
-        ==
-        "SciOS"
+        == "SciOS"
     )
 
 
 def test_from_dict(
     populated_baggage,
 ):
-
     data = (
         populated_baggage
         .to_dict()
@@ -353,23 +329,21 @@ def test_from_dict(
     restored = (
         Baggage
         .from_dict(
-            data
+            data,
         )
     )
 
     assert (
         restored.get(
-            "service.name"
+            "service.name",
         )
-        ==
-        "SciOS"
+        == "SciOS"
     )
 
 
 def test_to_json(
     populated_baggage,
 ):
-
     value = (
         populated_baggage
         .to_json()
@@ -381,20 +355,18 @@ def test_to_json(
     )
 
     data = json.loads(
-        value
+        value,
     )
 
     assert (
         data["service.version"]
-        ==
-        "0.3"
+        == "0.3"
     )
 
 
 def test_from_json(
     populated_baggage,
 ):
-
     value = (
         populated_baggage
         .to_json()
@@ -403,28 +375,26 @@ def test_from_json(
     restored = (
         Baggage
         .from_json(
-            value
+            value,
         )
     )
 
     assert (
         restored.get(
-            "service.version"
+            "service.version",
         )
-        ==
-        "0.3"
+        == "0.3"
     )
 
 
-# ============================================================
-# Part 9 - Snapshot / Clone
-# ============================================================
+# ==============================================================================
+# Part 7. Snapshot / Clone
+# ==============================================================================
 
 
 def test_snapshot(
     populated_baggage,
 ):
-
     snapshot = (
         populated_baggage
         .snapshot()
@@ -437,15 +407,13 @@ def test_snapshot(
 
     assert (
         snapshot["service.name"]
-        ==
-        "SciOS"
+        == "SciOS"
     )
 
 
 def test_restore(
     populated_baggage,
 ):
-
     snapshot = (
         populated_baggage
         .snapshot()
@@ -454,96 +422,100 @@ def test_restore(
     restored = (
         Baggage
         .restore(
-            snapshot
+            snapshot,
         )
     )
 
     assert (
         restored.get(
-            "service.name"
+            "service.name",
         )
-        ==
-        "SciOS"
+        == "SciOS"
     )
 
 
 def test_clone(
     populated_baggage,
 ):
-
     cloned = (
         populated_baggage
         .clone()
     )
 
-    assert cloned is not populated_baggage
+    assert (
+        cloned
+        is not populated_baggage
+    )
 
     assert (
         cloned.to_dict()
-        ==
-        populated_baggage.to_dict()
+        == populated_baggage.to_dict()
     )
 
 
 def test_copy(
     populated_baggage,
 ):
-
     copied = (
         populated_baggage
         .copy()
     )
 
-    assert copied is not populated_baggage
+    assert (
+        copied
+        is not populated_baggage
+    )
 
     assert (
         copied.to_dict()
-        ==
-        populated_baggage.to_dict()
+        == populated_baggage.to_dict()
     )
 
 
 def test_python_copy(
     populated_baggage,
 ):
-
     copied = copy.copy(
-        populated_baggage
+        populated_baggage,
     )
 
-    assert copied is not populated_baggage
+    assert (
+        copied
+        is not populated_baggage
+    )
 
     assert (
         copied.to_dict()
-        ==
-        populated_baggage.to_dict()
+        == populated_baggage.to_dict()
     )
 
 
 def test_python_deepcopy(
     populated_baggage,
 ):
-
     copied = copy.deepcopy(
-        populated_baggage
+        populated_baggage,
     )
 
-    assert copied is not populated_baggage
+    assert (
+        copied
+        is not populated_baggage
+    )
 
     assert (
         copied.to_dict()
-        ==
-        populated_baggage.to_dict()
+        == populated_baggage.to_dict()
     )
-# ============================================================
-# Part 8 - Diagnostics
-# ============================================================
+
+
+# ==============================================================================
+# Part 8. Diagnostics
+# ==============================================================================
 
 
 def test_diagnostics(
     populated_baggage,
 ):
-
     result = (
         populated_baggage
         .diagnostics()
@@ -561,8 +533,7 @@ def test_diagnostics(
 
     assert (
         result["count"]
-        ==
-        populated_baggage.count()
+        == populated_baggage.count()
     )
 
     assert (
@@ -571,15 +542,12 @@ def test_diagnostics(
     )
 
     assert "keys" in result
-
     assert "types" in result
-
 
 
 def test_summary(
     populated_baggage,
 ):
-
     result = (
         populated_baggage
         .summary()
@@ -592,8 +560,7 @@ def test_summary(
 
     assert (
         result["count"]
-        ==
-        populated_baggage.count()
+        == populated_baggage.count()
     )
 
     assert (
@@ -609,17 +576,16 @@ def test_summary(
     assert "keys" in result
 
 
-# ============================================================
-# Part 9 - Python Protocols
-# ============================================================
+# ==============================================================================
+# Part 9. Python Protocols
+# ==============================================================================
 
 
 def test_repr(
     baggage,
 ):
-
     result = repr(
-        baggage
+        baggage,
     )
 
     assert isinstance(
@@ -633,13 +599,11 @@ def test_repr(
     )
 
 
-
 def test_str(
     baggage,
 ):
-
     result = str(
-        baggage
+        baggage,
     )
 
     assert isinstance(
@@ -648,67 +612,62 @@ def test_str(
     )
 
 
-
 def test_len(
     populated_baggage,
 ):
-
     assert (
         len(
-            populated_baggage
+            populated_baggage,
         )
-        ==
-        populated_baggage.count()
+        == populated_baggage.count()
     )
-
 
 
 def test_contains(
     populated_baggage,
 ):
-
     assert (
         "service.name"
         in populated_baggage
     )
 
 
-
 def test_getitem(
     populated_baggage,
 ):
-
     assert (
-        populated_baggage["service.name"]
-        ==
-        "SciOS"
+        populated_baggage[
+            "service.name"
+        ]
+        == "SciOS"
     )
-
 
 
 def test_setitem(
     baggage,
 ):
-
-    baggage["runtime"] = (
-        "engine"
-    )
+    baggage[
+        "runtime"
+    ] = "engine"
 
     assert (
-        baggage["runtime"]
-        ==
-        "engine"
+        baggage[
+            "runtime"
+        ]
+        == "engine"
     )
-
 
 
 def test_delitem(
     baggage,
 ):
+    baggage[
+        "temp"
+    ] = 123
 
-    baggage["temp"] = 123
-
-    del baggage["temp"]
+    del baggage[
+        "temp"
+    ]
 
     assert (
         "temp"
@@ -716,14 +675,12 @@ def test_delitem(
     )
 
 
-
 def test_iter(
     populated_baggage,
 ):
-
     keys = list(
         iter(
-            populated_baggage
+            populated_baggage,
         )
     )
 
@@ -738,37 +695,37 @@ def test_iter(
     )
 
 
-
 def test_bool(
     baggage,
     populated_baggage,
 ):
-
     assert (
         bool(
-            baggage
+            baggage,
         )
         is False
     )
 
     assert (
         bool(
-            populated_baggage
+            populated_baggage,
         )
         is True
     )
 
 
+# ==============================================================================
+# Part 10. Equality / Hash
+# ==============================================================================
+
 
 def test_equality():
-
     first = Baggage()
 
     first.set(
         "a",
         1,
     )
-
 
     second = Baggage()
 
@@ -777,24 +734,20 @@ def test_equality():
         1,
     )
 
-
     assert (
         first
-        ==
-        second
+        == second
     )
-
 
 
 def test_hash(
     baggage,
 ):
-
     value = hash(
-        baggage
+        baggage,
     )
 
     assert isinstance(
         value,
         int,
-    )        
+    )

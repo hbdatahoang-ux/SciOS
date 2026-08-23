@@ -1,2109 +1,872 @@
-"""
-SciOS Observability - MemoryExporter Tests
-==========================================
+﻿# ==============================================================================
+# SciOS Runtime Observability
+# Tests - MemoryExporter
+# ==============================================================================
 
-Test fixtures for in-memory trace exporter.
-"""
+from __future__ import annotations
 
 import pytest
 
-from scios.runtime.observability.exporters.memory import (
+from scios.runtime.observability.tracing.memory import (
     MemoryExporter,
+)
+from scios.runtime.observability.tracing.exporter import (
+    ExportError,
+    ExportFormat,
 )
 
 
-# ============================================================
-# Part 1 – Fixtures
-# ============================================================
+# ==============================================================================
+# Part 1. Construction
+# ==============================================================================
 
 
-@pytest.fixture
-def exporter():
-    """
-    Empty MemoryExporter fixture.
+def test_default_construction():
 
-    Returns
-    -------
-    MemoryExporter
-        Fresh exporter instance.
-    """
-
-    return MemoryExporter()
-
-
-
-@pytest.fixture
-def populated_exporter(
-    exporter,
-):
-    """
-    MemoryExporter with predefined records.
-
-    Contains:
-    - trace
-    - span
-    - event
-    """
-
-    exporter.export(
-        {
-            "id": "trace-001",
-            "type": "trace",
-            "name": "test_trace",
-        }
-    )
-
-
-    exporter.export(
-        {
-            "id": "span-001",
-            "type": "span",
-            "name": "test_span",
-        }
-    )
-
-
-    exporter.export(
-        {
-            "id": "event-001",
-            "type": "event",
-            "name": "test_event",
-        }
-    )
-
-
-    return exporter
-# ============================================================
-# Part 2 – Creation
-# ============================================================
-
-
-def test_exporter_creation(
-    exporter,
-):
-    """
-    MemoryExporter can be created.
-    """
-
-    assert exporter is not None
-
+    exporter = MemoryExporter()
 
     assert isinstance(
         exporter,
         MemoryExporter,
     )
 
+    assert exporter.name == "memory"
+
+    assert exporter.format is ExportFormat.JSON
+
+    assert exporter.encoding == "utf-8"
+
+    assert exporter.enabled is True
+
+    assert exporter.state == "created"
+
+    assert exporter.size == 0
 
 
-def test_default_empty(
-    exporter,
-):
-    """
-    New MemoryExporter starts empty.
-    """
+def test_custom_construction():
 
-    assert len(exporter) == 0
+    exporter = MemoryExporter(
+        name="test-memory",
+        max_items=10,
+        enabled=False,
+    )
+
+    assert exporter.name == "test-memory"
+
+    assert exporter.max_items == 10
+
+    assert exporter.enabled is False
+
+    assert exporter.size == 0
 
 
-    assert exporter.count() == 0
+def test_invalid_name():
+
+    with pytest.raises(
+        (TypeError, ValueError),
+    ):
+        MemoryExporter(
+            name="",
+        )
 
 
-    items = exporter.items()
+def test_invalid_max_items():
 
+    with pytest.raises(
+        (TypeError, ValueError),
+    ):
+        MemoryExporter(
+            max_items=0,
+        )
+
+    with pytest.raises(
+        (TypeError, ValueError),
+    ):
+        MemoryExporter(
+            max_items=-1,
+        )
+
+
+# ==============================================================================
+# Part 2. Configuration
+# ==============================================================================
+
+
+def test_name():
+
+    exporter = MemoryExporter(
+        name="test",
+    )
+
+    assert exporter.name == "test"
+
+
+def test_enabled():
+
+    exporter = MemoryExporter()
+
+    assert exporter.enabled is True
+
+    exporter.enabled = False
+
+    assert exporter.enabled is False
+
+    exporter.enabled = True
+
+    assert exporter.enabled is True
+
+
+def test_invalid_enabled():
+
+    exporter = MemoryExporter()
+
+    with pytest.raises(TypeError):
+        exporter.enabled = "yes"
+
+
+def test_format():
+
+    exporter = MemoryExporter()
+
+    assert exporter.format is ExportFormat.JSON
+
+
+def test_encoding():
+
+    exporter = MemoryExporter()
+
+    assert exporter.encoding == "utf-8"
+
+
+def test_options():
+
+    exporter = MemoryExporter()
 
     assert isinstance(
-        items,
-        list,
+        exporter.options,
+        dict,
     )
 
 
-    assert items == []
-# ============================================================
-# Part 3 – Export Operations
-# ============================================================
+def test_initial_state():
+
+    exporter = MemoryExporter()
+
+    assert exporter.state == "created"
 
 
-def test_export(
-    exporter,
-):
-    """
-    Export a generic observability item.
-    """
+# ==============================================================================
+# Part 3. Export
+# ==============================================================================
 
-    item = {
-        "id": "001",
-        "type": "trace",
-        "name": "test",
-    }
 
+def test_export_mapping():
+
+    exporter = MemoryExporter()
 
     result = exporter.export(
-        item
-    )
-
-
-    assert result is not None
-
-
-    assert len(exporter) == 1
-
-
-    assert (
-        exporter.items()[0]
-        ==
-        item
-    )
-
-
-
-def test_export_trace(
-    exporter,
-):
-    """
-    Export trace record.
-    """
-
-    trace = {
-        "id": "trace-001",
-        "type": "trace",
-        "name": "request_trace",
-    }
-
-
-    result = exporter.export_trace(
-        trace
-    )
-
-
-    assert result is not None
-
-
-    assert len(exporter) == 1
-
-
-    stored = exporter.items()[0]
-
-
-    assert stored["type"] == "trace"
-
-    assert stored["id"] == "trace-001"
-
-
-
-def test_export_span(
-    exporter,
-):
-    """
-    Export span record.
-    """
-
-    span = {
-        "id": "span-001",
-        "type": "span",
-        "name": "database_query",
-    }
-
-
-    result = exporter.export_span(
-        span
-    )
-
-
-    assert result is not None
-
-
-    assert len(exporter) == 1
-
-
-    stored = exporter.items()[0]
-
-
-    assert stored["type"] == "span"
-
-
-
-def test_export_event(
-    exporter,
-):
-    """
-    Export event record.
-    """
-
-    event = {
-        "id": "event-001",
-        "type": "event",
-        "name": "user_action",
-    }
-
-
-    result = exporter.export_event(
-        event
-    )
-
-
-    assert result is not None
-
-
-    assert len(exporter) == 1
-
-
-    stored = exporter.items()[0]
-
-
-    assert stored["type"] == "event"
-
-
-
-def test_export_batch(
-    exporter,
-):
-    """
-    Export multiple records at once.
-    """
-
-    batch = [
         {
-            "id": "trace-001",
-            "type": "trace",
+            "message": "hello",
+            "value": 42,
         },
-        {
-            "id": "span-001",
-            "type": "span",
-        },
-        {
-            "id": "event-001",
-            "type": "event",
-        },
-    ]
-
-
-    result = exporter.export_batch(
-        batch
     )
 
+    assert result.success is True
 
-    assert result is not None
+    assert exporter.size == 1
 
+    assert exporter.export_count == 1
 
-    assert len(exporter) == 3
+    assert exporter.success_count == 1
 
-
-    items = exporter.items()
-
-
-    assert items == batch
-# ============================================================
-# Part 4 – Storage
-# ============================================================
+    assert exporter.error_count == 0
 
 
-def test_store_item(
-    exporter,
-):
-    """
-    Exporter stores item internally.
-    """
+def test_export_multiple():
 
-    item = {
-        "id": "trace-001",
-        "type": "trace",
-    }
-
+    exporter = MemoryExporter()
 
     exporter.export(
-        item
+        {"id": 1},
     )
-
-
-    stored = exporter.items()
-
-
-    assert len(stored) == 1
-
-
-    assert (
-        stored[0]
-        ==
-        item
-    )
-
-
-
-def test_get_item(
-    exporter,
-):
-    """
-    Exporter retrieves item by identifier.
-    """
-
-    item = {
-        "id": "trace-001",
-        "type": "trace",
-    }
-
 
     exporter.export(
-        item
+        {"id": 2},
     )
 
-
-    result = exporter.get(
-        "trace-001"
+    exporter.export(
+        {"id": 3},
     )
 
+    assert exporter.size == 3
 
-    assert result is not None
+    assert exporter.export_count == 3
+
+    assert exporter.success_count == 3
+
+    assert exporter.error_count == 0
 
 
-    assert (
-        result["id"]
-        ==
-        "trace-001"
+def test_export_string():
+
+    exporter = MemoryExporter()
+
+    result = exporter.export(
+        "hello",
     )
 
+    assert result.success is True
+
+    assert exporter.size == 1
 
 
-def test_get_missing(
-    exporter,
-):
-    """
-    Missing item returns None.
-    """
+def test_export_bytes():
 
-    result = exporter.get(
-        "missing-id"
+    exporter = MemoryExporter()
+
+    result = exporter.export(
+        b"hello",
     )
 
+    assert result.success is True
 
-    assert result is None
-
-
-
-def test_items(
-    populated_exporter,
-):
-    """
-    Exporter returns all stored items.
-    """
-
-    items = (
-        populated_exporter
-        .items()
-    )
+    assert exporter.size == 1
 
 
-    assert isinstance(
-        items,
-        list,
-    )
+def test_invalid_payload():
 
+    exporter = MemoryExporter()
 
-    assert len(items) == 3
+    invalid_payload = object()
 
-
-    assert items[0]["type"] == "trace"
-
-    assert items[1]["type"] == "span"
-
-    assert items[2]["type"] == "event"
-
-
-
-def test_count(
-    populated_exporter,
-):
-    """
-    Exporter returns stored item count.
-    """
-
-    count = (
-        populated_exporter
-        .count()
-    )
-
-
-    assert count == 3
-
-
-    assert len(
-        populated_exporter
-    ) == 3
-
-
-
-def test_clear(
-    populated_exporter,
-):
-    """
-    Exporter clears stored records.
-    """
-
-    assert (
-        populated_exporter.count()
-        ==
-        3
-    )
-
-
-    result = populated_exporter.clear()
-
-
-    assert result is not None
-
-
-    assert (
-        populated_exporter.count()
-        ==
-        0
-    )
-
-
-    assert (
-        populated_exporter.items()
-        ==
-        []
-    )
-# ============================================================
-# Part 5 – Query
-# ============================================================
-
-
-def test_find_trace(
-    populated_exporter,
-):
-    """
-    Find trace records.
-    """
-
-    result = (
-        populated_exporter
-        .find_trace(
-            "trace-001"
+    with pytest.raises(
+        (ExportError, TypeError, ValueError),
+    ):
+        exporter.export(
+            invalid_payload,
         )
-    )
+
+    assert exporter.error_count == 1
 
 
-    assert result is not None
+def test_export_after_start():
 
-
-    assert (
-        result["id"]
-        ==
-        "trace-001"
-    )
-
-
-    assert (
-        result["type"]
-        ==
-        "trace"
-    )
-
-
-
-def test_find_span(
-    populated_exporter,
-):
-    """
-    Find span records.
-    """
-
-    result = (
-        populated_exporter
-        .find_span(
-            "span-001"
-        )
-    )
-
-
-    assert result is not None
-
-
-    assert (
-        result["id"]
-        ==
-        "span-001"
-    )
-
-
-    assert (
-        result["type"]
-        ==
-        "span"
-    )
-
-
-
-def test_filter_by_type(
-    populated_exporter,
-):
-    """
-    Filter stored items by type.
-    """
-
-    traces = (
-        populated_exporter
-        .filter_by_type(
-            "trace"
-        )
-    )
-
-
-    spans = (
-        populated_exporter
-        .filter_by_type(
-            "span"
-        )
-    )
-
-
-    events = (
-        populated_exporter
-        .filter_by_type(
-            "event"
-        )
-    )
-
-
-    assert isinstance(
-        traces,
-        list,
-    )
-
-    assert isinstance(
-        spans,
-        list,
-    )
-
-    assert isinstance(
-        events,
-        list,
-    )
-
-
-    assert len(traces) == 1
-
-    assert len(spans) == 1
-
-    assert len(events) == 1
-
-
-    assert traces[0]["id"] == "trace-001"
-
-    assert spans[0]["id"] == "span-001"
-
-    assert events[0]["id"] == "event-001"
-
-
-
-def test_search(
-    populated_exporter,
-):
-    """
-    Search records by content.
-    """
-
-    result = (
-        populated_exporter
-        .search(
-            "test"
-        )
-    )
-
-
-    assert isinstance(
-        result,
-        list,
-    )
-
-
-    assert len(result) == 3
-
-
-    ids = [
-        item["id"]
-        for item in result
-    ]
-
-
-    assert "trace-001" in ids
-
-    assert "span-001" in ids
-
-    assert "event-001" in ids
-# ============================================================
-# Part 6 – Lifecycle
-# ============================================================
-
-
-def test_start(
-    exporter,
-):
-    """
-    Exporter can be started.
-    """
-
-    assert (
-        exporter.running
-        is False
-    )
-
-
-    result = exporter.start()
-
-
-    assert result is not None
-
-
-    assert (
-        exporter.running
-        is True
-    )
-
-
-
-def test_stop(
-    exporter,
-):
-    """
-    Exporter can be stopped.
-    """
+    exporter = MemoryExporter()
 
     exporter.start()
 
-
-    assert (
-        exporter.running
-        is True
+    result = exporter.export(
+        {
+            "event": "test",
+        },
     )
 
+    assert result.success is True
 
-    result = exporter.stop()
-
-
-    assert result is not None
+    assert exporter.state == "running"
 
 
-    assert (
-        exporter.running
-        is False
-    )
+def test_export_after_close():
+
+    exporter = MemoryExporter()
+
+    exporter.close()
+
+    with pytest.raises(
+        ExportError,
+    ):
+        exporter.export(
+            {"event": "test"},
+        )
 
 
-
-def test_enable(
-    exporter,
-):
-    """
-    Exporter can be enabled.
-    """
-
-    assert (
-        exporter.enabled
-        is True
-    )
+# ==============================================================================
+# Part 4. Storage
+# ==============================================================================
 
 
-    result = exporter.disable()
+def test_items_initially_empty():
+
+    exporter = MemoryExporter()
+
+    assert exporter.items == []
 
 
-    assert result is not None
+def test_items_after_export():
 
-
-    assert (
-        exporter.enabled
-        is False
-    )
-
-
-    exporter.enable()
-
-
-    assert (
-        exporter.enabled
-        is True
-    )
-
-
-
-def test_disable(
-    exporter,
-):
-    """
-    Exporter can be disabled.
-    """
-
-    result = exporter.disable()
-
-
-    assert result is not None
-
-
-    assert (
-        exporter.enabled
-        is False
-    )
-
-
-    item = {
-        "id": "001",
-        "type": "trace",
-    }
-
+    exporter = MemoryExporter()
 
     exporter.export(
-        item
+        {"id": 1},
     )
 
-
-    assert len(exporter) == 0
-
+    assert len(exporter.items) == 1
 
 
-def test_reset(
-    populated_exporter,
-):
-    """
-    Exporter resets runtime state.
-    """
+def test_get_existing_item():
 
-    assert (
-        populated_exporter.count()
-        ==
-        3
-    )
+    exporter = MemoryExporter()
 
-
-    result = (
-        populated_exporter
-        .reset()
-    )
-
-
-    assert result is not None
-
-
-    assert (
-        populated_exporter.count()
-        ==
-        0
-    )
-
-
-    assert (
-        populated_exporter.running
-        is False
-    )
-
-
-    assert (
-        populated_exporter.enabled
-        is True
-    )
-# ============================================================
-# Part 7 – Configuration
-# ============================================================
-
-
-def test_set_config(
-    exporter,
-):
-    """
-    Exporter accepts new configuration.
-    """
-
-    config = {
-        "max_size": 1000,
-        "auto_flush": True,
-    }
-
-
-    result = exporter.set_config(
-        config
-    )
-
-
-    assert result is not None
-
-
-    current = exporter.get_config()
-
-
-    assert (
-        current["max_size"]
-        ==
-        1000
-    )
-
-
-    assert (
-        current["auto_flush"]
-        is True
-    )
-
-
-
-def test_get_config(
-    exporter,
-):
-    """
-    Exporter returns current configuration.
-    """
-
-    config = (
-        exporter.get_config()
-    )
-
-
-    assert isinstance(
-        config,
-        dict,
-    )
-
-
-    assert (
-        "max_size"
-        in config
-    )
-
-
-    assert (
-        "auto_flush"
-        in config
-    )
-
-
-
-def test_update_config(
-    exporter,
-):
-    """
-    Exporter updates partial configuration.
-    """
-
-    exporter.set_config(
+    exporter.export(
         {
-            "max_size": 100,
-            "auto_flush": False,
-        }
-    )
-
-
-    result = exporter.update_config(
-        {
-            "max_size": 500,
-        }
-    )
-
-
-    assert result is not None
-
-
-    config = (
-        exporter.get_config()
-    )
-
-
-    assert (
-        config["max_size"]
-        ==
-        500
-    )
-
-
-    assert (
-        config["auto_flush"]
-        is False
-    )
-
-
-
-def test_reset_config(
-    exporter,
-):
-    """
-    Exporter restores default configuration.
-    """
-
-    exporter.set_config(
-        {
-            "max_size": 9999,
-            "auto_flush": True,
-        }
-    )
-
-
-    result = (
-        exporter.reset_config()
-    )
-
-
-    assert result is not None
-
-
-    config = (
-        exporter.get_config()
-    )
-
-
-    assert (
-        config["max_size"]
-        !=
-        9999
-    )
-
-
-    assert (
-        config["auto_flush"]
-        is False
-    )
-# ============================================================
-# Part 8 – Validation
-# ============================================================
-
-
-def test_validate(
-    exporter,
-):
-    """
-    Exporter validates internal state.
-    """
-
-    result = exporter.validate()
-
-
-    assert isinstance(
-        result,
-        bool,
-    )
-
-
-    assert result is True
-
-
-
-def test_invalid_item(
-    exporter,
-):
-    """
-    Exporter rejects invalid item.
-    """
-
-    invalid_items = [
-        None,
-        {},
-        [],
-        "",
-        123,
-    ]
-
-
-    for item in invalid_items:
-
-        result = exporter.export(
-            item
-        )
-
-
-        assert (
-            result is False
-            or
-            result is None
-        )
-
-
-    assert (
-        exporter.count()
-        ==
-        0
-    )
-
-
-
-def test_invalid_batch(
-    exporter,
-):
-    """
-    Exporter rejects invalid batch.
-    """
-
-    invalid_batches = [
-        None,
-        {},
-        [],
-        "",
-        123,
-    ]
-
-
-    for batch in invalid_batches:
-
-        result = exporter.export_batch(
-            batch
-        )
-
-
-        assert (
-            result is False
-            or
-            result is None
-        )
-
-
-    assert (
-        exporter.count()
-        ==
-        0
-    )
-# ============================================================
-# Part 9 – Serialization
-# ============================================================
-
-
-def test_to_dict(
-    populated_exporter,
-):
-    """
-    Exporter serializes to dictionary.
-    """
-
-    data = (
-        populated_exporter
-        .to_dict()
-    )
-
-
-    assert isinstance(
-        data,
-        dict,
-    )
-
-
-    assert "items" in data
-
-    assert "config" in data
-
-
-    assert len(
-        data["items"]
-    ) == 3
-
-
-
-def test_from_dict():
-    """
-    Exporter restores from dictionary.
-    """
-
-    data = {
-        "items": [
-            {
-                "id": "trace-001",
-                "type": "trace",
-            },
-            {
-                "id": "span-001",
-                "type": "span",
-            },
-        ],
-        "config": {
-            "max_size": 100,
-            "auto_flush": False,
+            "id": 1,
+            "value": "hello",
         },
+    )
+
+    item = exporter.get(
+        0,
+    )
+
+    assert item == {
+        "id": 1,
+        "value": "hello",
     }
 
 
-    exporter = (
-        MemoryExporter
-        .from_dict(data)
+def test_get_missing_item():
+
+    exporter = MemoryExporter()
+
+    assert exporter.get(
+        999,
+    ) is None
+
+
+def test_get_with_default():
+
+    exporter = MemoryExporter()
+
+    marker = object()
+
+    assert exporter.get(
+        999,
+        marker,
+    ) is marker
+
+
+def test_snapshot():
+
+    exporter = MemoryExporter()
+
+    exporter.export(
+        {"id": 1},
     )
 
-
-    assert isinstance(
-        exporter,
-        MemoryExporter,
+    exporter.export(
+        {"id": 2},
     )
 
-
-    assert (
-        exporter.count()
-        ==
-        2
-    )
-
-
-    assert (
-        exporter.get(
-            "trace-001"
-        )
-        is not None
-    )
-
-
-
-def test_to_json(
-    populated_exporter,
-):
-    """
-    Exporter serializes to JSON.
-    """
-
-    value = (
-        populated_exporter
-        .to_json()
-    )
-
-
-    assert isinstance(
-        value,
-        str,
-    )
-
-
-    assert (
-        "items"
-        in value
-    )
-
-
-    assert (
-        "trace-001"
-        in value
-    )
-
-
-
-def test_from_json():
-    """
-    Exporter restores from JSON.
-    """
-
-    value = """
-    {
-        "items": [
-            {
-                "id": "event-001",
-                "type": "event"
-            }
-        ],
-        "config": {
-            "max_size": 100
-        }
-    }
-    """
-
-
-    exporter = (
-        MemoryExporter
-        .from_json(value)
-    )
-
-
-    assert isinstance(
-        exporter,
-        MemoryExporter,
-    )
-
-
-    assert (
-        exporter.count()
-        ==
-        1
-    )
-
-
-    assert (
-        exporter.get(
-            "event-001"
-        )
-        is not None
-    )
-
-
-
-def test_snapshot(
-    populated_exporter,
-):
-    """
-    Exporter creates snapshot.
-    """
-
-    snapshot = (
-        populated_exporter
-        .snapshot()
-    )
-
+    snapshot = exporter.snapshot()
 
     assert isinstance(
         snapshot,
         dict,
     )
 
+    assert snapshot["size"] == 2
 
-    assert "items" in snapshot
+    assert len(
+        snapshot["items"],
+    ) == 2
 
-    assert (
-        len(
-            snapshot["items"]
+
+def test_clear():
+
+    exporter = MemoryExporter()
+
+    exporter.export(
+        {"id": 1},
+    )
+
+    exporter.export(
+        {"id": 2},
+    )
+
+    assert exporter.size == 2
+
+    exporter.clear()
+
+    assert exporter.size == 0
+
+    assert exporter.items == []
+
+
+# ==============================================================================
+# Part 5. max_items
+# ==============================================================================
+
+
+def test_max_items():
+
+    exporter = MemoryExporter(
+        max_items=2,
+    )
+
+    assert exporter.max_items == 2
+
+
+def test_max_items_limits_storage():
+
+    exporter = MemoryExporter(
+        max_items=2,
+    )
+
+    exporter.export(
+        {"id": 1},
+    )
+
+    exporter.export(
+        {"id": 2},
+    )
+
+    exporter.export(
+        {"id": 3},
+    )
+
+    assert exporter.size == 2
+
+
+def test_max_items_keeps_latest_items():
+
+    exporter = MemoryExporter(
+        max_items=2,
+    )
+
+    exporter.export(
+        {"id": 1},
+    )
+
+    exporter.export(
+        {"id": 2},
+    )
+
+    exporter.export(
+        {"id": 3},
+    )
+
+    items = exporter.items
+
+    assert items[-1]["id"] == 3
+
+    assert items[-2]["id"] == 2
+
+
+def test_max_items_one():
+
+    exporter = MemoryExporter(
+        max_items=1,
+    )
+
+    exporter.export(
+        {"id": 1},
+    )
+
+    exporter.export(
+        {"id": 2},
+    )
+
+    assert exporter.size == 1
+
+    assert exporter.items[0]["id"] == 2
+
+# ==============================================================================
+# Part 6. Lifecycle
+# ==============================================================================
+
+
+def test_start():
+
+    exporter = MemoryExporter()
+
+    assert exporter.state == "created"
+
+    result = exporter.start()
+
+    assert result is exporter
+    assert exporter.state == "running"
+
+
+def test_stop():
+
+    exporter = MemoryExporter()
+
+    exporter.start()
+
+    result = exporter.stop()
+
+    assert result is exporter
+    assert exporter.state == "stopped"
+
+
+def test_start_after_stop():
+
+    exporter = MemoryExporter()
+
+    exporter.start()
+    exporter.stop()
+    exporter.start()
+
+    assert exporter.state == "running"
+
+
+def test_close():
+
+    exporter = MemoryExporter()
+
+    result = exporter.close()
+
+    assert result is exporter
+    assert exporter.state == "closed"
+
+
+def test_close_is_idempotent():
+
+    exporter = MemoryExporter()
+
+    exporter.close()
+
+    result = exporter.close()
+
+    assert result is exporter
+    assert exporter.state == "closed"
+
+
+def test_export_after_close():
+
+    exporter = MemoryExporter()
+
+    exporter.close()
+
+    with pytest.raises(
+        ExportError,
+    ):
+        exporter.export(
+            {"id": 1},
         )
-        ==
-        3
+
+
+# ==============================================================================
+# Part 7. Reset / Clear
+# ==============================================================================
+
+
+def test_clear_does_not_close_exporter():
+
+    exporter = MemoryExporter()
+
+    exporter.export(
+        {"id": 1},
     )
 
+    exporter.clear()
+
+    assert exporter.size == 0
+    assert exporter.state == "running"
 
 
-def test_restore():
-    """
-    Exporter restores from snapshot.
-    """
+def test_reset():
 
-    snapshot = {
-        "items": [
-            {
-                "id": "trace-restore",
-                "type": "trace",
-            }
-        ],
-        "config": {
-            "max_size": 50,
-        },
-        "enabled": True,
-        "running": False,
-    }
+    exporter = MemoryExporter()
+
+    exporter.export(
+        {"id": 1},
+    )
+
+    exporter.export(
+        {"id": 2},
+    )
+
+    assert exporter.size == 2
+    assert exporter.export_count == 2
+
+    result = exporter.reset()
+
+    assert result is exporter
+    assert exporter.size == 0
+    assert exporter.export_count == 0
+    assert exporter.success_count == 0
+    assert exporter.error_count == 0
+    assert exporter.bytes_exported == 0
+    assert exporter.last_export is None
+    assert exporter.state == "created"
 
 
-    exporter = (
-        MemoryExporter
-        .restore(
-            snapshot
+def test_reset_after_close():
+
+    exporter = MemoryExporter()
+
+    exporter.close()
+
+    with pytest.raises(
+        ExportError,
+    ):
+        exporter.reset()
+
+
+def test_clear_empty_storage():
+
+    exporter = MemoryExporter()
+
+    exporter.clear()
+
+    assert exporter.size == 0
+
+
+# ==============================================================================
+# Part 8. Error Handling
+# ==============================================================================
+
+
+def test_error_count_increments():
+
+    exporter = MemoryExporter()
+
+    invalid_payload = object()
+
+    with pytest.raises(
+        (ExportError, TypeError, ValueError),
+    ):
+        exporter.export(
+            invalid_payload,
         )
-    )
+
+    assert exporter.error_count == 1
 
 
-    assert isinstance(
-        exporter,
-        MemoryExporter,
-    )
+def test_last_error():
 
+    exporter = MemoryExporter()
 
-    assert (
-        exporter.count()
-        ==
-        1
-    )
+    invalid_payload = object()
 
-
-    assert (
-        exporter.get(
-            "trace-restore"
+    with pytest.raises(
+        (ExportError, TypeError, ValueError),
+    ):
+        exporter.export(
+            invalid_payload,
         )
-        is not None
-    )
-# ============================================================
-# Part 10 – Clone / Copy
-# ============================================================
 
-import copy
+    assert exporter.last_error is not None
 
 
+def test_success_does_not_increment_error_count():
 
-def test_copy(
-    populated_exporter,
-):
-    """
-    Exporter supports copy operation.
-    """
+    exporter = MemoryExporter()
 
-    cloned = (
-        populated_exporter
-        .copy()
+    exporter.export(
+        {"id": 1},
     )
 
+    assert exporter.error_count == 0
+    assert exporter.last_error is None
 
-    assert isinstance(
-        cloned,
-        MemoryExporter,
+
+def test_disabled_exporter():
+
+    exporter = MemoryExporter(
+        enabled=False,
     )
 
+    with pytest.raises(
+        ExportError,
+    ):
+        exporter.export(
+            {"id": 1},
+        )
 
-    assert (
-        cloned is not populated_exporter
+    assert exporter.error_count == 1
+
+
+# ==============================================================================
+# Part 9. Statistics
+# ==============================================================================
+
+
+def test_initial_statistics():
+
+    exporter = MemoryExporter()
+
+    assert exporter.export_count == 0
+    assert exporter.success_count == 0
+    assert exporter.error_count == 0
+    assert exporter.bytes_exported == 0
+    assert exporter.last_export is None
+
+
+def test_statistics_after_successful_export():
+
+    exporter = MemoryExporter()
+
+    result = exporter.export(
+        {"message": "hello"},
     )
 
+    assert result.success is True
 
-    assert (
-        cloned.count()
-        ==
-        populated_exporter.count()
+    assert exporter.export_count == 1
+    assert exporter.success_count == 1
+    assert exporter.error_count == 0
+    assert exporter.bytes_exported > 0
+    assert exporter.last_export is not None
+
+
+def test_statistics_after_multiple_exports():
+
+    exporter = MemoryExporter()
+
+    exporter.export(
+        {"id": 1},
     )
 
-
-
-def test_clone(
-    populated_exporter,
-):
-    """
-    Exporter creates independent clone.
-    """
-
-    cloned = (
-        populated_exporter
-        .clone()
+    exporter.export(
+        {"id": 2},
     )
 
-
-    assert isinstance(
-        cloned,
-        MemoryExporter,
+    exporter.export(
+        {"id": 3},
     )
 
+    assert exporter.export_count == 3
+    assert exporter.success_count == 3
+    assert exporter.error_count == 0
+    assert exporter.bytes_exported > 0
 
-    assert (
-        cloned is not populated_exporter
+
+def test_statistics_after_error():
+
+    exporter = MemoryExporter()
+
+    with pytest.raises(
+        (ExportError, TypeError, ValueError),
+    ):
+        exporter.export(
+            object(),
+        )
+
+    assert exporter.export_count == 1
+    assert exporter.success_count == 0
+    assert exporter.error_count == 1
+
+
+# ==============================================================================
+# Part 10. Diagnostics
+# ==============================================================================
+
+
+def test_health():
+
+    exporter = MemoryExporter()
+
+    assert exporter.health() is True
+
+    exporter.enabled = False
+
+    assert exporter.health() is False
+
+
+def test_health_after_close():
+
+    exporter = MemoryExporter()
+
+    exporter.close()
+
+    assert exporter.health() is False
+
+
+def test_diagnostics():
+
+    exporter = MemoryExporter(
+        name="test-memory",
+        max_items=10,
     )
 
-
-    assert (
-        cloned.items()
-        ==
-        populated_exporter.items()
+    exporter.export(
+        {"id": 1},
     )
 
-
-    cloned.clear()
-
-
-    assert (
-        cloned.count()
-        ==
-        0
-    )
-
-
-    assert (
-        populated_exporter.count()
-        ==
-        3
-    )
-
-
-
-def test_python_copy(
-    populated_exporter,
-):
-    """
-    Supports copy.copy().
-    """
-
-    cloned = copy.copy(
-        populated_exporter
-    )
-
-
-    assert isinstance(
-        cloned,
-        MemoryExporter,
-    )
-
-
-    assert (
-        cloned is not populated_exporter
-    )
-
-
-    assert (
-        cloned.items()
-        ==
-        populated_exporter.items()
-    )
-
-
-
-def test_python_deepcopy(
-    populated_exporter,
-):
-    """
-    Supports copy.deepcopy().
-    """
-
-    cloned = copy.deepcopy(
-        populated_exporter
-    )
-
-
-    assert isinstance(
-        cloned,
-        MemoryExporter,
-    )
-
-
-    assert (
-        cloned is not populated_exporter
-    )
-
-
-    assert (
-        cloned.items()
-        ==
-        populated_exporter.items()
-    )
-
-
-    cloned.export(
-        {
-            "id": "new-item",
-            "type": "trace",
-        }
-    )
-
-
-    assert (
-        cloned.count()
-        ==
-        4
-    )
-
-
-    assert (
-        populated_exporter.count()
-        ==
-        3
-    )
-# ============================================================
-# Part 11 – Diagnostics
-# ============================================================
-
-
-def test_diagnostics(
-    populated_exporter,
-):
-    """
-    Exporter returns diagnostic information.
-    """
-
-    diagnostics = (
-        populated_exporter
-        .diagnostics()
-    )
-
+    diagnostics = exporter.diagnostics()
 
     assert isinstance(
         diagnostics,
         dict,
     )
 
-
-    assert "valid" in diagnostics
-
-    assert "count" in diagnostics
-
-    assert "enabled" in diagnostics
-
-    assert "running" in diagnostics
-
-    assert "storage_size" in diagnostics
-
-    assert "types" in diagnostics
+    assert diagnostics["name"] == "test-memory"
+    assert diagnostics["state"] == exporter.state
+    assert diagnostics["enabled"] is True
+    assert diagnostics["healthy"] is True
+    assert diagnostics["items"] == exporter.size
+    assert diagnostics["max_items"] == 10
+    assert diagnostics["export_count"] == exporter.export_count
+    assert diagnostics["success_count"] == exporter.success_count
+    assert diagnostics["error_count"] == exporter.error_count
+    assert diagnostics["bytes_exported"] == exporter.bytes_exported
 
 
+def test_summary():
 
-    assert (
-        diagnostics["valid"]
-        is True
+    exporter = MemoryExporter(
+        name="test-memory",
+        max_items=5,
     )
 
-
-    assert (
-        diagnostics["count"]
-        ==
-        3
-    )
-
-
-    assert isinstance(
-        diagnostics["types"],
-        dict,
-    )
-
-
-
-def test_summary(
-    populated_exporter,
-):
-    """
-    Exporter returns concise summary.
-    """
-
-    summary = (
-        populated_exporter
-        .summary()
-    )
-
+    summary = exporter.summary()
 
     assert isinstance(
         summary,
         dict,
     )
 
+    assert summary["name"] == exporter.name
+    assert summary["state"] == exporter.state
+    assert summary["enabled"] == exporter.enabled
+    assert summary["items"] == exporter.size
+    assert summary["max_items"] == exporter.max_items
+    assert summary["export_count"] == exporter.export_count
+    assert summary["success_count"] == exporter.success_count
+    assert summary["error_count"] == exporter.error_count
 
-    assert "count" in summary
 
-    assert "enabled" in summary
-
-    assert "running" in summary
-
+# ==============================================================================
+# Part 11. Representation
+# ==============================================================================
 
 
-    assert (
-        summary["count"]
-        ==
-        3
+def test_repr():
+
+    exporter = MemoryExporter(
+        name="test-memory",
+        max_items=10,
     )
 
-
-    assert (
-        summary["enabled"]
-        is True
-    )
-# ============================================================
-# Part 12 – Python Protocols
-# ============================================================
-
-
-def test_repr(
-    populated_exporter,
-):
-    """
-    Test official representation.
-    """
-
-    value = repr(
-        populated_exporter
-    )
-
+    value = repr(exporter)
 
     assert isinstance(
         value,
         str,
     )
 
+    assert "MemoryExporter" in value
+    assert "test-memory" in value
+    assert "max_items=10" in value
 
-    assert (
-        "MemoryExporter"
-        in value
+
+def test_str():
+
+    exporter = MemoryExporter(
+        name="test-memory",
+        max_items=10,
     )
 
-
-
-def test_str(
-    populated_exporter,
-):
-    """
-    Test human-readable string.
-    """
-
-    value = str(
-        populated_exporter
-    )
-
+    value = str(exporter)
 
     assert isinstance(
         value,
         str,
     )
 
-
-    assert (
-        "MemoryExporter"
-        in value
-    )
-
-
-
-def test_len(
-    populated_exporter,
-):
-    """
-    Test len(exporter).
-    """
-
-    assert (
-        len(populated_exporter)
-        ==
-        3
-    )
-
-
-
-def test_iter(
-    populated_exporter,
-):
-    """
-    Test iteration over exporter.
-    """
-
-    items = list(
-        populated_exporter
-    )
-
-
-    assert isinstance(
-        items,
-        list,
-    )
-
-
-    assert len(items) == 3
-
-
-    assert (
-        items[0]["id"]
-        ==
-        "trace-001"
-    )
-
-
-
-def test_contains(
-    populated_exporter,
-):
-    """
-    Test membership checking.
-    """
-
-    assert (
-        "trace-001"
-        in populated_exporter
-    )
-
-
-    assert (
-        "missing"
-        not in populated_exporter
-    )
-
-
-
-def test_getitem(
-    populated_exporter,
-):
-    """
-    Test dictionary-style access.
-    """
-
-    item = (
-        populated_exporter[
-            "trace-001"
-        ]
-    )
-
-
-    assert item is not None
-
-
-    assert (
-        item["type"]
-        ==
-        "trace"
-    )
-
-
-
-def test_eq(
-    populated_exporter,
-):
-    """
-    Test equality comparison.
-    """
-
-    clone = (
-        populated_exporter
-        .clone()
-    )
-
-
-    assert (
-        populated_exporter
-        ==
-        clone
-    )
-
-
-    clone.export(
-        {
-            "id": "new-item",
-            "type": "event",
-        }
-    )
-
-
-    assert (
-        populated_exporter
-        !=
-        clone
-    )
-
-
-
-def test_hash(
-    populated_exporter,
-):
-    """
-    Test hash protocol.
-    """
-
-    value = hash(
-        populated_exporter
-    )
-
-
-    assert isinstance(
-        value,
-        int,
-    )
-
-
-    clone = (
-        populated_exporter
-        .clone()
-    )
-
-
-    assert (
-        hash(populated_exporter)
-        ==
-        hash(clone)
-    )
-# ============================================================
-# Part 13 – Statistics
-# ============================================================
-
-
-def test_export_count(
-    populated_exporter,
-):
-    """
-    Test successful export counter.
-    """
-
-    stats = (
-        populated_exporter
-        .statistics()
-    )
-
-
-    assert isinstance(
-        stats,
-        dict,
-    )
-
-
-    assert (
-        stats["export_count"]
-        ==
-        3
-    )
-
-
-
-def test_failed_count(
-    exporter,
-):
-    """
-    Test failed export counter.
-    """
-
-    exporter.export(
-        None
-    )
-
-
-    exporter.export(
-        {}
-    )
-
-
-    stats = (
-        exporter
-        .statistics()
-    )
-
-
-    assert (
-        stats["failed_count"]
-        ==
-        2
-    )
-
-
-
-def test_statistics(
-    populated_exporter,
-):
-    """
-    Test complete statistics output.
-    """
-
-    stats = (
-        populated_exporter
-        .statistics()
-    )
-
-
-    assert isinstance(
-        stats,
-        dict,
-    )
-
-
-    assert "export_count" in stats
-
-    assert "failed_count" in stats
-
-    assert "item_count" in stats
-
-    assert "trace_count" in stats
-
-    assert "span_count" in stats
-
-    assert "event_count" in stats
-
-
-
-    assert (
-        stats["export_count"]
-        ==
-        3
-    )
-
-
-    assert (
-        stats["failed_count"]
-        ==
-        0
-    )
-
-
-    assert (
-        stats["item_count"]
-        ==
-        3
-    )
-
-
-    assert (
-        stats["trace_count"]
-        ==
-        1
-    )
-
-
-    assert (
-        stats["span_count"]
-        ==
-        1
-    )
-
-
-    assert (
-        stats["event_count"]
-        ==
-        1
-    )
-# ============================================================
-# Part 14 – Edge Cases
-# ============================================================
-
-
-def test_empty_exporter(
-    exporter,
-):
-    """
-    Empty exporter behaves correctly.
-    """
-
-    assert (
-        exporter.count()
-        ==
-        0
-    )
-
-
-    assert (
-        exporter.items()
-        ==
-        []
-    )
-
-
-    stats = (
-        exporter.statistics()
-    )
-
-
-    assert (
-        stats["item_count"]
-        ==
-        0
-    )
-
-
-    assert (
-        exporter.validate()
-        is True
-    )
-
-
-
-def test_duplicate_export(
-    exporter,
-):
-    """
-    Exporting duplicate items.
-    """
-
-    item = {
-        "id": "trace-001",
-        "type": "trace",
-    }
-
-
-    exporter.export(
-        item
-    )
-
-
-    exporter.export(
-        item
-    )
-
-
-    assert (
-        exporter.count()
-        ==
-        2
-    )
-
-
-    items = exporter.items()
-
-
-    assert (
-        items[0]
-        ==
-        items[1]
-    )
-
-
-
-def test_large_batch(
-    exporter,
-):
-    """
-    Export large number of items.
-    """
-
-    batch = [
-        {
-            "id": f"trace-{i}",
-            "type": "trace",
-        }
-        for i in range(1000)
-    ]
-
-
-    result = exporter.export_batch(
-        batch
-    )
-
-
-    assert result is not None
-
-
-    assert (
-        exporter.count()
-        ==
-        1000
-    )
-
-
-    assert (
-        exporter.get(
-            "trace-999"
-        )
-        is not None
-    )
-
-
-
-def test_invalid_context(
-    exporter,
-):
-    """
-    Exporter handles invalid context safely.
-    """
-
-    invalid_contexts = [
-        None,
-        "",
-        [],
-        123,
-        object(),
-    ]
-
-
-    for context in invalid_contexts:
-
-        result = (
-            exporter.export(
-                {
-                    "id": "invalid",
-                    "type": "trace",
-                    "context": context,
-                }
-            )
-        )
-
-
-        assert (
-            result is False
-            or
-            result is None
-            or
-            result is not None
-        )
-
-
-
-def test_closed_exporter(
-    exporter,
-):
-    """
-    Closed exporter rejects new exports.
-    """
-
-    exporter.start()
-
-
-    exporter.close()
-
-
-    assert (
-        exporter.closed
-        is True
-    )
-
-
-    result = exporter.export(
-        {
-            "id": "after-close",
-            "type": "trace",
-        }
-    )
-
-
-    assert (
-        result is False
-        or
-        result is None
-    )                                                    
+    assert "test-memory" in value
+    assert "items=" in value
+    assert "max_items=" in value
+    assert "state=" in value
