@@ -1,3540 +1,938 @@
 """
-SciOS-NG
-Runtime Observability - Base Exporter
+SciOS Runtime Observability
+===========================
 
-File:
-    scios/runtime/observability/exporters/base.py
+Generic Exporter Base
+---------------------
 
-Description
------------
-Foundation definitions for all SciOS-NG telemetry exporters.
+This module defines the stable exporter contract shared by the
+SciOS observability stack.
 
-All concrete exporters inherit from ``BaseExporter``.
+Architecture
+------------
 
-Supported exporters
--------------------
-- JSON
-- Stdout
-- Prometheus
-- OpenTelemetry
-- Jaeger
-- Zipkin
+    ExportError
+        |
+    ExportFormat
+        |
+    ExportPayload
+        |
+    ExportResult
+        |
+    Exporter
+        |
+        +-- MemoryExporter
+        +-- StdoutExporter
+        +-- JSONExporter
+        +-- PrometheusExporter
+        +-- OpenTelemetryExporter
+        +-- JaegerExporter
+        +-- ZipkinExporter
 
-Version
--------
-0.3.0-alpha
+The base exporter is intentionally independent from metrics, tracing,
+logging, OpenTelemetry, and concrete transport implementations.
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
-# ==============================================================================
-# Part 1. Foundation
-# ==============================================================================
-
-# ==============================================================================
-# Imports
-# ==============================================================================
-
-from abc import ABC, abstractmethod
-
-import copy
-import copy as copy_module
 import json
-import threading
 import time
-import uuid as uuid_module
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Iterable, Mapping, Optional, TypeAlias
 
-from collections import defaultdict
-
-from dataclasses import (
-    asdict,
-    dataclass,
-    field,
-)
-
-from datetime import (
-    datetime,
-    timezone,
-)
-
-from enum import (
-    Enum,
-    Flag,
-    auto,
-)
-
-from pathlib import Path
-
-from typing import (
-    Any,
-    Callable,
-    ClassVar,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Mapping,
-    MutableMapping,
-    Optional,
-    Sequence,
-    TypeAlias,
-    Union,
-)
 
 # ==============================================================================
-# Constants
+# Part 1. Imports
 # ==============================================================================
 
-EXPORTER_VERSION: str = "0.3.0-alpha"
+ExportData: TypeAlias = Mapping[str, Any]
+ExportOptions: TypeAlias = Mapping[str, Any]
 
-DEFAULT_EXPORTER_NAME: str = "BaseExporter"
-
-DEFAULT_DESCRIPTION: str = ""
-
-DEFAULT_DESTINATION: str = "stdout"
-
-DEFAULT_BATCH_SIZE: int = 100
-
-DEFAULT_TIMEOUT: float = 30.0
-
-DEFAULT_RETRY_COUNT: int = 3
-
-DEFAULT_HISTORY_SIZE: int = 1024
-
-DEFAULT_ENCODING: str = "utf-8"
-
-DEFAULT_EXPORT_FORMAT: str = "json"
 
 # ==============================================================================
-# Type Aliases
-# ==============================================================================
-
-ExportPayload: TypeAlias = Any
-
-ExportData: TypeAlias = Dict[str, Any]
-
-ExportOptions: TypeAlias = Dict[str, Any]
-
-ExportMetadata: TypeAlias = Dict[str, Any]
-
-ExportStatisticsMap: TypeAlias = Dict[str, Any]
-
-ExportSnapshot: TypeAlias = Dict[str, Any]
-
-ExportDestination: TypeAlias = Union[str, Path]
-
-ExportHook: TypeAlias = Callable[..., Any]
-
-ExportCallback: TypeAlias = Callable[..., None]
-
-ExportFilter: TypeAlias = Callable[[Any], bool]
-
-ExportSerializer: TypeAlias = Callable[[Any], Any]
-
-ExportDeserializer: TypeAlias = Callable[[Any], Any]
-
-# ==============================================================================
-# Exceptions
+# Part 2. Exceptions
 # ==============================================================================
 
 
-class ExporterError(Exception):
+class ExportError(RuntimeError):
     """
-    Base exporter exception.
+    Base exception for exporter failures.
+
+    ExportError represents an error occurring during export,
+    serialization, validation, or exporter lifecycle operations.
     """
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause: Optional[BaseException] = None,
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
 
-class ExportConfigurationError(ExporterError):
-    """
-    Invalid exporter configuration.
-    """
-
-
-class ExportValidationError(ExporterError):
-    """
-    Invalid export payload.
-    """
-
-
-class ExportRuntimeError(ExporterError):
-    """
-    Export runtime failure.
-    """
-
-
-class ExportSerializationError(ExporterError):
-    """
-    Serialization failure.
-    """
-
-
-class ExportDestinationError(ExporterError):
-    """
-    Destination unavailable.
-    """
-
-
-class ExportTimeoutError(ExporterError):
-    """
-    Export timeout.
-    """
-
-
-class ExportClosedError(ExporterError):
-    """
-    Exporter already closed.
-    """
-
-
-class ExportFrozenError(ExporterError):
-    """
-    Exporter is frozen.
-    """
-
-
-class ExportDisabledError(ExporterError):
-    """
-    Exporter is disabled.
-    """
 
 # ==============================================================================
-# Enums
+# Part 3. Export Format
 # ==============================================================================
 
 
 class ExportFormat(str, Enum):
     """
-    Supported exporter formats.
+    Supported generic export formats.
+
+    Concrete exporters may support only a subset of these formats.
     """
 
     JSON = "json"
-
-    STDOUT = "stdout"
-
+    TEXT = "text"
+    BINARY = "binary"
     PROMETHEUS = "prometheus"
-
-    OPENTELEMETRY = "opentelemetry"
-
+    OTLP = "otlp"
     JAEGER = "jaeger"
-
     ZIPKIN = "zipkin"
 
-    CUSTOM = "custom"
+    def __str__(self) -> str:
+        return self.value
 
-
-class ExportStatus(str, Enum):
-    """
-    Runtime exporter status.
-    """
-
-    CREATED = "created"
-
-    READY = "ready"
-
-    RUNNING = "running"
-
-    EXPORTING = "exporting"
-
-    SUCCESS = "success"
-
-    FAILED = "failed"
-
-    STOPPED = "stopped"
-
-    DISABLED = "disabled"
-
-    FROZEN = "frozen"
-
-    CLOSED = "closed"
-
-
-class ExportMode(str, Enum):
-    """
-    Export execution mode.
-    """
-
-    SYNC = "sync"
-
-    ASYNC = "async"
-
-    STREAM = "stream"
-
-    BATCH = "batch"
-
-
-from enum import Flag, auto
-
-
-class ExportCapability(Flag):
-    """
-    Exporter capabilities.
-    """
-
-    NONE = 0
-
-    # Serialization
-    SERIALIZE = auto()
-    SERIALIZATION = SERIALIZE
-
-    # Deserialization
-    DESERIALIZE = auto()
-    DESERIALIZATION = DESERIALIZE
-
-    # Data transport
-    STREAM = auto()
-    BATCH = auto()
-
-    # Processing
-    FILTER = auto()
-
-    # Security / optimization
-    COMPRESS = auto()
-    COMPRESSION = COMPRESS
-
-    ENCRYPT = auto()
-    ENCRYPTION = ENCRYPT
-
-    # Reliability
-    RETRY = auto()
-    RETRYABLE = RETRY
-
-    # Lifecycle
-    FLUSH = auto()
-    SNAPSHOT = auto()
-    
 
 # ==============================================================================
-# Dataclasses
+# Part 4. Export Payload
 # ==============================================================================
 
 
 @dataclass(slots=True)
-class ExportRecord:
+class ExportPayload:
     """
-    Generic telemetry record.
+    Generic payload passed to an exporter.
+
+    Parameters
+    ----------
+    name:
+        Logical name of the exported item.
+
+    value:
+        Payload value. This may be a scalar, mapping, sequence,
+        or another JSON-compatible/object value.
+
+    labels:
+        Optional labels associated with the payload.
+
+    timestamp:
+        Export/event timestamp. If omitted, the current Unix time
+        is assigned.
+
+    metadata:
+        Optional additional metadata.
+
+    options:
+        Per-payload export options.
     """
 
-    id: str = field(
-        default_factory=lambda: str(uuid_module.uuid4())
-    )
+    name: str
+    value: Any
+    labels: dict[str, Any] = field(default_factory=dict)
+    timestamp: Optional[float] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    options: dict[str, Any] = field(default_factory=dict)
 
-    timestamp: float = field(
-        default_factory=time.time
-    )
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str):
+            raise TypeError("payload name must be a string")
 
-    payload: ExportPayload = None
+        self.name = self.name.strip()
 
-    metadata: ExportMetadata = field(
-        default_factory=dict
-    )
+        if not self.name:
+            raise ValueError("payload name must not be empty")
 
-    tags: List[str] = field(
-        default_factory=list
-    )
+        if self.timestamp is None:
+            self.timestamp = time.time()
 
-    source: str = ""
+        if not isinstance(self.labels, dict):
+            self.labels = dict(self.labels)
+
+        if not isinstance(self.metadata, dict):
+            self.metadata = dict(self.metadata)
+
+        if not isinstance(self.options, dict):
+            self.options = dict(self.options)
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Return a serializable mapping representation.
+        """
+
+        return {
+            "name": self.name,
+            "value": self.value,
+            "labels": dict(self.labels),
+            "timestamp": self.timestamp,
+            "metadata": dict(self.metadata),
+            "options": dict(self.options),
+        }
+
+
+# ==============================================================================
+# Part 5. Export Result
+# ==============================================================================
 
 
 @dataclass(slots=True)
 class ExportResult:
     """
-    Result of one export operation.
+    Result returned by an exporter operation.
+
+    A result describes the outcome of one export attempt without
+    coupling the caller to a concrete exporter implementation.
     """
 
-    success: bool = False
-
-    status: ExportStatus = ExportStatus.CREATED
-
-    message: str = ""
-
-    exported: int = 0
-
+    success: bool
+    exporter: str
+    count: int = 1
+    bytes_exported: int = 0
     duration: float = 0.0
-
-    bytes_sent: int = 0
-
-    metadata: ExportMetadata = field(
-        default_factory=dict
-    )
-
-
-@dataclass(slots=True)
-class ExportStatistics:
-    """
-    Runtime statistics.
-    """
-
-    exports: int = 0
-
-    successes: int = 0
-
-    failures: int = 0
-
-    bytes_sent: int = 0
-
-    average_latency: float = 0.0
-
-    minimum_latency: float = 0.0
-
-    maximum_latency: float = 0.0
-
-    last_export: Optional[float] = None
-
-    started_at: float = field(
-        default_factory=time.time
-    )
-
-    uptime: float = 0.0
-class BaseExporter(ABC):
-
-    """
-    Abstract base class for every SciOS-NG exporter.
-    """
-
-    def __init__(
-        self,
-        *,
-        name: str = DEFAULT_EXPORTER_NAME,
-        description: str = DEFAULT_DESCRIPTION,
-        exporter_format: ExportFormat = ExportFormat.JSON,
-        destination: ExportDestination = DEFAULT_DESTINATION,
-        mode: ExportMode = ExportMode.SYNC,
-        options: Optional[ExportOptions] = None,
-    ) -> None:
-
-        # ------------------------------------------------------------------
-        # Identity
-        # ------------------------------------------------------------------
-
-        self._id: str = str(uuid_module.uuid4())
-
-        self._uuid: uuid_module.UUID = uuid_module.UUID(self._id)
-
-        self._name: str = str(name)
-
-        self._description: str = str(description)
-
-        self._version: str = EXPORTER_VERSION
-
-        self._exporter_type: str = type(self).__name__
-
-        # ------------------------------------------------------------------
-        # Configuration
-        # ------------------------------------------------------------------
-
-        self._format: ExportFormat = exporter_format
-
-        self._destination: ExportDestination = destination
-
-        self._mode: ExportMode = mode
-
-        self._options: ExportOptions = dict(options or {})
-
-        self._timeout: float = DEFAULT_TIMEOUT
-
-        self._batch_size: int = DEFAULT_BATCH_SIZE
-
-        self._retry_count: int = DEFAULT_RETRY_COUNT
-
-        self._history_limit: int = DEFAULT_HISTORY_SIZE
-
-        self._encoding: str = DEFAULT_ENCODING
-
-        self._capabilities: ExportCapability = (
-            ExportCapability.NONE
-        )
-
-        # ------------------------------------------------------------------
-        # Runtime State
-        # ------------------------------------------------------------------
-
-        self._enabled: bool = True
-
-        self._frozen: bool = False
-
-        self._closed: bool = False
-
-        self._running: bool = False
-
-        self._initialized: bool = False
-
-        self._status: ExportStatus = (
-            ExportStatus.CREATED
-        )
-
-        now = time.time()
-
-        self._created_at: float = now
-
-        self._updated_at: float = now
-
-        self._last_export: Optional[float] = None
-
-        # ------------------------------------------------------------------
-        # Statistics
-        # ------------------------------------------------------------------
-
-        self._statistics = ExportStatistics()
-
-        self._export_count: int = 0
-
-        self._success_count: int = 0
-
-        self._failure_count: int = 0
-
-        self._bytes_sent: int = 0
-
-        self._last_latency: float = 0.0
-
-        self._minimum_latency: float = 0.0
-
-        self._maximum_latency: float = 0.0
-
-        self._started_at: float = now
-
-        # ------------------------------------------------------------------
-        # Runtime Objects
-        # ------------------------------------------------------------------
-
-        self._lock = threading.RLock()
-
-        self._hooks: Dict[
-            str,
-            List[ExportHook],
-        ] = defaultdict(list)
-
-        self._callbacks: List[
-            ExportCallback
-        ] = []
-
-        self._cache: Dict[
-            str,
-            Any,
-        ] = {}
-
-        self._history: List[
-            ExportResult
-        ] = []
-
-        self._metadata: ExportMetadata = {}
-
-        self._tags: List[str] = []
-
-        self._filters: List[
-            ExportFilter
-        ] = []
-
-        self._context: Dict[
-            str,
-            Any,
-        ] = {}
-# ==============================================================================
-# Part 3. Properties
-# ==============================================================================
-
-# ==============================================================================
-# Identity
-# ==============================================================================
-
-@property
-def id(self) -> str:
-    """Unique exporter identifier."""
-    return self._id
-
-
-@property
-def uuid_value(self) -> uuid_module.UUID:
-    """Exporter UUID."""
-    return self._uuid
-
-
-@property
-def name(self) -> str:
-    """Exporter name."""
-    return self._name
-
-
-@name.setter
-def name(
-    self,
-    value: str,
-) -> None:
-    self._name = str(value)
-    self._updated_at = time.time()
-
-
-@property
-def description(self) -> str:
-    """Exporter description."""
-    return self._description
-
-
-@description.setter
-def description(
-    self,
-    value: str,
-) -> None:
-    self._description = str(value)
-    self._updated_at = time.time()
-
-
-@property
-def version(self) -> str:
-    """Exporter version."""
-    return self._version
-
-
-@property
-def exporter_type(self) -> str:
-    """Concrete exporter type."""
-    return self._exporter_type
-
-
-# ==============================================================================
-# Configuration
-# ==============================================================================
-
-@property
-def format(self) -> ExportFormat:
-    """Exporter format."""
-    return self._format
-
-
-@format.setter
-def format(
-    self,
-    value: ExportFormat,
-) -> None:
-    self._format = ExportFormat(value)
-    self._updated_at = time.time()
-
-
-@property
-def destination(self) -> ExportDestination:
-    """Export destination."""
-    return self._destination
-
-
-@destination.setter
-def destination(
-    self,
-    value: ExportDestination,
-) -> None:
-    self._destination = value
-    self._updated_at = time.time()
-
-
-@property
-def mode(self) -> ExportMode:
-    """Export execution mode."""
-    return self._mode
-
-
-@mode.setter
-def mode(
-    self,
-    value: ExportMode,
-) -> None:
-    self._mode = ExportMode(value)
-    self._updated_at = time.time()
-
-
-@property
-def options(self) -> ExportOptions:
-    """Exporter options."""
-    return copy.deepcopy(self._options)
-
-
-@property
-def timeout(self) -> float:
-    """Export timeout."""
-    return self._timeout
-
-
-@timeout.setter
-def timeout(
-    self,
-    value: float,
-) -> None:
-    self._timeout = float(value)
-    self._updated_at = time.time()
-
-
-@property
-def batch_size(self) -> int:
-    """Batch size."""
-    return self._batch_size
-
-
-@batch_size.setter
-def batch_size(
-    self,
-    value: int,
-) -> None:
-    self._batch_size = int(value)
-    self._updated_at = time.time()
-
-
-@property
-def retry_count(self) -> int:
-    """Maximum retry count."""
-    return self._retry_count
-
-
-@retry_count.setter
-def retry_count(
-    self,
-    value: int,
-) -> None:
-    self._retry_count = int(value)
-    self._updated_at = time.time()
-
-
-@property
-def history_limit(self) -> int:
-    """Maximum history size."""
-    return self._history_limit
-
-
-@history_limit.setter
-def history_limit(
-    self,
-    value: int,
-) -> None:
-    self._history_limit = max(1, int(value))
-    self._updated_at = time.time()
-
-
-@property
-def encoding(self) -> str:
-    """Encoding used by exporter."""
-    return self._encoding
-
-
-@encoding.setter
-def encoding(
-    self,
-    value: str,
-) -> None:
-    self._encoding = str(value)
-    self._updated_at = time.time()
-
-
-@property
-def capabilities(self) -> ExportCapability:
-    """Exporter capabilities."""
-    return self._capabilities
-
-
-# ==============================================================================
-# Runtime
-# ==============================================================================
-
-@property
-def enabled(self) -> bool:
-    """Whether exporter is enabled."""
-    return self._enabled
-
-
-@property
-def frozen(self) -> bool:
-    """Whether exporter is frozen."""
-    return self._frozen
-
-
-@property
-def closed(self) -> bool:
-    """Whether exporter is closed."""
-    return self._closed
-
-
-@property
-def running(self) -> bool:
-    """Whether exporter is running."""
-    return self._running
-
-
-@property
-def initialized(self) -> bool:
-    """Whether exporter has been initialized."""
-    return self._initialized
-
-
-@property
-def active(self) -> bool:
-    """
-    True when exporter can export records.
-    """
-    return (
-        self._enabled
-        and not self._closed
-        and not self._frozen
-    )
-
-
-@property
-def status(self) -> ExportStatus:
-    """Current runtime status."""
-    return self._status
-
-
-@property
-def created_at(self) -> float:
-    """Creation timestamp."""
-    return self._created_at
-
-
-@property
-def updated_at(self) -> float:
-    """Last update timestamp."""
-    return self._updated_at
-
-
-@property
-def last_export(self) -> Optional[float]:
-    """Timestamp of last successful export."""
-    return self._last_export
-
-
-@property
-def uptime(self) -> float:
-    """Exporter uptime in seconds."""
-    return time.time() - self._started_at
-
-
-# ==============================================================================
-# Statistics
-# ==============================================================================
-
-@property
-def statistics(self) -> ExportStatistics:
-    """Runtime statistics."""
-    return copy.deepcopy(self._statistics)
-
-
-@property
-def export_count(self) -> int:
-    """Total exports."""
-    return self._export_count
-
-
-@property
-def success_count(self) -> int:
-    """Successful exports."""
-    return self._success_count
-
-
-@property
-def failure_count(self) -> int:
-    """Failed exports."""
-    return self._failure_count
-
-
-@property
-def bytes_sent(self) -> int:
-    """Total bytes exported."""
-    return self._bytes_sent
-
-
-@property
-def last_latency(self) -> float:
-    """Last export latency."""
-    return self._last_latency
-
-
-@property
-def minimum_latency(self) -> float:
-    """Minimum export latency."""
-    return self._minimum_latency
-
-
-@property
-def maximum_latency(self) -> float:
-    """Maximum export latency."""
-    return self._maximum_latency
-
-
-@property
-def success_rate(self) -> float:
-    """
-    Success ratio in range [0.0, 1.0].
-    """
-    total = self._export_count
-
-    if total == 0:
-        return 0.0
-
-    return self._success_count / total
-
-
-@property
-def failure_rate(self) -> float:
-    """
-    Failure ratio in range [0.0, 1.0].
-    """
-    total = self._export_count
-
-    if total == 0:
-        return 0.0
-
-    return self._failure_count / total
-
-
-# ==============================================================================
-# Metadata
-# ==============================================================================
-
-@property
-def metadata(self) -> ExportMetadata:
-    """Exporter metadata."""
-    return copy.deepcopy(self._metadata)
-
-
-@property
-def tags(self) -> list[str]:
-    """Exporter tags."""
-    return list(self._tags)
-
-
-@property
-def history(self) -> list[ExportResult]:
-    """Export history."""
-    return list(self._history)
-
-
-@property
-def cache(self) -> dict[str, Any]:
-    """Runtime cache."""
-    return dict(self._cache)
-
-
-@property
-def callbacks(self) -> list[ExportCallback]:
-    """Registered callbacks."""
-    return list(self._callbacks)
-
-
-@property
-def hooks(self) -> dict[str, list[ExportHook]]:
-    """Registered hooks."""
-    return {
-        event: list(hooks)
-        for event, hooks in self._hooks.items()
-    }
-
-
-@property
-def filters(self) -> list[ExportFilter]:
-    """Registered filters."""
-    return list(self._filters)
-
-
-@property
-def context(self) -> dict[str, Any]:
-    """Runtime context."""
-    return copy.deepcopy(self._context)
-# ==============================================================================
-# Part 4. Lifecycle
-# ==============================================================================
-
-def initialize(self) -> "BaseExporter":
-    """
-    Initialize exporter runtime.
-
-    This method is safe to call multiple times.
-    """
-
-    with self._lock:
-
-        if self._initialized:
-            return self
-
-        now = time.time()
-
-        self._initialized = True
-        self._running = False
-        self._closed = False
-
-        self._status = ExportStatus.READY
-
-        self._created_at = now
-        self._updated_at = now
-        self._started_at = now
-
-        self.emit_event("initialize")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def start(self) -> "BaseExporter":
-    """
-    Start exporter.
-    """
-
-    with self._lock:
-
-        if not self._initialized:
-            self.initialize()
-
-        if self._running:
-            return self
-
-        if self._closed:
-            raise ExportClosedError(
-                "Exporter has been closed."
-            )
-
-        if not self._enabled:
-            raise ExportDisabledError(
-                "Exporter is disabled."
-            )
-
-        if self._frozen:
-            raise ExportFrozenError(
-                "Exporter is frozen."
-            )
-
-        self._running = True
-        self._status = ExportStatus.RUNNING
-        self._updated_at = time.time()
-
-        self.emit_event("start")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def stop(self) -> "BaseExporter":
-    """
-    Stop exporter.
-    """
-
-    with self._lock:
-
-        if not self._running:
-            return self
-
-        self._running = False
-        self._status = ExportStatus.STOPPED
-        self._updated_at = time.time()
-
-        self.emit_event("stop")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def enable(self) -> "BaseExporter":
-    """
-    Enable exporter.
-    """
-
-    with self._lock:
-
-        if self._enabled:
-            return self
-
-        self._enabled = True
-
-        if not self._closed:
-            self._status = ExportStatus.READY
-
-        self._updated_at = time.time()
-
-        self.emit_event("enable")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def disable(self) -> "BaseExporter":
-    """
-    Disable exporter.
-    """
-
-    with self._lock:
-
-        if not self._enabled:
-            return self
-
-        self._enabled = False
-        self._running = False
-
-        self._status = ExportStatus.DISABLED
-
-        self._updated_at = time.time()
-
-        self.emit_event("disable")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def freeze(self) -> "BaseExporter":
-    """
-    Freeze exporter.
-
-    Export requests should be rejected while frozen.
-    """
-
-    with self._lock:
-
-        if self._frozen:
-            return self
-
-        self._frozen = True
-        self._running = False
-
-        self._status = ExportStatus.FROZEN
-
-        self._updated_at = time.time()
-
-        self.emit_event("freeze")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def unfreeze(self) -> "BaseExporter":
-    """
-    Unfreeze exporter.
-    """
-
-    with self._lock:
-
-        if not self._frozen:
-            return self
-
-        self._frozen = False
-
-        if self._enabled and not self._closed:
-            self._status = ExportStatus.READY
-
-        self._updated_at = time.time()
-
-        self.emit_event("unfreeze")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def close(self) -> "BaseExporter":
-    """
-    Close exporter permanently.
-
-    Runtime resources are released.
-    """
-
-    with self._lock:
-
-        if self._closed:
-            return self
-
-        self._running = False
-        self._closed = True
-
-        self._status = ExportStatus.CLOSED
-
-        self._updated_at = time.time()
-
-        self.emit_event("close")
-
-        #
-        # Release transient runtime resources.
-        #
-
-        self._cache.clear()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def reopen(self) -> "BaseExporter":
-    """
-    Reopen a previously closed exporter.
-    """
-
-    with self._lock:
-
-        if not self._closed:
-            return self
-
-        self._closed = False
-
-        if not self._initialized:
-            self.initialize()
-
-        if self._enabled:
-
-            if self._frozen:
-                self._status = ExportStatus.FROZEN
-            else:
-                self._status = ExportStatus.READY
-
-        else:
-            self._status = ExportStatus.DISABLED
-
-        self._updated_at = time.time()
-
-        self.emit_event("reopen")
-
-    return self
-# ==============================================================================
-# Part 5. Export API
-# ==============================================================================
-
-def export(
-    self,
-    record: ExportRecord,
-) -> ExportResult:
-    """
-    Export a single record.
-
-    Workflow
-    --------
-    validate
-        ↓
-    before_export
-        ↓
-    serialize
-        ↓
-    write
-        ↓
-    statistics
-        ↓
-    after_export
-    """
-
-    start = time.perf_counter()
-
-    self.validate_record(
-        record,
-        raise_error=True,
-    )
-
-    if not self._enabled:
-        raise ExportDisabledError(
-            "Exporter is disabled."
-        )
-
-    if self._closed:
-        raise ExportClosedError(
-            "Exporter has been closed."
-        )
-
-    if self._frozen:
-        raise ExportFrozenError(
-            "Exporter is frozen."
-        )
-
-    self.before_export(record)
-
-    self._status = ExportStatus.EXPORTING
-
-    try:
-
-        prepared = self.prepare(record)
-
-        payload = self.serialize(prepared)
-
-        written = self.write(payload)
-
-        duration = (
-            time.perf_counter() - start
-        )
-
-        #
-        # Runtime state
-        #
-
-        self._last_export = time.time()
-
-        self._updated_at = self._last_export
-
-        self._status = ExportStatus.SUCCESS
-
-        #
-        # Statistics
-        #
-
-        self._export_count += 1
-
-        self._success_count += 1
-
-        self._bytes_sent += written
-
-        self._last_latency = duration
-
-        if (
-            self._minimum_latency == 0.0
-            or duration < self._minimum_latency
-        ):
-            self._minimum_latency = duration
-
-        if duration > self._maximum_latency:
-            self._maximum_latency = duration
-
-        stats = self._statistics
-
-        stats.exports += 1
-        stats.successes += 1
-        stats.bytes_sent += written
-        stats.last_export = self._last_export
-
-        if stats.average_latency == 0.0:
-            stats.average_latency = duration
-        else:
-            stats.average_latency = (
-                (
-                    stats.average_latency
-                    * (stats.exports - 1)
-                )
-                + duration
-            ) / stats.exports
-
-        result = ExportResult(
-            success=True,
-            status=ExportStatus.SUCCESS,
-            exported=1,
-            duration=duration,
-            bytes_sent=written,
-        )
-
-        self._history.append(result)
-
-        if len(self._history) > self._history_limit:
-            self._history.pop(0)
-
-        self.after_export(
-            prepared,
-            result,
-        )
-
-        return self.finalize(result)
-
-    except Exception as exc:
-
-        duration = (
-            time.perf_counter() - start
-        )
-
-        self._status = ExportStatus.FAILED
-
-        self._updated_at = time.time()
-
-        self._export_count += 1
-
-        self._failure_count += 1
-
-        self._statistics.exports += 1
-
-        self._statistics.failures += 1
-
-        result = ExportResult(
-            success=False,
-            status=ExportStatus.FAILED,
-            message=str(exc),
-            exported=0,
-            duration=duration,
-            bytes_sent=0,
-        )
-
-        self._history.append(result)
-
-        self.after_export(
-            record,
-            result,
-        )
-
-        return self.finalize(result)
-
-
-# ------------------------------------------------------------------------------
-
-def export_batch(
-    self,
-    records: Iterable[ExportRecord],
-) -> list[ExportResult]:
-    """
-    Export multiple records.
-    """
-
-    results: list[ExportResult] = []
-
-    for record in records:
-
-        results.append(
-            self.export(record)
-        )
-
-    return results
-
-
-# ------------------------------------------------------------------------------
-
-def export_many(
-    self,
-    records: Iterable[ExportRecord],
-) -> list[ExportResult]:
-    """
-    Alias of export_batch().
-    """
-
-    return self.export_batch(records)
-
-
-# ------------------------------------------------------------------------------
-
-@abstractmethod
-def serialize(
-    self,
-    record: ExportRecord,
-) -> Any:
-    """
-    Serialize one ExportRecord.
-
-    Returns
-    -------
-    Backend specific payload.
-    """
-    raise NotImplementedError
-
-
-# ------------------------------------------------------------------------------
-
-@abstractmethod
-def deserialize(
-    self,
-    payload: Any,
-) -> ExportRecord:
-    """
-    Deserialize backend payload.
-    """
-    raise NotImplementedError
-
-
-# ------------------------------------------------------------------------------
-
-@abstractmethod
-def write(
-    self,
-    payload: Any,
-) -> int:
-    """
-    Write serialized payload.
-
-    Returns
-    -------
-    int
-        Number of bytes written.
-    """
-    raise NotImplementedError
-
-
-# ------------------------------------------------------------------------------
-
-def flush(self) -> "BaseExporter":
-    """
-    Flush pending export buffers.
-
-    Concrete exporters may override this.
-    """
-
-    self.emit_event("before_flush")
-
-    self.emit_event("after_flush")
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def clear(self) -> "BaseExporter":
-    """
-    Clear runtime buffers.
-    """
-
-    with self._lock:
-
-        self._history.clear()
-
-        self._cache.clear()
-
-        self._updated_at = time.time()
-
-    return self
-# ==============================================================================
-# Part 6. Runtime Operations
-# ==============================================================================
-
-def snapshot(self) -> ExportSnapshot:
-    """
-    Create a snapshot of the exporter runtime state.
-
-    Returns
-    -------
-    ExportSnapshot
-        Serializable exporter state.
-    """
-
-    with self._lock:
+    error: Optional[str] = None
+    data: Any = None
+    timestamp: float = field(default_factory=time.time)
+
+    @property
+    def failed(self) -> bool:
+        """Return True when the export failed."""
+
+        return not self.success
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Return a dictionary representation.
+        """
 
         return {
-
-            # Identity
-
-            "id": self._id,
-
-            "uuid": str(self._uuid),
-
-            "name": self._name,
-
-            "description": self._description,
-
-            "version": self._version,
-
-            "exporter_type": self._exporter_type,
-
-            # Configuration
-
-            "format": self._format.value,
-
-            "destination": str(self._destination),
-
-            "mode": self._mode.value,
-
-            "options": copy.deepcopy(
-                self._options
-            ),
-
-            "timeout": self._timeout,
-
-            "batch_size": self._batch_size,
-
-            "retry_count": self._retry_count,
-
-            "history_limit": self._history_limit,
-
-            "encoding": self._encoding,
-
-            # Runtime
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "running": self._running,
-
-            "initialized": self._initialized,
-
-            "status": self._status.value,
-
-            "created_at": self._created_at,
-
-            "updated_at": self._updated_at,
-
-            "last_export": self._last_export,
-
-            # Statistics
-
-            "statistics": copy.deepcopy(
-                self._statistics
-            ),
-
-            "export_count": self._export_count,
-
-            "success_count": self._success_count,
-
-            "failure_count": self._failure_count,
-
-            "bytes_sent": self._bytes_sent,
-
-            "last_latency": self._last_latency,
-
-            "minimum_latency": self._minimum_latency,
-
-            "maximum_latency": self._maximum_latency,
-
-            # Metadata
-
-            "metadata": copy.deepcopy(
-                self._metadata
-            ),
-
-            "tags": list(
-                self._tags
-            ),
-
+            "success": self.success,
+            "exporter": self.exporter,
+            "count": self.count,
+            "bytes_exported": self.bytes_exported,
+            "duration": self.duration,
+            "error": self.error,
+            "data": self.data,
+            "timestamp": self.timestamp,
         }
 
 
-# ------------------------------------------------------------------------------
-
-def restore(
-    self,
-    snapshot: ExportSnapshot,
-) -> "BaseExporter":
-    """
-    Restore exporter from a snapshot.
-    """
-
-    with self._lock:
-
-        self._name = snapshot.get(
-            "name",
-            self._name,
-        )
-
-        self._description = snapshot.get(
-            "description",
-            self._description,
-        )
-
-        self._format = ExportFormat(
-            snapshot.get(
-                "format",
-                self._format.value,
-            )
-        )
-
-        self._destination = snapshot.get(
-            "destination",
-            self._destination,
-        )
-
-        self._mode = ExportMode(
-            snapshot.get(
-                "mode",
-                self._mode.value,
-            )
-        )
-
-        self._options = copy.deepcopy(
-            snapshot.get(
-                "options",
-                self._options,
-            )
-        )
-
-        self._timeout = snapshot.get(
-            "timeout",
-            self._timeout,
-        )
-
-        self._batch_size = snapshot.get(
-            "batch_size",
-            self._batch_size,
-        )
-
-        self._retry_count = snapshot.get(
-            "retry_count",
-            self._retry_count,
-        )
-
-        self._history_limit = snapshot.get(
-            "history_limit",
-            self._history_limit,
-        )
-
-        self._encoding = snapshot.get(
-            "encoding",
-            self._encoding,
-        )
-
-        self._enabled = snapshot.get(
-            "enabled",
-            self._enabled,
-        )
-
-        self._frozen = snapshot.get(
-            "frozen",
-            self._frozen,
-        )
-
-        self._closed = snapshot.get(
-            "closed",
-            self._closed,
-        )
-
-        self._running = snapshot.get(
-            "running",
-            self._running,
-        )
-
-        self._initialized = snapshot.get(
-            "initialized",
-            self._initialized,
-        )
-
-        self._status = ExportStatus(
-            snapshot.get(
-                "status",
-                self._status.value,
-            )
-        )
-
-        self._created_at = snapshot.get(
-            "created_at",
-            self._created_at,
-        )
-
-        self._updated_at = time.time()
-
-        self._last_export = snapshot.get(
-            "last_export",
-            self._last_export,
-        )
-
-        self._statistics = copy.deepcopy(
-            snapshot.get(
-                "statistics",
-                self._statistics,
-            )
-        )
-
-        self._export_count = snapshot.get(
-            "export_count",
-            self._export_count,
-        )
-
-        self._success_count = snapshot.get(
-            "success_count",
-            self._success_count,
-        )
-
-        self._failure_count = snapshot.get(
-            "failure_count",
-            self._failure_count,
-        )
-
-        self._bytes_sent = snapshot.get(
-            "bytes_sent",
-            self._bytes_sent,
-        )
-
-        self._last_latency = snapshot.get(
-            "last_latency",
-            self._last_latency,
-        )
-
-        self._minimum_latency = snapshot.get(
-            "minimum_latency",
-            self._minimum_latency,
-        )
-
-        self._maximum_latency = snapshot.get(
-            "maximum_latency",
-            self._maximum_latency,
-        )
-
-        self._metadata = copy.deepcopy(
-            snapshot.get(
-                "metadata",
-                self._metadata,
-            )
-        )
-
-        self._tags = list(
-            snapshot.get(
-                "tags",
-                self._tags,
-            )
-        )
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def clone(self) -> "BaseExporter":
-    """
-    Deep clone exporter.
-    """
-
-    return copy.deepcopy(self)
-
-
-# ------------------------------------------------------------------------------
-
-def copy(self) -> "BaseExporter":
-    """
-    Shallow copy exporter.
-    """
-
-    return copy.copy(self)
-
-
-# ------------------------------------------------------------------------------
-
-def optimize(self) -> "BaseExporter":
-    """
-    Optimize runtime memory.
-    """
-
-    with self._lock:
-
-        self._cache.clear()
-
-        if len(self._history) > self._history_limit:
-            self._history = self._history[
-                -self._history_limit:
-            ]
-
-        self._updated_at = time.time()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def compact(self) -> "BaseExporter":
-    """
-    Compact runtime state.
-    """
-
-    with self._lock:
-
-        if len(self._history) > 1:
-
-            self._history = [
-                self._history[-1]
-            ]
-
-        self._cache.clear()
-
-        self._updated_at = time.time()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def cleanup(self) -> "BaseExporter":
-    """
-    Cleanup transient runtime objects.
-    """
-
-    with self._lock:
-
-        self._cache.clear()
-
-        self._callbacks.clear()
-
-        self._hooks.clear()
-
-        self._filters.clear()
-
-        self._context.clear()
-
-        self._updated_at = time.time()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def reset(self) -> "BaseExporter":
-    """
-    Reset runtime statistics and temporary state.
-
-    Configuration is preserved.
-    """
-
-    with self._lock:
-
-        self._history.clear()
-
-        self._cache.clear()
-
-        self._statistics = ExportStatistics()
-
-        self._export_count = 0
-
-        self._success_count = 0
-
-        self._failure_count = 0
-
-        self._bytes_sent = 0
-
-        self._last_latency = 0.0
-
-        self._minimum_latency = 0.0
-
-        self._maximum_latency = 0.0
-
-        self._last_export = None
-
-        self._status = ExportStatus.READY
-
-        self._updated_at = time.time()
-
-    return self  
 # ==============================================================================
-# Part 7. Statistics & Diagnostics
+# Part 6. Exporter
 # ==============================================================================
 
-def summary(self) -> dict[str, Any]:
+
+class Exporter:
     """
-    Return a concise exporter summary.
-    """
+    Generic base exporter for SciOS observability.
 
-    return {
+    The class owns:
 
-        "id": self._id,
+    - configuration
+    - lifecycle
+    - payload validation
+    - serialization
+    - export statistics
+    - error tracking
+    - diagnostics
 
-        "name": self._name,
+    Concrete exporters should override :meth:`_export`.
 
-        "type": self._exporter_type,
+    Examples
+    --------
+    A minimal exporter implementation::
 
-        "version": self._version,
+        class MemoryExporter(Exporter):
 
-        "status": self._status.value,
+            def _export(self, payload, *, options):
+                self.items.append(payload)
+                return payload
 
-        "enabled": self._enabled,
-
-        "running": self._running,
-
-        "format": self._format.value,
-
-        "destination": str(self._destination),
-
-        "exports": self._export_count,
-
-        "successes": self._success_count,
-
-        "failures": self._failure_count,
-
-        "success_rate": self.success_rate,
-
-        "uptime": self.uptime,
-
-    }
-
-
-# ------------------------------------------------------------------------------
-
-def report(self) -> dict[str, Any]:
-    """
-    Return a complete exporter report.
+    Notes
+    -----
+    ``export()`` accepts per-call options. These options override
+    exporter defaults for that operation only and never mutate
+    ``self.options``.
     """
 
-    return {
+    # ==========================================================================
+    # Part 6.1. Constructor
+    # ==========================================================================
 
-        "identity": {
+    def __init__(
+        self,
+        name: str,
+        format: ExportFormat = ExportFormat.JSON,
+        *,
+        encoding: str = "utf-8",
+        enabled: bool = True,
+        options: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        self._name = name
+        self._format = format
+        self._encoding = encoding
+        self._enabled = enabled
+        self._options = dict(options or {})
 
-            "id": self._id,
+        self._started = False
+        self._closed = False
 
-            "uuid": str(self._uuid),
+        # ------------------------------------------------------------------
+        # Export lifecycle statistics.
+        #
+        # These counters are owned exclusively by the base Exporter.
+        # Subclasses must NOT initialize or increment them independently.
+        # ------------------------------------------------------------------
 
-            "name": self._name,
+        self._export_count: int = 0
+        self._success_count: int = 0
+        self._error_count: int = 0
+        self._bytes_exported: int = 0
 
-            "description": self._description,
+        self._last_export: Optional[float] = None
+        self._last_error: Optional[str] = None
 
-            "type": self._exporter_type,
+        self.validate()
 
-            "version": self._version,
+    # ==========================================================================
+    # Part 6.2. Configuration Properties
+    # ==========================================================================
 
-        },
+    @property
+    def name(self) -> str:
+        """Return exporter name."""
 
-        "configuration": {
+        return self._name
 
-            "format": self._format.value,
+    @property
+    def format(self) -> ExportFormat:
+        """Return configured export format."""
 
-            "destination": str(
-                self._destination
-            ),
+        return self._format
 
-            "mode": self._mode.value,
+    @property
+    def encoding(self) -> str:
+        """Return configured text encoding."""
 
-            "timeout": self._timeout,
+        return self._encoding
 
-            "batch_size": self._batch_size,
+    @property
+    def enabled(self) -> bool:
+        """Return whether the exporter is enabled."""
 
-            "retry_count": self._retry_count,
+        return self._enabled
 
-            "history_limit": self._history_limit,
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise TypeError("enabled must be a bool")
 
-            "encoding": self._encoding,
+        self._enabled = value
 
-        },
+    @property
+    def options(self) -> dict[str, Any]:
+        """
+        Return a copy of exporter options.
 
-        "runtime": {
+        The internal configuration is never exposed directly.
+        """
 
-            "enabled": self._enabled,
+        return dict(self._options)
 
-            "running": self._running,
+    @property
+    def started(self) -> bool:
+        """Return True when the exporter is running."""
 
-            "initialized": self._initialized,
+        return self._started
 
-            "frozen": self._frozen,
+    @property
+    def closed(self) -> bool:
+        """Return True when the exporter has been closed."""
 
-            "closed": self._closed,
+        return self._closed
 
-            "status": self._status.value,
+    @property
+    def state(self) -> str:
+        """
+        Return the current lifecycle state.
 
-            "created_at": self._created_at,
+        Possible values:
 
-            "updated_at": self._updated_at,
+        - ``closed``
+        - ``started``
+        - ``stopped``
+        """
 
-            "last_export": self._last_export,
+        if self._closed:
+            return "closed"
 
-            "uptime": self.uptime,
+        if self._started:
+            return "started"
 
-        },
+        return "stopped"
 
-        "statistics": self.metrics(),
+    # ==========================================================================
+    # Part 6.3. Statistics Properties
+    # ==========================================================================
 
-        "metadata": copy.deepcopy(
-            self._metadata
-        ),
+    @property
+    def export_count(self) -> int:
+        return self._export_count
 
-        "tags": list(self._tags),
 
-    }
+    @property
+    def success_count(self) -> int:
+        return self._success_count
 
 
-# ------------------------------------------------------------------------------
+    @property
+    def error_count(self) -> int:
+        return self._error_count
 
-def diagnostics(self) -> dict[str, Any]:
-    """
-    Return runtime diagnostics.
-    """
+    @property
+    def bytes_exported(self) -> int:
+        """Return total exported byte count."""
 
-    return {
+        return self._bytes_exported
 
-        "healthy": (
+    @property
+    def last_export(self) -> Optional[float]:
+        """Return timestamp of the last export attempt."""
 
-            self._enabled
+        return self._last_export
 
-            and not self._closed
+    @property
+    def last_error(self) -> Optional[str]:
+        """Return the last exporter error."""
 
-            and not self._frozen
+        return self._last_error
 
-        ),
+    # ==========================================================================
+    # Part 6.4. Lifecycle
+    # ==========================================================================
 
-        "active": self.active,
+    def start(self) -> "Exporter":
+        """
+        Start the exporter.
 
-        "status": self._status.value,
+        Calling start repeatedly is idempotent.
+        """
 
-        "cache_entries": len(
-            self._cache
-        ),
+        if self._closed:
+            raise RuntimeError("cannot start a closed exporter")
 
-        "history_size": len(
-            self._history
-        ),
-
-        "callback_count": len(
-            self._callbacks
-        ),
-
-        "hook_count": sum(
-
-            len(v)
-
-            for v in self._hooks.values()
-
-        ),
-
-        "filter_count": len(
-            self._filters
-        ),
-
-        "thread_safe": True,
-
-    }
-
-
-# ------------------------------------------------------------------------------
-
-def health(self) -> dict[str, Any]:
-    """
-    Return exporter health information.
-    """
-
-    issues: list[str] = []
-
-    if not self._enabled:
-
-        issues.append(
-            "exporter_disabled"
-        )
-
-    if self._closed:
-
-        issues.append(
-            "exporter_closed"
-        )
-
-    if self._frozen:
-
-        issues.append(
-            "exporter_frozen"
-        )
-
-    if self._status == ExportStatus.FAILED:
-
-        issues.append(
-            "runtime_failure"
-        )
-
-    return {
-
-        "healthy": len(issues) == 0,
-
-        "status": self._status.value,
-
-        "issues": issues,
-
-    }
-
-
-# ------------------------------------------------------------------------------
-
-def metrics(self) -> dict[str, Any]:
-    """
-    Return exporter metrics snapshot.
-    """
-
-    stats = self._statistics
-
-    return {
-
-        "exports": self._export_count,
-
-        "successes": self._success_count,
-
-        "failures": self._failure_count,
-
-        "bytes_sent": self._bytes_sent,
-
-        "last_latency": self._last_latency,
-
-        "minimum_latency": self._minimum_latency,
-
-        "maximum_latency": self._maximum_latency,
-
-        "average_latency": (
-            stats.average_latency
-        ),
-
-        "success_rate": self.success_rate,
-
-        "failure_rate": self.failure_rate,
-
-        "last_export": self._last_export,
-
-        "uptime": self.uptime,
-
-    }
-# ==============================================================================
-# Part 8. Validation
-# ==============================================================================
-
-def validate(
-    self,
-    *,
-    raise_error: bool = False,
-) -> bool:
-    """
-    Validate the exporter.
-
-    This method validates:
-
-        • configuration
-        • destination
-        • runtime integrity
-    """
-
-    validators = (
-
-        self.validate_configuration,
-
-        self.validate_destination,
-
-        self.check_integrity,
-
-    )
-
-    for validator in validators:
-
-        try:
-
-            validator(
-                raise_error=True,
-            )
-
-        except Exception:
-
-            if raise_error:
-                raise
-
-            return False
-
-    return True
-
-
-# ------------------------------------------------------------------------------
-
-def validate_record(
-    self,
-    record: ExportRecord,
-    *,
-    raise_error: bool = False,
-) -> bool:
-    """
-    Validate an export record.
-    """
-
-    try:
-
-        if not isinstance(
-            record,
-            ExportRecord,
-        ):
-            raise TypeError(
-                "record must be ExportRecord"
-            )
-
-        if record.payload is None:
-            raise ValueError(
-                "payload cannot be None"
-            )
-
-        if not isinstance(
-            record.metadata,
-            dict,
-        ):
-            raise TypeError(
-                "metadata must be dict"
-            )
-
-        if not isinstance(
-            record.tags,
-            list,
-        ):
-            raise TypeError(
-                "tags must be list"
-            )
-
-        return True
-
-    except Exception:
-
-        if raise_error:
-            raise
-
-        return False
-
-
-# ------------------------------------------------------------------------------
-
-def validate_configuration(
-    self,
-    *,
-    raise_error: bool = False,
-) -> bool:
-    """
-    Validate exporter configuration.
-    """
-
-    try:
-
-        if not isinstance(
-            self._format,
-            ExportFormat,
-        ):
-            raise TypeError(
-                "invalid export format"
-            )
-
-        if not isinstance(
-            self._mode,
-            ExportMode,
-        ):
-            raise TypeError(
-                "invalid export mode"
-            )
-
-        if self._timeout <= 0:
-
-            raise ValueError(
-                "timeout must be positive"
-            )
-
-        if self._batch_size <= 0:
-
-            raise ValueError(
-                "batch_size must be positive"
-            )
-
-        if self._retry_count < 0:
-
-            raise ValueError(
-                "retry_count cannot be negative"
-            )
-
-        if self._history_limit <= 0:
-
-            raise ValueError(
-                "history_limit must be positive"
-            )
-
-        if not isinstance(
-            self._encoding,
-            str,
-        ):
-            raise TypeError(
-                "encoding must be str"
-            )
-
-        if not self._encoding:
-
-            raise ValueError(
-                "encoding cannot be empty"
-            )
-
-        return True
-
-    except Exception:
-
-        if raise_error:
-            raise
-
-        return False
-
-
-# ------------------------------------------------------------------------------
-
-def validate_destination(
-    self,
-    *,
-    raise_error: bool = False,
-) -> bool:
-    """
-    Validate exporter destination.
-    """
-
-    try:
-
-        destination = self._destination
-
-        if destination is None:
-
-            raise ValueError(
-                "destination is not configured"
-            )
-
-        if isinstance(
-            destination,
-            str,
-        ):
-
-            if not destination.strip():
-
-                raise ValueError(
-                    "destination cannot be empty"
-                )
-
-        elif isinstance(
-            destination,
-            Path,
-        ):
-
-            #
-            # Path object is always accepted.
-            #
-
-            pass
-
-        else:
-
-            raise TypeError(
-                "destination must be str or Path"
-            )
-
-        return True
-
-    except Exception:
-
-        if raise_error:
-            raise
-
-        return False
-
-
-# ------------------------------------------------------------------------------
-
-def check_integrity(
-    self,
-    *,
-    raise_error: bool = False,
-) -> bool:
-    """
-    Check exporter runtime integrity.
-    """
-
-    try:
-
-        required = (
-
-            self._statistics,
-
-            self._cache,
-
-            self._history,
-
-            self._hooks,
-
-            self._callbacks,
-
-            self._filters,
-
-            self._context,
-
-        )
-
-        if any(
-            obj is None
-            for obj in required
-        ):
-            raise RuntimeError(
-                "runtime object missing"
-            )
-
-        if self._success_count > self._export_count:
-
-            raise RuntimeError(
-                "success_count exceeds export_count"
-            )
-
-        if self._failure_count > self._export_count:
-
-            raise RuntimeError(
-                "failure_count exceeds export_count"
-            )
-
-        if (
-            self._success_count
-            + self._failure_count
-            > self._export_count
-        ):
-
-            raise RuntimeError(
-                "statistics are inconsistent"
-            )
-
-        if self._bytes_sent < 0:
-
-            raise RuntimeError(
-                "bytes_sent cannot be negative"
-            )
-
-        return True
-
-    except Exception:
-
-        if raise_error:
-            raise
-
-        return False
-# ==============================================================================
-# Part 9. Events & Hooks
-# ==============================================================================
-
-def before_export(
-    self,
-    record: ExportRecord,
-) -> ExportRecord:
-    """
-    Hook executed before exporting a record.
-    """
-
-    self.emit_event(
-        "before_export",
-        record,
-    )
-
-    return record
-
-
-# ------------------------------------------------------------------------------
-
-def after_export(
-    self,
-    record: ExportRecord,
-    result: ExportResult,
-) -> ExportResult:
-    """
-    Hook executed after exporting a record.
-    """
-
-    self.emit_event(
-        "after_export",
-        record,
-        result,
-    )
-
-    return result
-
-
-# ------------------------------------------------------------------------------
-
-def before_flush(self) -> None:
-    """
-    Hook executed before flush().
-    """
-
-    self.emit_event(
-        "before_flush",
-    )
-
-
-# ------------------------------------------------------------------------------
-
-def after_flush(self) -> None:
-    """
-    Hook executed after flush().
-    """
-
-    self.emit_event(
-        "after_flush",
-    )
-
-
-# ------------------------------------------------------------------------------
-
-def add_hook(
-    self,
-    event: str,
-    hook: ExportHook,
-) -> "BaseExporter":
-    """
-    Register a hook for an event.
-
-    Duplicate hooks are ignored.
-    """
-
-    if not callable(hook):
-
-        raise TypeError(
-            "hook must be callable"
-        )
-
-    with self._lock:
-
-        hooks = self._hooks.setdefault(
-            event,
-            [],
-        )
-
-        if hook not in hooks:
-
-            hooks.append(hook)
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def remove_hook(
-    self,
-    event: str,
-    hook: ExportHook,
-) -> "BaseExporter":
-    """
-    Remove a registered hook.
-    """
-
-    with self._lock:
-
-        hooks = self._hooks.get(event)
-
-        if not hooks:
-
+        if self._started:
             return self
 
-        try:
-
-            hooks.remove(hook)
-
-        except ValueError:
-
-            pass
-
-        if not hooks:
-
-            self._hooks.pop(
-                event,
-                None,
-            )
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def clear_hooks(
-    self,
-    event: str | None = None,
-) -> "BaseExporter":
-    """
-    Remove registered hooks.
-
-    Parameters
-    ----------
-    event
-        None -> remove all hooks.
-    """
-
-    with self._lock:
-
-        if event is None:
-
-            self._hooks.clear()
-
-        else:
-
-            self._hooks.pop(
-                event,
-                None,
-            )
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def emit_event(
-    self,
-    event: str,
-    *args: Any,
-    **kwargs: Any,
-) -> None:
-    """
-    Emit an exporter event.
-
-    Hook exceptions never interrupt exporter execution.
-    """
-
-    hooks = tuple(
-        self._hooks.get(
-            event,
-            (),
-        )
-    )
-
-    for hook in hooks:
-
-        try:
-
-            hook(
-                *args,
-                **kwargs,
-            )
-
-        except Exception:
-
-            #
-            # Hooks must never stop exporter execution.
-            #
-
-            continue
-
-    callbacks = tuple(
-        self._callbacks
-    )
-
-    for callback in callbacks:
-
-        try:
-
-            callback(
-                event,
-                *args,
-                **kwargs,
-            )
-
-        except Exception:
-
-            #
-            # Global callbacks are also isolated.
-            #
-
-            continue
-# ==============================================================================
-# Part 10. Callbacks
-# ==============================================================================
-
-def subscribe(
-    self,
-    callback: ExportCallback,
-) -> "BaseExporter":
-    """
-    Subscribe a global callback.
-
-    Duplicate callbacks are ignored.
-
-    Parameters
-    ----------
-    callback
-        Callable receiving:
-
-            callback(
-                event: str,
-                *args,
-                **kwargs,
-            )
-    """
-
-    if not callable(callback):
-
-        raise TypeError(
-            "callback must be callable"
-        )
-
-    with self._lock:
-
-        if callback not in self._callbacks:
-
-            self._callbacks.append(
-                callback
-            )
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def unsubscribe(
-    self,
-    callback: ExportCallback,
-) -> "BaseExporter":
-    """
-    Remove a subscribed callback.
-
-    This method is idempotent.
-    """
-
-    with self._lock:
-
-        try:
-
-            self._callbacks.remove(
-                callback
-            )
-
-        except ValueError:
-
-            pass
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def clear_callbacks(
-    self,
-) -> "BaseExporter":
-    """
-    Remove all subscribed callbacks.
-    """
-
-    with self._lock:
-
-        self._callbacks.clear()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def notify_callbacks(
-    self,
-    event: str,
-    *args: Any,
-    **kwargs: Any,
-) -> None:
-    """
-    Notify all subscribed callbacks.
-
-    Callback exceptions are isolated and never
-    interrupt exporter execution.
-    """
-
-    callbacks = tuple(
-        self._callbacks
-    )
-
-    for callback in callbacks:
-
-        try:
-
-            callback(
-                event,
-                *args,
-                **kwargs,
-            )
-
-        except Exception:
-
-            #
-            # Callback failures must never stop
-            # exporter execution.
-            #
-
-            continue
-# ==============================================================================
-# Part 11. Serialization Helpers
-# ==============================================================================
-
-def to_dict(self) -> dict[str, Any]:
-    """
-    Serialize exporter into a dictionary.
-
-    Returns
-    -------
-    dict
-        Serializable exporter representation.
-    """
-
-    return {
-
-        # ------------------------------------------------------------------
-        # Identity
-        # ------------------------------------------------------------------
-
-        "id": self._id,
-
-        "uuid": str(self._uuid),
-
-        "name": self._name,
-
-        "description": self._description,
-
-        "version": self._version,
-
-        "exporter_type": self._exporter_type,
-
-        # ------------------------------------------------------------------
-        # Configuration
-        # ------------------------------------------------------------------
-
-        "format": self._format.value,
-
-        "destination": str(
-            self._destination
-        ),
-
-        "mode": self._mode.value,
-
-        "options": copy.deepcopy(
-            self._options
-        ),
-
-        "timeout": self._timeout,
-
-        "batch_size": self._batch_size,
-
-        "retry_count": self._retry_count,
-
-        "history_limit": self._history_limit,
-
-        "encoding": self._encoding,
-
-        # ------------------------------------------------------------------
-        # Runtime
-        # ------------------------------------------------------------------
-
-        "enabled": self._enabled,
-
-        "frozen": self._frozen,
-
-        "closed": self._closed,
-
-        "running": self._running,
-
-        "initialized": self._initialized,
-
-        "status": self._status.value,
-
-        "created_at": self._created_at,
-
-        "updated_at": self._updated_at,
-
-        "last_export": self._last_export,
-
-        # ------------------------------------------------------------------
-        # Statistics
-        # ------------------------------------------------------------------
-
-        "statistics": {
-
-            "exports": self._statistics.exports,
-
-            "successes": self._statistics.successes,
-
-            "failures": self._statistics.failures,
-
-            "bytes_sent": self._statistics.bytes_sent,
-
-            "average_latency": (
-                self._statistics.average_latency
-            ),
-
-            "last_export": (
-                self._statistics.last_export
-            ),
-
-            "uptime": self._statistics.uptime,
-
-        },
-
-        "export_count": self._export_count,
-
-        "success_count": self._success_count,
-
-        "failure_count": self._failure_count,
-
-        "bytes_sent": self._bytes_sent,
-
-        "last_latency": self._last_latency,
-
-        "minimum_latency": self._minimum_latency,
-
-        "maximum_latency": self._maximum_latency,
-
-        # ------------------------------------------------------------------
-        # Metadata
-        # ------------------------------------------------------------------
-
-        "metadata": copy.deepcopy(
-            self._metadata
-        ),
-
-        "tags": list(
-            self._tags
-        ),
-
-    }
-
-
-# ------------------------------------------------------------------------------
-
-@classmethod
-def from_dict(
-    cls,
-    data: Mapping[str, Any],
-) -> "BaseExporter":
-    """
-    Create an exporter from a dictionary.
-    """
-
-    exporter = cls(
-        name=data.get(
-            "name",
-            DEFAULT_EXPORTER_NAME,
-        ),
-        exporter_format=ExportFormat(
-            data.get(
-                "format",
-                ExportFormat.JSON.value,
-            )
-        ),
-        destination=data.get(
-            "destination",
-            DEFAULT_DESTINATION,
-        ),
-        mode=ExportMode(
-            data.get(
-                "mode",
-                ExportMode.SYNC.value,
-            )
-        ),
-        options=copy.deepcopy(
-            data.get(
-                "options",
-                {},
-            )
-        ),
-    )
-
-    exporter.restore(data)
-
-    return exporter
-
-
-# ------------------------------------------------------------------------------
-
-def to_json(
-    self,
-    *,
-    indent: int = 2,
-    ensure_ascii: bool = False,
-) -> str:
-    """
-    Serialize exporter to JSON.
-    """
-
-    return json.dumps(
-
-        self.to_dict(),
-
-        indent=indent,
-
-        ensure_ascii=ensure_ascii,
-
-        default=str,
-
-        sort_keys=True,
-
-    )
-
-
-# ------------------------------------------------------------------------------
-
-@classmethod
-def from_json(
-    cls,
-    text: str,
-) -> "BaseExporter":
-    """
-    Create exporter from JSON.
-    """
-
-    data = json.loads(text)
-
-    if not isinstance(data, dict):
-
-        raise TypeError(
-            "JSON must contain an object."
-        )
-
-    return cls.from_dict(data)
-# ==============================================================================
-# Part 12. Utilities
-# ==============================================================================
-
-def supports(
-    self,
-    capability: ExportCapability,
-) -> bool:
-    """
-    Check whether this exporter supports a capability.
-
-    Parameters
-    ----------
-    capability
-        Capability flag.
-
-    Returns
-    -------
-    bool
-    """
-
-    return bool(
-        self._capabilities & capability
-    )
-
-
-# ------------------------------------------------------------------------------
-
-def set_option(
-    self,
-    key: str,
-    value: Any,
-) -> "BaseExporter":
-    """
-    Set one exporter option.
-    """
-
-    if not isinstance(key, str):
-
-        raise TypeError(
-            "option key must be str"
-        )
-
-    with self._lock:
-
-        self._options[key] = value
-
-        self._updated_at = time.time()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def get_option(
-    self,
-    key: str,
-    default: Any = None,
-) -> Any:
-    """
-    Get one exporter option.
-    """
-
-    return self._options.get(
-        key,
-        default,
-    )
-
-
-# ------------------------------------------------------------------------------
-
-def update_options(
-    self,
-    options: Mapping[str, Any],
-    **kwargs: Any,
-) -> "BaseExporter":
-    """
-    Update exporter options.
-
-    Parameters
-    ----------
-    options
-        Mapping of options.
-
-    kwargs
-        Additional options.
-    """
-
-    if not isinstance(
-        options,
-        Mapping,
-    ):
-        raise TypeError(
-            "options must be a mapping"
-        )
-
-    with self._lock:
-
-        self._options.update(
-            dict(options)
-        )
-
-        if kwargs:
-
-            self._options.update(
-                kwargs
-            )
-
-        self._updated_at = time.time()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def add_tag(
-    self,
-    tag: str,
-) -> "BaseExporter":
-    """
-    Add a metadata tag.
-
-    Duplicate tags are ignored.
-    """
-
-    if not isinstance(
-        tag,
-        str,
-    ):
-        raise TypeError(
-            "tag must be str"
-        )
-
-    tag = tag.strip()
-
-    if not tag:
+        self._started = True
         return self
 
-    with self._lock:
+    def stop(self) -> "Exporter":
+        """
+        Stop the exporter.
 
-        if tag not in self._tags:
+        Stopping an already stopped exporter is idempotent.
+        """
 
-            self._tags.append(
-                tag
-            )
+        if self._closed:
+            return self
 
-            self._updated_at = time.time()
+        if not self._started:
+            return self
 
-    return self
+        self._started = False
+        return self
 
+    def reset(self) -> "Exporter":
+        """
+        Reset runtime statistics and error state.
 
-# ------------------------------------------------------------------------------
+        Configuration is preserved.
+        """
 
-def remove_tag(
-    self,
-    tag: str,
-) -> "BaseExporter":
-    """
-    Remove a metadata tag.
-    """
+        if self._closed:
+            raise RuntimeError("cannot reset a closed exporter")
 
-    with self._lock:
+        self._export_count = 0
+        self._success_count = 0
+        self._error_count = 0
+        self._bytes_exported: int = 0
+
+        self._last_export = None
+        self._last_error = None
+
+        return self
+
+    def close(self) -> "Exporter":
+        """
+        Permanently close the exporter.
+
+        Close is idempotent.
+        """
+
+        if self._closed:
+            return self
+
+        self._started = False
+        self._closed = True
+
+        return self
+
+    # ==========================================================================
+    # Part 6.5. Export API
+    # ==========================================================================
+
+    def export(
+        self,
+        payload: ExportPayload | Mapping[str, Any],
+        **options: Any,
+    ) -> ExportResult:
+        """
+        Export one payload.
+
+        Per-call options override exporter-level options without
+        mutating the exporter configuration.
+        """
+
+        started_at = time.perf_counter()
+        self._export_count += 1
+        self._last_export = time.time()
 
         try:
+            if self._closed:
+                raise ExportError(
+                    f"exporter '{self.name}' is closed"
+                )
 
-            self._tags.remove(
-                tag
+            if not self.enabled:
+                return ExportResult(
+                    success=False,
+                    exporter=self.name,
+                    count=0,
+                    duration=time.perf_counter() - started_at,
+                    error="exporter is disabled",
+                )
+
+            self.validate_payload(payload)
+            self.validate_options(options)
+
+            normalized_payload = self._normalize_payload(payload)
+
+            effective_options = {
+                **self._options,
+                **normalized_payload.options,
+                **options,
+            }
+
+            serialized = self.serialize(
+                normalized_payload,
+                options=effective_options,
             )
 
-            self._updated_at = time.time()
-
-        except ValueError:
-
-            pass
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def clear_tags(
-    self,
-) -> "BaseExporter":
-    """
-    Remove all metadata tags.
-    """
-
-    with self._lock:
-
-        self._tags.clear()
-
-        self._updated_at = time.time()
-
-    return self
-# ==============================================================================
-# Part 13. Python Protocols
-# ==============================================================================
-
-def __repr__(self) -> str:
-    """
-    Developer-friendly representation.
-    """
-
-    return (
-        f"{self.__class__.__name__}("
-        f"id={self._id!r}, "
-        f"name={self._name!r}, "
-        f"format={self._format.value!r}, "
-        f"status={self._status.value!r})"
-    )
-
-
-# ------------------------------------------------------------------------------
-
-def __str__(self) -> str:
-    """
-    Human-readable representation.
-    """
-
-    return (
-        f"{self._name} "
-        f"[{self._format.value}] "
-        f"({self._status.value})"
-    )
-
-
-# ------------------------------------------------------------------------------
-
-def __len__(self) -> int:
-    """
-    Number of export operations.
-    """
-
-    return self._export_count
-
-
-# ------------------------------------------------------------------------------
-
-def __iter__(self) -> Iterator[ExportResult]:
-    """
-    Iterate over export history.
-    """
-
-    return iter(self._history)
-
-
-# ------------------------------------------------------------------------------
-
-def __contains__(
-    self,
-    item: object,
-) -> bool:
-    """
-    Membership test against export history.
-    """
-
-    return item in self._history
-
-
-# ------------------------------------------------------------------------------
-
-def __getitem__(
-    self,
-    index: int | slice,
-) -> ExportResult | list[ExportResult]:
-    """
-    Access export history by index or slice.
-    """
-
-    return self._history[index]
-
-
-# ------------------------------------------------------------------------------
-
-def __call__(
-    self,
-    record: ExportRecord,
-) -> ExportResult:
-    """
-    Shortcut for export().
-    """
-
-    return self.export(record)
-
-
-# ------------------------------------------------------------------------------
-
-def __bool__(self) -> bool:
-    """
-    True if exporter is available for exporting.
-    """
-
-    return (
-        self._enabled
-        and self._initialized
-        and not self._closed
-        and not self._frozen
-    )
-
-
-# ------------------------------------------------------------------------------
-
-def __enter__(self) -> "BaseExporter":
-    """
-    Context manager entry.
-    """
-
-    self.initialize()
-
-    self.start()
-
-    return self
-
-
-# ------------------------------------------------------------------------------
-
-def __exit__(
-    self,
-    exc_type,
-    exc,
-    traceback,
-) -> bool:
-    """
-    Context manager exit.
-    """
-
-    self.stop()
-
-    self.close()
-
-    #
-    # Never suppress exceptions.
-    #
-
-    return False
-
-
-# ------------------------------------------------------------------------------
-
-def __copy__(self) -> "BaseExporter":
-    """
-    Create a shallow copy.
-
-    Thread locks are recreated.
-    """
-
-    cls = self.__class__
-
-    obj = cls.__new__(cls)
-
-    obj.__dict__.update(self.__dict__)
-
-    obj._lock = threading.RLock()
-
-    obj._callbacks = list(self._callbacks)
-
-    obj._history = list(self._history)
-
-    obj._cache = dict(self._cache)
-
-    obj._hooks = {
-        k: list(v)
-        for k, v in self._hooks.items()
-    }
-
-    obj._filters = list(self._filters)
-
-    obj._context = dict(self._context)
-
-    return obj
-
-
-# ------------------------------------------------------------------------------
-
-def __deepcopy__(
-    self,
-    memo: dict[int, object],
-) -> "BaseExporter":
-    """
-    Deep copy.
-
-    RLock cannot be deep-copied directly.
-    """
-
-    cls = self.__class__
-
-    obj = cls.__new__(cls)
-
-    memo[id(self)] = obj
-
-    for key, value in self.__dict__.items():
-
-        if key == "_lock":
-
-            setattr(
-                obj,
-                key,
-                threading.RLock(),
+            result_data = self._export(
+                normalized_payload,
+                serialized=serialized,
+                options=effective_options,
             )
 
-        else:
+            byte_count = self._calculate_bytes(serialized)
 
-            setattr(
-                obj,
-                key,
-                copy.deepcopy(
-                    value,
-                    memo,
+            self._success_count += 1
+            self._bytes_exported += byte_count
+            self._last_error = None
+
+            return ExportResult(
+                success=True,
+                exporter=self.name,
+                count=1,
+                bytes_exported=byte_count,
+                duration=time.perf_counter() - started_at,
+                data=result_data,
+            )
+
+        except Exception as exc:
+            return self._handle_error(
+                exc,
+                duration=time.perf_counter() - started_at,
+            )
+
+    def export_many(
+        self,
+        payloads: Iterable[
+            ExportPayload | Mapping[str, Any]
+        ],
+        **options: Any,
+    ) -> list[ExportResult]:
+        """
+        Export multiple payloads.
+
+        Each payload is processed independently so one failure does
+        not prevent subsequent payloads from being attempted.
+        """
+
+        return [
+            self.export(payload, **options)
+            for payload in payloads
+        ]
+
+    def serialize(
+        self,
+        payload: ExportPayload | Mapping[str, Any],
+        *,
+        options: Optional[Mapping[str, Any]] = None,
+    ) -> Any:
+        """
+        Serialize a payload according to the configured format.
+
+        Concrete exporters may override this method when they require
+        a format-specific representation.
+        """
+
+        normalized = self._normalize_payload(payload)
+        effective_options = dict(options or {})
+
+        if self.format == ExportFormat.JSON:
+            return json.dumps(
+                normalized.to_dict(),
+                ensure_ascii=effective_options.get(
+                    "ensure_ascii",
+                    False,
+                ),
+                default=effective_options.get(
+                    "default",
+                    str,
+                ),
+                separators=effective_options.get(
+                    "separators",
+                    (",", ":"),
                 ),
             )
 
-    return obj
+        if self.format == ExportFormat.TEXT:
+            return str(normalized.to_dict())
+
+        if self.format == ExportFormat.BINARY:
+            return json.dumps(
+                normalized.to_dict(),
+                ensure_ascii=False,
+                default=str,
+            ).encode(self.encoding)
+
+        return normalized.to_dict()
+
+    def flush(self) -> "Exporter":
+        """
+        Flush pending exporter output.
+
+        Base implementation is intentionally a no-op.
+        Concrete exporters may override it.
+        """
+
+        if self._closed:
+            raise RuntimeError("cannot flush a closed exporter")
+
+        return self
+
+    # ==========================================================================
+    # Part 6.6. Concrete Export Hook
+    # ==========================================================================
+
+    def _export(
+        self,
+        payload: ExportPayload,
+        *,
+        serialized: Any,
+        options: Mapping[str, Any],
+    ) -> Any:
+        """
+        Backend-specific export hook.
+
+        Concrete exporters should override this method.
+
+        The base implementation simply returns the serialized payload,
+        which makes the base class useful for contract testing.
+        """
+
+        return serialized
+
+    # ==========================================================================
+    # Part 6.7. Validation
+    # ==========================================================================
+
+    def validate(self) -> None:
+        """
+        Validate exporter configuration.
+        """
+
+        if not isinstance(self._name, str):
+            raise TypeError("name must be a string")
+
+        self._name = self._name.strip()
+
+        if not self._name:
+            raise ValueError("name must not be empty")
+
+        if not isinstance(self._format, ExportFormat):
+            try:
+                self._format = ExportFormat(self._format)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"unsupported export format: {self._format!r}"
+                ) from exc
+
+        if not isinstance(self._encoding, str):
+            raise TypeError("encoding must be a string")
+
+        try:
+            "".encode(self._encoding)
+        except LookupError as exc:
+            raise ValueError(
+                f"unknown encoding: {self._encoding!r}"
+            ) from exc
+
+        if not isinstance(self._enabled, bool):
+            raise TypeError("enabled must be a bool")
+
+        self.validate_options(self._options)
+
+    def validate_payload(
+        self,
+        payload: ExportPayload | Mapping[str, Any],
+    ) -> None:
+        """
+        Validate an export payload.
+        """
+
+        if isinstance(payload, ExportPayload):
+            return
+
+        if not isinstance(payload, Mapping):
+            raise TypeError(
+                "payload must be ExportPayload or a mapping"
+            )
+
+        if "name" not in payload:
+            raise ValueError(
+                "payload mapping must contain 'name'"
+            )
+
+    def validate_options(
+        self,
+        options: Mapping[str, Any],
+    ) -> None:
+        """
+        Validate export options.
+
+        Base implementation only verifies that options are mappings
+        with string keys. Concrete exporters may impose additional
+        constraints.
+        """
+
+        if not isinstance(options, Mapping):
+            raise TypeError("options must be a mapping")
+
+        for key in options:
+            if not isinstance(key, str):
+                raise TypeError(
+                    "export option keys must be strings"
+                )
+
+    # ==========================================================================
+    # Part 6.8. Error Handling
+    # ==========================================================================
+
+    def _handle_error(
+        self,
+        error: Exception,
+        *,
+        duration: float = 0.0,
+        payload: ExportPayload | Mapping[str, Any] | None = None,
+    ) -> ExportResult:
+        """
+        Handle an export failure.
+        """
+        self._record_error(error)
+
+        return ExportResult(
+            success=False,
+            exporter=self.name,
+            count=0,
+            duration=duration,
+            error=str(error),
+        )
 
 
-# ------------------------------------------------------------------------------
+    def _record_error(self, error: BaseException) -> None:
+        """
+        Record an exporter error.
+        """
 
-def __eq__(
-    self,
-    other: object,
-) -> bool:
-    """
-    Equality based on UUID.
-    """
+        self._error_count += 1
+        self._last_error = str(error)
 
-    if not isinstance(
-        other,
-        BaseExporter,
-    ):
-        return NotImplemented
+    # ==========================================================================
+    # Part 6.9. Diagnostics
+    # ==========================================================================
 
-    return self._uuid == other._uuid
+    def health(self) -> dict[str, Any]:
+        """
+        Return a lightweight health snapshot.
+        """
 
+        return {
+            "name": self.name,
+            "state": self.state,
+            "enabled": self.enabled,
+            "healthy": (
+                not self.closed
+                and self._last_error is None
+            ),
+        }
 
-# ------------------------------------------------------------------------------
+    def diagnostics(self) -> dict[str, Any]:
+        """
+        Return detailed exporter diagnostics.
+        """
 
-def __hash__(self) -> int:
-    """
-    Hash based on UUID.
-    """
+        return {
+            "name": self.name,
+            "format": self.format.value,
+            "encoding": self.encoding,
+            "enabled": self.enabled,
+            "state": self.state,
+            "started": self.started,
+            "closed": self.closed,
+            "statistics": {
+                "export_count": self.export_count,
+                "success_count": self.success_count,
+                "error_count": self.error_count,
+                "bytes_exported": self.bytes_exported,
+                "last_export": self.last_export,
+                "last_error": self.last_error,
+            },
+            "options": self.options,
+        }
 
-    return hash(self._uuid)
+    def summary(self) -> dict[str, Any]:
+        """
+        Return a compact exporter summary.
+        """
+
+        return {
+            "name": self.name,
+            "format": self.format.value,
+            "state": self.state,
+            "enabled": self.enabled,
+            "export_count": self.export_count,
+            "success_count": self.success_count,
+            "error_count": self.error_count,
+            "bytes_exported": self.bytes_exported,
+        }
+
+    # ==========================================================================
+    # Part 6.10. Representation
+    # ==========================================================================
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}("
+            f"name={self.name!r}, "
+            f"format={self.format.value!r}, "
+            f"enabled={self.enabled!r}, "
+            f"state={self.state!r}"
+            f")"
+        )
+
+    def __str__(self) -> str:
+        return (
+            f"{type(self).__name__}"
+            f"(name={self.name!r}, "
+            f"format={self.format.value!r}, "
+            f"state={self.state!r})"
+        )
+
+    # ==========================================================================
+    # Part 6.11. Internal Helpers
+    # ==========================================================================
+
+    @staticmethod
+    def _normalize_payload(
+        payload: ExportPayload | Mapping[str, Any],
+    ) -> ExportPayload:
+        """
+        Normalize a mapping into ExportPayload.
+        """
+
+        if isinstance(payload, ExportPayload):
+            return payload
+
+        return ExportPayload(
+            name=str(payload["name"]),
+            value=payload.get("value"),
+            labels=dict(payload.get("labels", {})),
+            timestamp=payload.get("timestamp"),
+            metadata=dict(payload.get("metadata", {})),
+            options=dict(payload.get("options", {})),
+        )
+
+    def _calculate_bytes(self, data: Any) -> int:
+        """
+        Calculate the serialized byte size.
+        """
+
+        if data is None:
+            return 0
+
+        if isinstance(data, bytes):
+            return len(data)
+
+        if isinstance(data, str):
+            return len(data.encode(self.encoding))
+
+        try:
+            encoded = json.dumps(
+                data,
+                ensure_ascii=False,
+                default=str,
+            ).encode(self.encoding)
+        except (TypeError, UnicodeError):
+            return 0
+
+        return len(encoded)
+
+    # ==================================================================
+    # Internal statistics helpers
+    # ==================================================================
+
+    def _record_success(
+        self,
+        payload: ExportPayload | Mapping[str, Any],
+    ) -> ExportResult:
+        """
+        Build a successful export result.
+
+        Counter updates are owned by export().
+        """
+        return ExportResult(
+            success=True,
+            exporter=self.name,
+            payload=payload,
+        )
+
 # ==============================================================================
-# Part 14. Public API
+# Part 7. Public API
 # ==============================================================================
 
 __all__ = [
-
-    # ------------------------------------------------------------------
-    # Constants
-    # ------------------------------------------------------------------
-
-    "DEFAULT_EXPORTER_NAME",
-
-    "DEFAULT_EXPORT_FORMAT",
-
-    "DEFAULT_DESTINATION",
-
-    "DEFAULT_BATCH_SIZE",
-
-    "DEFAULT_TIMEOUT",
-
-    "DEFAULT_RETRY_COUNT",
-
-    "EXPORTER_VERSION",
-
-    # ------------------------------------------------------------------
-    # Enums
-    # ------------------------------------------------------------------
-
-    "ExportFormat",
-
-    "ExportStatus",
-
-    "ExportMode",
-
-    "ExportCapability",
-
-    # ------------------------------------------------------------------
-    # Dataclasses
-    # ------------------------------------------------------------------
-
-    "ExportRecord",
-
-    "ExportResult",
-
-    "ExportStatistics",
-
-    # ------------------------------------------------------------------
-    # Exceptions
-    # ------------------------------------------------------------------
-
-    "ExporterError",
-
+    "ExportData",
     "ExportError",
-
-    "ExportConfigurationError",
-
-    "ExportValidationError",
-
-    "ExportRuntimeError",
-
-    "ExportTimeoutError",
-
-    "ExportDisabledError",
-
-    "ExportFrozenError",
-
-    "ExportClosedError",
-
-    # ------------------------------------------------------------------
-    # Base Class
-    # ------------------------------------------------------------------
-
-    "BaseExporter",
-
-]                                                                  
+    "ExportFormat",
+    "ExportOptions",
+    "ExportPayload",
+    "ExportResult",
+    "Exporter",
+]

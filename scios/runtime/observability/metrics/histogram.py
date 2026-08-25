@@ -10,6 +10,7 @@ Responsibilities
 - Calculate distribution statistics.
 - Provide snapshots.
 - Support reset lifecycle.
+- Integrate with Metric base model.
 
 Python 3.11+
 """
@@ -24,11 +25,9 @@ from typing import Any
 from .metric import Metric
 
 
-
 __all__ = [
     "Histogram",
 ]
-
 
 
 # ==========================================================
@@ -40,20 +39,26 @@ class Histogram(Metric):
     """
     Histogram metric.
 
-    Example
-    -------
+    A histogram records a sequence of numeric observations and
+    exposes basic distribution statistics.
 
-        hist = Histogram(
-            name="request_latency_ms"
-        )
+    Examples
+    --------
 
-        hist.observe(12.5)
+    hist = Histogram(
+        name="request_latency_ms",
+    )
 
-        hist.observe(18.1)
+    hist.observe(12.5)
+    hist.observe(18.1)
 
-        print(hist.average())
+    print(hist.count)
+    print(hist.average())
     """
 
+    # ======================================================
+    # Initialization
+    # ======================================================
 
     def __init__(
         self,
@@ -61,77 +66,91 @@ class Histogram(Metric):
         value: int | float = 0,
         **kwargs: Any,
     ):
+        """
+        Create histogram metric.
+
+        Parameters
+        ----------
+        name:
+            Histogram metric name.
+
+        value:
+            Optional initial observation.
+
+        kwargs:
+            Extra metric metadata accepted by ``Metric``.
+        """
 
         super().__init__(
             name=name,
-            value=value,
             **kwargs,
         )
 
+        self._values: list[float] = []
 
-        self._values: list[
-            int | float
-        ] = []
-
-
+        if value != 0:
+            self.observe(value)
 
     # ======================================================
     # Observation API
     # ======================================================
 
-
     def observe(
         self,
         value: int | float,
-    ) -> int | float:
+    ) -> float:
         """
-        Record observation.
+        Record one histogram observation.
+
+        Parameters
+        ----------
+        value:
+            Numeric observation.
+
+        Returns
+        -------
+        float
+            Normalized observation value.
         """
 
         value = float(value)
-
 
         self._values.append(
             value
         )
 
-
-        self.update(
-            value
-        )
-
+        self.touch()
 
         return value
 
-
-
     add = observe
 
-
-
     # ======================================================
-    # Statistics API
+    # Count
     # ======================================================
 
-
+    @property
     def count(
         self,
     ) -> int:
         """
-        Number of samples.
+        Return the number of observations.
         """
 
         return len(
             self._values
         )
 
+    # ======================================================
+    # Sum
+    # ======================================================
 
-
-    def sum(
+    @property
+    def total(
         self,
     ) -> float:
         """
-        Sum of observations.
+        Return the sum of all observations.
         """
 
         return float(
@@ -140,193 +159,201 @@ class Histogram(Metric):
             )
         )
 
+    # ======================================================
+    # Compatibility Sum API
+    # ======================================================
 
+    def sum(
+        self,
+    ) -> float:
+        """
+        Return the sum of observations.
+
+        Kept as a method for compatibility with existing
+        histogram callers.
+        """
+
+        return self.total
+
+    # ======================================================
+    # Average
+    # ======================================================
 
     def average(
         self,
     ) -> float:
         """
-        Average value.
+        Return the arithmetic mean.
+
+        Returns
+        -------
+        float
+            Mean value, or ``0.0`` for an empty histogram.
         """
 
         if not self._values:
-
             return 0.0
 
-
         return (
-            self.sum()
+            self.total
             /
-            self.count()
+            self.count
         )
-
-
 
     mean = average
 
-
+    # ======================================================
+    # Minimum
+    # ======================================================
 
     def minimum(
         self,
     ) -> float | None:
         """
-        Minimum value.
+        Return the minimum observation.
         """
 
         if not self._values:
-
             return None
-
 
         return min(
             self._values
         )
 
-
-
     min = minimum
 
-
+    # ======================================================
+    # Maximum
+    # ======================================================
 
     def maximum(
         self,
     ) -> float | None:
         """
-        Maximum value.
+        Return the maximum observation.
         """
 
         if not self._values:
-
             return None
-
 
         return max(
             self._values
         )
 
-
-
     max = maximum
 
-
-
     # ======================================================
-    # Value API
+    # Values API
     # ======================================================
-
 
     @property
     def values(
         self,
     ) -> list[float]:
         """
-        Return observations copy.
+        Return a copy of all observations.
         """
 
         return list(
             self._values
         )
 
-
-
     # ======================================================
     # Lifecycle
     # ======================================================
-
 
     def reset(
         self,
     ) -> None:
         """
-        Clear histogram.
+        Clear all histogram observations.
         """
 
         self._values.clear()
 
-
-        self.update(
-            0
-        )
-
-
+        self.touch()
 
     # ======================================================
     # Snapshot
     # ======================================================
-
 
     def snapshot(
         self,
     ) -> dict[str, Any]:
         """
         Export histogram state.
+
+        The returned dictionary is detached from the internal
+        observation list.
         """
 
-        data = super().snapshot()
-
-
-        data.update(
-            {
-
-                "values":
-                    self.values,
-
-
-                "count":
-                    self.count(),
-
-
-                "sum":
-                    self.sum(),
-
-
-                "average":
-                    self.average(),
-
-
-                "min":
-                    self.minimum(),
-
-
-                "max":
-                    self.maximum(),
-
-            }
-        )
-
-
-        return data
-
-
+        return {
+            "name": self.name,
+            "type": "histogram",
+            "values": self.values,
+            "count": self.count,
+            "sum": self.total,
+            "average": self.average(),
+            "min": self.minimum(),
+            "max": self.maximum(),
+            "labels": dict(
+                self.labels
+            ),
+        }
 
     # ======================================================
     # Serialization
     # ======================================================
 
-
     def to_dict(
         self,
     ) -> dict[str, Any]:
+        """
+        Serialize histogram state.
+        """
 
-        data = self.snapshot()
-
-
-        data["type"] = "histogram"
-
-
-        return data
-
-
+        return self.snapshot()
 
     # ======================================================
     # Copy
     # ======================================================
 
-
     def copy(
         self,
     ) -> "Histogram":
+        """
+        Create an independent histogram copy.
+        """
 
         return deepcopy(
             self
+        )
+
+    # ======================================================
+    # Numeric Protocol
+    # ======================================================
+
+    def __float__(
+        self,
+    ) -> float:
+        """
+        Return the histogram total as a float.
+        """
+
+        return self.total
+
+    # ======================================================
+    # Representation
+    # ======================================================
+
+    def __repr__(
+        self,
+    ) -> str:
+        return (
+            "Histogram("
+            f"name={self.name!r}, "
+            f"count={self.count}, "
+            f"sum={self.total}, "
+            f"labels={self.labels!r}"
+            ")"
         )

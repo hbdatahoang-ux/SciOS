@@ -8,27 +8,26 @@ Responsibilities
 -----------------
 - Store metric dimensions.
 - Validate label keys.
-- Normalize values.
-- Provide immutable-like label operations.
-- Support exporters.
+- Normalize label values.
+- Provide controlled label operations.
+- Support metric metadata and descriptors.
+- Support serialization and exporters.
 
 Examples
 --------
-
-labels = MetricLabels(
-    service="runtime",
-    component="scheduler",
-)
+    labels = MetricLabels(
+        service="runtime",
+        component="scheduler",
+    )
 
 Python 3.11+
 """
 
 from __future__ import annotations
 
-
-from copy import deepcopy
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
 
 
 __all__ = [
@@ -36,103 +35,114 @@ __all__ = [
 ]
 
 
-
-# ==========================================================
+# ==============================================================================
 # Validation
-# ==========================================================
+# ==============================================================================
 
 
-def _normalize_key(
-    key: str,
-) -> str:
+def _normalize_key(key: str) -> str:
     """
-    Normalize label key.
+    Normalize and validate a metric label key.
+
+    Parameters
+    ----------
+    key:
+        Label key.
+
+    Returns
+    -------
+    str
+        Normalized label key.
+
+    Raises
+    ------
+    TypeError
+        If key is not a string.
+    ValueError
+        If key is empty after normalization.
     """
 
-    key = str(key).strip()
+    if not isinstance(key, str):
+        raise TypeError(
+            "label key must be a string"
+        )
 
+    normalized = key.strip()
 
-    if not key:
-
+    if not normalized:
         raise ValueError(
             "label key cannot be empty"
         )
 
-
-    return key
-
+    return normalized
 
 
-def _normalize_value(
-    value: Any,
-) -> str:
+def _normalize_value(value: Any) -> str:
     """
-    Normalize label value.
+    Normalize a metric label value.
 
-    Prometheus/OpenTelemetry
-    labels are string based.
+    Metric label values are represented as strings so that the
+    resulting representation is suitable for exporters such as
+    Prometheus and OpenTelemetry.
     """
 
     return str(value)
 
 
-
-# ==========================================================
-# Labels
-# ==========================================================
+# ==============================================================================
+# MetricLabels
+# ==============================================================================
 
 
 @dataclass(slots=True)
 class MetricLabels:
     """
-    Metric label container.
+    Container for metric labels.
 
-    Example
-    -------
+    Labels represent dimensions associated with a metric.
 
-    labels = MetricLabels(
-        service="runtime",
-        module="scheduler",
-    )
+    Examples
+    --------
+    >>> labels = MetricLabels(
+    ...     service="runtime",
+    ...     component="scheduler",
+    ... )
 
+    >>> labels["service"]
+    'runtime'
+
+    >>> labels.set("worker", 1)
+
+    >>> labels.to_dict()
+    {'service': 'runtime', 'component': 'scheduler', 'worker': '1'}
     """
 
-
-    values: dict[str, str] = field(
-        default_factory=dict
+    _values: dict[str, str] = field(
+        default_factory=dict,
+        repr=False,
     )
 
-
-
-    # ======================================================
+    # ==========================================================================
     # Initialization
-    # ======================================================
-
+    # ==========================================================================
 
     def __init__(
         self,
         **labels: Any,
-    ):
+    ) -> None:
         """
-        Create labels.
+        Create a MetricLabels instance.
+
+        All keys and values pass through normalization.
         """
 
-        self.values = {}
+        self._values = {}
 
+        self.update(labels)
 
-        for key, value in labels.items():
-
-            self.set(
-                key,
-                value,
-            )
-
-
-
-    # ======================================================
-    # Mutation
-    # ======================================================
-
+    # ==========================================================================
+    # Core mutation
+    # ==========================================================================
 
     def set(
         self,
@@ -140,49 +150,64 @@ class MetricLabels:
         value: Any,
     ) -> None:
         """
-        Set label.
+        Set or replace a label.
+
+        Parameters
+        ----------
+        key:
+            Label key.
+        value:
+            Label value.
         """
 
+        normalized_key = _normalize_key(key)
+        normalized_value = _normalize_value(value)
 
-        key = _normalize_key(
-            key
-        )
+        self._values[normalized_key] = normalized_value
 
+    def update(
+        self,
+        labels: Mapping[str, Any],
+    ) -> None:
+        """
+        Add or replace multiple labels.
+        """
 
-        self.values[key] = (
-            _normalize_value(value)
-        )
+        if not isinstance(labels, Mapping):
+            raise TypeError(
+                "labels must be a mapping"
+            )
 
-
+        for key, value in labels.items():
+            self.set(key, value)
 
     def remove(
         self,
         key: str,
     ) -> None:
         """
-        Remove label.
+        Remove a label.
+
+        Missing labels are ignored.
         """
 
-        self.values.pop(
-            key,
+        normalized_key = _normalize_key(key)
+
+        self._values.pop(
+            normalized_key,
             None,
         )
-
-
 
     def clear(self) -> None:
         """
         Remove all labels.
         """
 
-        self.values.clear()
+        self._values.clear()
 
-
-
-    # ======================================================
+    # ==========================================================================
     # Access
-    # ======================================================
-
+    # ==========================================================================
 
     def get(
         self,
@@ -190,172 +215,215 @@ class MetricLabels:
         default: str | None = None,
     ) -> str | None:
         """
-        Get label value.
+        Get a label value.
         """
 
-        return self.values.get(
-            key,
+        normalized_key = _normalize_key(key)
+
+        return self._values.get(
+            normalized_key,
             default,
         )
-
-
 
     def contains(
         self,
         key: str,
     ) -> bool:
         """
-        Check label existence.
+        Return True if the label exists.
         """
 
-        return key in self.values
+        normalized_key = _normalize_key(key)
 
+        return normalized_key in self._values
 
+    def keys(self):
+        """
+        Return label keys.
+        """
 
-    # ======================================================
+        return self._values.keys()
+
+    def items(self):
+        """
+        Return label key/value pairs.
+        """
+
+        return self._values.items()
+
+    def values(self):
+        """
+        Return label values.
+        """
+
+        return self._values.values()
+
+    # ==========================================================================
     # Merge
-    # ======================================================
-
+    # ==========================================================================
 
     def merge(
         self,
-        other: "MetricLabels",
-    ) -> "MetricLabels":
+        other: MetricLabels | Mapping[str, Any],
+    ) -> MetricLabels:
         """
-        Create merged labels.
+        Return a new label set containing both label collections.
 
-        Existing labels are overwritten.
+        Labels from ``other`` take precedence when keys collide.
+
+        The current instance is not modified.
         """
 
+        if isinstance(other, MetricLabels):
+            other_values = other._values
+
+        elif isinstance(other, Mapping):
+            other_values = other
+
+        else:
+            raise TypeError(
+                "other must be MetricLabels or a mapping"
+            )
 
         result = self.copy()
 
-
-        result.values.update(
-            other.values
-        )
-
+        result.update(other_values)
 
         return result
 
-
-
-    # ======================================================
+    # ==========================================================================
     # Serialization
-    # ======================================================
+    # ==========================================================================
 
-
-    def to_dict(
-        self,
-    ) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         """
-        Convert to dictionary.
+        Return a detached dictionary representation.
+
+        The returned dictionary can be safely modified without
+        changing this MetricLabels instance.
         """
 
-        return dict(
-            self.values
-        )
-
-
+        return dict(self._values)
 
     @classmethod
     def from_dict(
         cls,
-        data: dict[str, Any],
-    ) -> "MetricLabels":
+        data: Mapping[str, Any],
+    ) -> MetricLabels:
         """
-        Restore labels.
+        Construct labels from a mapping.
         """
 
-        return cls(
-            **data
-        )
+        if not isinstance(data, Mapping):
+            raise TypeError(
+                "data must be a mapping"
+            )
 
+        return cls(**dict(data))
 
-
-    # ======================================================
+    # ==========================================================================
     # Copy
-    # ======================================================
+    # ==========================================================================
 
-
-    def copy(
-        self,
-    ) -> "MetricLabels":
+    def copy(self) -> MetricLabels:
         """
-        Deep copy.
+        Return an independent copy.
         """
 
         result = MetricLabels()
 
-        result.values = deepcopy(
-            self.values
+        result._values = dict(
+            self._values
         )
 
         return result
 
-
-
-    # ======================================================
+    # ==========================================================================
     # Protocols
-    # ======================================================
-
+    # ==========================================================================
 
     def __getitem__(
         self,
         key: str,
     ) -> str:
-        return self.values[key]
+        """
+        Get a label using mapping syntax.
+        """
 
+        normalized_key = _normalize_key(key)
 
+        return self._values[normalized_key]
 
     def __setitem__(
         self,
         key: str,
         value: Any,
     ) -> None:
+        """
+        Set a label using mapping syntax.
+        """
 
         self.set(
             key,
             value,
         )
 
+    def __delitem__(
+        self,
+        key: str,
+    ) -> None:
+        """
+        Delete a label using mapping syntax.
+        """
 
+        normalized_key = _normalize_key(key)
+
+        del self._values[normalized_key]
 
     def __contains__(
         self,
-        key: str,
+        key: object,
     ) -> bool:
+        """
+        Support ``key in labels``.
+        """
 
-        return key in self.values
+        if not isinstance(key, str):
+            return False
 
-
+        return key.strip() in self._values
 
     def __iter__(
         self,
     ) -> Iterator[str]:
+        """
+        Iterate over label keys.
+        """
 
-        return iter(
-            self.values
-        )
-
-
+        return iter(self._values)
 
     def __len__(
         self,
     ) -> int:
+        """
+        Return the number of labels.
+        """
 
-        return len(
-            self.values
-        )
+        return len(self._values)
 
-
+    # ==========================================================================
+    # Representation
+    # ==========================================================================
 
     def __repr__(
         self,
     ) -> str:
+        """
+        Return deterministic debug representation.
+        """
 
         return (
             "MetricLabels("
-            f"{self.values!r}"
+            f"{self._values!r}"
             ")"
         )

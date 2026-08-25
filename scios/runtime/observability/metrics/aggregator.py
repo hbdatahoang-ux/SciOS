@@ -2,46 +2,38 @@
 SciOS-NG Metrics Aggregator
 ===========================
 
-Metric aggregation engine.
+Metric registry and aggregation engine.
 
 Responsibilities
 -----------------
-- Combine metric samples.
-- Aggregate counters.
-- Aggregate gauges.
-- Aggregate histograms.
-- Produce aggregated snapshots.
-- Support runtime observability.
-
-Design
-------
-Aggregator does NOT know about:
-
-- ExecutionEngine
-- Plugins
-- Exporters
-
-It only transforms metric data.
+- Register runtime metrics.
+- Reject duplicate metric registration.
+- Remove metrics.
+- Iterate over registered metrics.
+- Lookup metrics by name.
+- Reset registered metrics.
+- Create and restore snapshots.
+- Calculate total metric value.
+- Export metric state.
+- Provide thread-safe runtime access.
 
 Python 3.11+
 """
 
 from __future__ import annotations
 
-
-from dataclasses import dataclass, field
-from typing import Any
-
+from dataclasses import dataclass
+from threading import RLock
+from typing import Any, Iterator
 
 from .metric import Metric
-from .snapshot import MetricSnapshot
-
 
 
 __all__ = [
+    "AggregationState",
     "MetricAggregator",
+    "Aggregator",
 ]
-
 
 
 # ==========================================================
@@ -52,15 +44,11 @@ __all__ = [
 @dataclass
 class AggregationState:
     """
-    Aggregation runtime state.
+    Runtime state of the metric aggregator.
     """
 
-
     samples: int = 0
-
-
     metrics: int = 0
-
 
 
 # ==========================================================
@@ -70,350 +58,516 @@ class AggregationState:
 
 class MetricAggregator:
     """
-    Aggregate runtime metrics.
+    Thread-safe runtime metric registry.
+
+    The aggregator owns registered Metric objects rather than
+    storing detached raw values.
 
     Example
     -------
 
         aggregator = MetricAggregator()
 
-        aggregator.add(
-            metric
-        )
+        counter = Counter("requests")
 
-        snapshot = aggregator.snapshot()
+        aggregator.add(counter)
 
+        counter.inc(5)
+
+        aggregator.total()
     """
 
+    # ======================================================
+    # Initialization
+    # ======================================================
 
-
-    def __init__(self):
+    def __init__(self) -> None:
 
         self.state = AggregationState()
 
+        self._metrics: dict[str, Metric] = {}
 
-        self._metrics: dict[
-            str,
-            list[Any]
-        ] = {}
-
-
+        self._lock = RLock()
 
     # ======================================================
-    # Add Metrics
+    # Registration
     # ======================================================
-
 
     def add(
         self,
         metric: Metric,
     ) -> None:
         """
-        Add metric observation.
+        Register a metric.
+
+        Duplicate metric names are rejected.
+
+        Parameters
+        ----------
+        metric:
+            Metric instance to register.
         """
 
-        name = metric.name
+        if not isinstance(metric, Metric):
+            raise TypeError(
+                "metric must be an instance of Metric"
+            )
 
+        with self._lock:
 
-        if name not in self._metrics:
+            if metric.name in self._metrics:
+                raise ValueError(
+                    f"metric already registered: {metric.name!r}"
+                )
 
-            self._metrics[name] = []
+            self._metrics[metric.name] = metric
 
+            self.state.metrics = len(
+                self._metrics
+            )
 
-            self.state.metrics += 1
+            self.state.samples += 1
 
+    # ======================================================
+    # Removal
+    # ======================================================
 
-
-        self._metrics[name].append(
-            metric.value
-        )
-
-
-        self.state.samples += 1
-
-
-
-    def add_value(
+    def remove(
         self,
-        name: str,
-        value: Any,
+        metric: Metric,
     ) -> None:
         """
-        Add raw metric value.
+        Remove a registered metric.
+
+        Unknown metrics are ignored.
         """
 
-        if name not in self._metrics:
+        if not isinstance(metric, Metric):
+            return
 
-            self._metrics[name] = []
+        with self._lock:
 
-            self.state.metrics += 1
-
-
-
-        self._metrics[name].append(
-            value
-        )
-
-
-        self.state.samples += 1
-
-
-
-    # ======================================================
-    # Aggregation
-    # ======================================================
-
-
-    def count(
-        self,
-        name: str,
-    ) -> int:
-
-        return len(
-            self._metrics.get(
-                name,
-                [],
+            current = self._metrics.get(
+                metric.name
             )
-        )
 
+            if current is metric:
 
+                del self._metrics[
+                    metric.name
+                ]
 
-    def sum(
+            self.state.metrics = len(
+                self._metrics
+            )
+
+    # ======================================================
+    # Clear
+    # ======================================================
+
+    def clear(
+        self,
+    ) -> None:
+        """
+        Remove all registered metrics.
+
+        Unlike ``reset()``, this does not modify the
+        metric objects themselves.
+        """
+
+        with self._lock:
+
+            self._metrics.clear()
+
+            self.state = AggregationState()
+
+    # ======================================================
+    # Lookup
+    # ======================================================
+
+    def get(
         self,
         name: str,
+    ) -> Metric | None:
+        """
+        Return a registered metric by name.
+        """
+
+        with self._lock:
+
+            return self._metrics.get(
+                name
+            )
+
+    def __getitem__(
+        self,
+        name: str,
+    ) -> Metric:
+        """
+        Lookup a metric by name.
+
+        Raises
+        ------
+        KeyError
+            If the metric is not registered.
+        """
+
+        with self._lock:
+
+            return self._metrics[name]
+
+    # ======================================================
+    # Iteration
+    # ======================================================
+
+    def __iter__(
+        self,
+    ) -> Iterator[Metric]:
+        """
+        Iterate over registered metrics.
+
+        A snapshot of the registry is used so iteration is
+        safe against concurrent registry mutation.
+        """
+
+        with self._lock:
+
+            metrics = tuple(
+                self._metrics.values()
+            )
+
+        return iter(metrics)
+
+    # ======================================================
+    # Membership
+    # ======================================================
+
+    def __contains__(
+        self,
+        item: object,
+    ) -> bool:
+        """
+        Check whether a metric or metric name is registered.
+        """
+
+        with self._lock:
+
+            if isinstance(item, Metric):
+
+                return (
+                    self._metrics.get(
+                        item.name
+                    )
+                    is item
+                )
+
+            if isinstance(item, str):
+
+                return item in self._metrics
+
+            return False
+
+    # ======================================================
+    # Names
+    # ======================================================
+
+    def names(
+        self,
+    ) -> list[str]:
+        """
+        Return registered metric names.
+        """
+
+        with self._lock:
+
+            return list(
+                self._metrics.keys()
+            )
+
+    # ======================================================
+    # Value Extraction
+    # ======================================================
+
+    @staticmethod
+    def _value(
+        metric: Metric,
     ) -> float:
+        """
+        Extract the numeric value from a metric.
 
-        values = self._metrics.get(
-            name,
-            [],
+        Supports both the current property-based API and
+        legacy callable ``value()`` implementations.
+        """
+
+        value = getattr(
+            metric,
+            "value",
+            0.0,
         )
 
+        if callable(value):
+            value = value()
 
-        return sum(
-            values
-        )
+        return float(value)
 
+    # ======================================================
+    # Total
+    # ======================================================
 
-
-    def average(
+    def total(
         self,
-        name: str,
     ) -> float:
+        """
+        Return the sum of all registered metric values.
+        """
 
-        values = self._metrics.get(
-            name,
-            [],
-        )
+        with self._lock:
 
-
-        if not values:
-
-            return 0.0
-
-
-        return (
-            sum(values)
-            /
-            len(values)
-        )
-
-
-
-    def minimum(
-        self,
-        name: str,
-    ):
-
-        values = self._metrics.get(
-            name,
-            [],
-        )
-
-
-        if not values:
-
-            return None
-
-
-        return min(
-            values
-        )
-
-
-
-    def maximum(
-        self,
-        name: str,
-    ):
-
-        values = self._metrics.get(
-            name,
-            [],
-        )
-
-
-        if not values:
-
-            return None
-
-
-        return max(
-            values
-        )
-
-
+            return sum(
+                self._value(metric)
+                for metric in self._metrics.values()
+            )
 
     # ======================================================
     # Snapshot
     # ======================================================
 
-
     def snapshot(
         self,
     ) -> dict[str, Any]:
         """
-        Create aggregated snapshot.
-        """
+        Create a registry snapshot.
 
+        Snapshot format:
 
-        metrics = {}
-
-
-        for name in self._metrics:
-
-            metrics[name] = {
-
-                "count":
-                    self.count(
-                        name
-                    ),
-
-
-                "sum":
-                    self.sum(
-                        name
-                    ),
-
-
-                "average":
-                    self.average(
-                        name
-                    ),
-
-
-                "min":
-                    self.minimum(
-                        name
-                    ),
-
-
-                "max":
-                    self.maximum(
-                        name
-                    ),
+            {
+                "requests": {
+                    ...
+                },
+                "cpu": {
+                    ...
+                }
             }
-
-
-
-        return {
-
-            "metrics":
-                metrics,
-
-
-            "samples":
-                self.state.samples,
-
-
-            "metric_count":
-                self.state.metrics,
-        }
-
-
-
-    def report(
-        self,
-    ) -> dict[str, Any]:
-        """
-        Alias for snapshot.
         """
 
-        return self.snapshot()
+        with self._lock:
 
+            snapshot: dict[str, Any] = {}
 
+            for name, metric in self._metrics.items():
+
+                if hasattr(metric, "snapshot"):
+
+                    data = metric.snapshot()
+
+                elif hasattr(metric, "to_dict"):
+
+                    data = metric.to_dict()
+
+                else:
+
+                    data = {
+                        "name": name,
+                        "value": self._value(metric),
+                    }
+
+                if hasattr(data, "to_dict"):
+
+                    data = data.to_dict()
+
+                elif not isinstance(data, dict):
+
+                    data = {
+                        "name": name,
+                        "value": data,
+                    }
+
+                snapshot[name] = dict(data)
+
+            return snapshot
 
     # ======================================================
-    # Query
+    # Restore
     # ======================================================
 
-
-    def get(
+    def restore(
         self,
-        name: str,
-    ) -> list[Any]:
+        snapshot: dict[str, Any],
+    ) -> None:
         """
-        Return raw samples.
+        Restore registered metrics from a snapshot.
+
+        Only metrics already registered with the aggregator
+        are restored. Unknown snapshot entries are ignored.
         """
 
-        return list(
-            self._metrics.get(
-                name,
-                [],
+        if not isinstance(snapshot, dict):
+            raise TypeError(
+                "snapshot must be a dictionary"
             )
-        )
 
+        with self._lock:
 
+            for name, data in snapshot.items():
 
-    def names(
-        self,
-    ) -> list[str]:
+                metric = self._metrics.get(
+                    name
+                )
 
-        return list(
-            self._metrics.keys()
-        )
+                if metric is None:
+                    continue
 
+                if isinstance(data, dict):
 
+                    value = data.get(
+                        "value"
+                    )
+
+                else:
+
+                    value = data
+
+                if value is None:
+                    continue
+
+                value = float(value)
+
+                if hasattr(metric, "set"):
+
+                    metric.set(value)
+
+                elif hasattr(metric, "update"):
+
+                    metric.update(value)
+
+                elif hasattr(metric, "_value"):
+
+                    metric._value = value
 
     # ======================================================
-    # Lifecycle
+    # Reset
     # ======================================================
-
 
     def reset(
         self,
     ) -> None:
         """
-        Clear aggregation data.
+        Reset all registered metrics.
+
+        The registry itself remains intact.
         """
 
-        self._metrics.clear()
+        with self._lock:
 
+            for metric in self._metrics.values():
 
-        self.state = AggregationState()
+                reset = getattr(
+                    metric,
+                    "reset",
+                    None,
+                )
 
+                if callable(reset):
 
+                    reset()
+
+                elif hasattr(metric, "_value"):
+
+                    metric._value = 0.0
+
+            self.state.samples = 0
 
     # ======================================================
-    # Protocols
+    # Export
     # ======================================================
 
+    def export(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Export all registered metrics.
+
+        Returns an empty dictionary when no metrics exist.
+        """
+
+        with self._lock:
+
+            if not self._metrics:
+                return {}
+
+            data: dict[str, Any] = {}
+
+            for name, metric in self._metrics.items():
+
+                if hasattr(metric, "to_dict"):
+
+                    value = metric.to_dict()
+
+                elif hasattr(metric, "snapshot"):
+
+                    value = metric.snapshot()
+
+                else:
+
+                    value = {
+                        "name": name,
+                        "value": self._value(metric),
+                    }
+
+                if hasattr(value, "to_dict"):
+
+                    value = value.to_dict()
+
+                data[name] = dict(value)
+
+            return data
+
+    # ======================================================
+    # Report
+    # ======================================================
+
+    def report(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Alias for ``snapshot()``.
+        """
+
+        return self.snapshot()
+
+    # ======================================================
+    # Length
+    # ======================================================
 
     def __len__(
         self,
     ) -> int:
+        """
+        Return number of registered metrics.
+        """
 
-        return self.state.samples
+        with self._lock:
 
+            return len(
+                self._metrics
+            )
 
+    # ======================================================
+    # Boolean
+    # ======================================================
 
-    def __contains__(
+    def __bool__(
         self,
-        name: str,
     ) -> bool:
+        """
+        Return True when at least one metric is registered.
+        """
 
-        return name in self._metrics
+        return len(self) > 0
 
-
+    # ======================================================
+    # Representation
+    # ======================================================
 
     def __repr__(
         self,
@@ -421,7 +575,14 @@ class MetricAggregator:
 
         return (
             "MetricAggregator("
-            f"metrics={self.state.metrics}, "
+            f"metrics={len(self._metrics)}, "
             f"samples={self.state.samples}"
             ")"
         )
+
+
+# ==========================================================
+# Backward-Compatible Public API
+# ==========================================================
+
+Aggregator = MetricAggregator

@@ -1,1327 +1,1311 @@
 """
-SciOS-NG
-Runtime Observability
-
+SciOS-NG Runtime Observability
 JSON Exporter
+==============================
 
 File:
     scios/runtime/observability/exporters/json.py
 
-Part 1. Foundation
+Purpose
+-------
+Export observability payloads as JSON text.
+
+Design
+------
+``Exporter.format`` remains the stable base-class property returning
+``ExportFormat.JSON``.
+
+The callable serialization API is intentionally named
+``format_string`` rather than ``format``.
+
+Python
+------
+3.11+
 """
 
 from __future__ import annotations
 
 # ==============================================================================
-# Imports
+# Part 1. Imports
 # ==============================================================================
 
+import io
 import json
 import threading
 import time
-import uuid
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from dataclasses import asdict, dataclass, is_dataclass
+from enum import Enum
+from typing import Any, Mapping, Optional, TextIO
 
 from .base import (
-    BaseExporter,
-    ExportCapability,
-    ExportDestination,
+    ExportError,
     ExportFormat,
-    ExportMode,
+    ExportPayload,
+    ExportResult,
+    Exporter,
 )
 
+
 # ==============================================================================
-# Constants
+# Part 2. Constants
 # ==============================================================================
 
-DEFAULT_JSON_INDENT: int = 2
+JSON_EXPORTER_VERSION: str = "0.3.0-alpha"
 
-DEFAULT_JSON_ENCODING: str = "utf-8"
+DEFAULT_JSON_STREAM: TextIO = io.StringIO()
 
-DEFAULT_JSON_ASCII: bool = False
-
+DEFAULT_JSON_INDENT: Optional[int] = None
+DEFAULT_JSON_ENSURE_ASCII: bool = False
 DEFAULT_JSON_SORT_KEYS: bool = False
+DEFAULT_JSON_ALLOW_NAN: bool = True
+DEFAULT_JSON_CHECK_CIRCULAR: bool = True
+DEFAULT_JSON_SKIP_KEYS: bool = False
 
-DEFAULT_JSON_COMPACT: bool = False
+DEFAULT_JSON_PREFIX: str = ""
+DEFAULT_JSON_SUFFIX: str = "\n"
 
-DEFAULT_JSON_APPEND: bool = False
-
-DEFAULT_JSON_FILENAME: str = "metrics.json"
-
-JSON_EXPORTER_VERSION: str = "0.1.0"
-
-# ==============================================================================
-# JSON Encoder
-# ==============================================================================
-
-
-class JSONEncoder(json.JSONEncoder):
-    """
-    Default JSON encoder for SciOS-NG.
-
-    Handles common runtime objects that are not directly
-    serializable by the standard json module.
-    """
-
-    def default(self, obj: Any) -> Any:
-        if isinstance(obj, Path):
-            return str(obj)
-
-        if isinstance(obj, uuid.UUID):
-            return str(obj)
-
-        if hasattr(obj, "__dict__"):
-            return obj.__dict__
-
-        return super().default(obj)
+DEFAULT_JSON_AUTO_FLUSH: bool = True
 
 
 # ==============================================================================
-# JSON Export Options
+# Part 3. JSON Export Options
 # ==============================================================================
 
 
 @dataclass(slots=True)
 class JSONExportOptions:
     """
-    Configuration options for JSONExporter.
+    Configuration for ``JSONExporter``.
     """
 
-    indent: int = DEFAULT_JSON_INDENT
+    stream: TextIO = DEFAULT_JSON_STREAM
 
-    encoding: str = DEFAULT_JSON_ENCODING
-
-    ensure_ascii: bool = DEFAULT_JSON_ASCII
-
+    indent: Optional[int] = DEFAULT_JSON_INDENT
+    ensure_ascii: bool = DEFAULT_JSON_ENSURE_ASCII
     sort_keys: bool = DEFAULT_JSON_SORT_KEYS
+    allow_nan: bool = DEFAULT_JSON_ALLOW_NAN
+    check_circular: bool = DEFAULT_JSON_CHECK_CIRCULAR
+    skip_keys: bool = DEFAULT_JSON_SKIP_KEYS
 
-    compact: bool = DEFAULT_JSON_COMPACT
+    prefix: str = DEFAULT_JSON_PREFIX
+    suffix: str = DEFAULT_JSON_SUFFIX
 
-    append: bool = DEFAULT_JSON_APPEND
+    auto_flush: bool = DEFAULT_JSON_AUTO_FLUSH
 
-    encoder: type[json.JSONEncoder] = JSONEncoder
+    def validate(self) -> bool:
+        """Validate exporter options."""
+
+        if not hasattr(self.stream, "write"):
+            raise TypeError(
+                "stream must provide a write() method"
+            )
+
+        if self.indent is not None:
+            if not isinstance(self.indent, int):
+                raise TypeError(
+                    "indent must be an integer or None"
+                )
+
+            if self.indent < 0:
+                raise ValueError(
+                    "indent must be >= 0"
+                )
+
+        boolean_options = {
+            "ensure_ascii": self.ensure_ascii,
+            "sort_keys": self.sort_keys,
+            "allow_nan": self.allow_nan,
+            "check_circular": self.check_circular,
+            "skip_keys": self.skip_keys,
+            "auto_flush": self.auto_flush,
+        }
+
+        for name, value in boolean_options.items():
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"{name} must be bool"
+                )
+
+        if not isinstance(self.prefix, str):
+            raise TypeError(
+                "prefix must be a string"
+            )
+
+        if not isinstance(self.suffix, str):
+            raise TypeError(
+                "suffix must be a string"
+            )
+
+        return True
 
 
 # ==============================================================================
-# JSON Exporter
+# Part 4. JSON Exporter
 # ==============================================================================
 
 
-class JSONExporter(BaseExporter):
+class JSONExporter(Exporter):
     """
-    JSON implementation of BaseExporter.
+    Export arbitrary observability objects as JSON.
+
+    The exporter supports:
+
+    * primitive values
+    * mappings
+    * sequences
+    * ``ExportPayload``
+    * dataclasses
+    * enums
+    * objects exposing ``to_dict()``
+    * ordinary objects exposing ``__dict__``
+
+    ``serialize()`` returns pure JSON.
+
+    ``format_string()`` returns the final stream representation including
+    configured prefix and suffix.
+
+    Lifecycle statistics are owned by the base ``Exporter`` contract.
+    JSON-specific statistics are maintained locally.
     """
+
+    # ------------------------------------------------------------------
+    # Constructor
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
-        name: str = "JSONExporter",
+        name: str = "json",
         *,
-        destination: ExportDestination = DEFAULT_JSON_FILENAME,
-        mode: ExportMode = ExportMode.SYNC,
+        stream: Optional[TextIO] = None,
         options: Optional[JSONExportOptions] = None,
+        encoding: str = "utf-8",
+        enabled: bool = True,
     ) -> None:
 
-        super().__init__(
-            name=name,
-            exporter_format=ExportFormat.JSON,
-            destination=destination,
-            mode=mode,
-        )
+        # ==================================================================
+        # Part 1. Resolve configuration
+        # ==================================================================
+
+        if options is not None:
+            options.validate()
+
+            configured_stream = options.stream
+
+            indent = options.indent
+            ensure_ascii = options.ensure_ascii
+            sort_keys = options.sort_keys
+            allow_nan = options.allow_nan
+            check_circular = options.check_circular
+            skip_keys = options.skip_keys
+
+            prefix = options.prefix
+            suffix = options.suffix
+            auto_flush = options.auto_flush
+
+        else:
+            configured_stream = (
+                stream
+                if stream is not None
+                else io.StringIO()
+            )
+
+            indent = DEFAULT_JSON_INDENT
+            ensure_ascii = DEFAULT_JSON_ENSURE_ASCII
+            sort_keys = DEFAULT_JSON_SORT_KEYS
+            allow_nan = DEFAULT_JSON_ALLOW_NAN
+            check_circular = DEFAULT_JSON_CHECK_CIRCULAR
+            skip_keys = DEFAULT_JSON_SKIP_KEYS
+
+            prefix = DEFAULT_JSON_PREFIX
+            suffix = DEFAULT_JSON_SUFFIX
+            auto_flush = DEFAULT_JSON_AUTO_FLUSH
+
+        # ==================================================================
+        # Part 2. Initialize subclass state BEFORE Exporter.__init__()
+        #
+        # Exporter.__init__() may invoke self.validate(). Therefore every
+        # JSON-specific attribute accessed by validation must exist before
+        # calling super().__init__().
+        # ==================================================================
 
         # ------------------------------------------------------------------
-        # Identity
+        # Output stream
         # ------------------------------------------------------------------
 
-        self._name = name
-
-        self._exporter_type = "JSONExporter"
-
-        self._version = JSON_EXPORTER_VERSION
+        self._stream: TextIO = configured_stream
 
         # ------------------------------------------------------------------
-        # Configuration
+        # JSON serialization configuration
         # ------------------------------------------------------------------
 
-        self._json = options or JSONExportOptions()
-
-        self._encoding = self._json.encoding
-
-        self._indent = self._json.indent
-
-        self._ensure_ascii = self._json.ensure_ascii
-
-        self._sort_keys = self._json.sort_keys
-
-        self._compact = self._json.compact
-
-        self._append = self._json.append
-
-        self._encoder = self._json.encoder
+        self._indent: Optional[int] = indent
+        self._ensure_ascii: bool = ensure_ascii
+        self._sort_keys: bool = sort_keys
+        self._allow_nan: bool = allow_nan
+        self._check_circular: bool = check_circular
+        self._skip_keys: bool = skip_keys
 
         # ------------------------------------------------------------------
-        # Runtime State
+        # Output formatting
+        # ------------------------------------------------------------------
+
+        self._prefix: str = prefix
+        self._suffix: str = suffix
+        self._auto_flush: bool = auto_flush
+
+        # ------------------------------------------------------------------
+        # JSON-specific runtime statistics
+        #
+        # These are intentionally different from the base Exporter
+        # lifecycle counters.
+        #
+        #   bytes_written   = UTF-8/encoding bytes physically written
+        #   lines_written   = logical newline count
+        #   objects_exported = successful write operations
+        #
+        # DO NOT initialize:
+        #
+        #   _export_count
+        #   _success_count
+        #   _failure_count
+        #
+        # Those belong to Exporter.
         # ------------------------------------------------------------------
 
         self._bytes_written: int = 0
-
-        self._files_written: int = 0
-
+        self._lines_written: int = 0
         self._objects_exported: int = 0
 
-        self._last_path: Optional[Union[str, Path]] = None
+        # ------------------------------------------------------------------
+        # Last JSON output
+        # ------------------------------------------------------------------
 
-        self._last_export: Optional[float] = None
+        self._last_output: Optional[str] = None
+        self._last_output_time: Optional[float] = None
 
-        self._lock = threading.RLock()
+        # ------------------------------------------------------------------
+        # Synchronization
+        # ------------------------------------------------------------------
 
-        self._metadata.update(
-            {
-                "format": "json",
-                "encoding": self._encoding,
+        self._json_lock = threading.RLock()
+
+        # ------------------------------------------------------------------
+        # Version
+        # ------------------------------------------------------------------
+
+        self._version: str = JSON_EXPORTER_VERSION
+
+        # ==================================================================
+        # Part 3. Base exporter initialization
+        # ==================================================================
+
+        super().__init__(
+            name=name,
+            format=ExportFormat.JSON,
+            encoding=encoding,
+            enabled=enabled,
+            options={
+                "indent": self._indent,
+                "ensure_ascii": self._ensure_ascii,
+                "sort_keys": self._sort_keys,
+                "allow_nan": self._allow_nan,
+                "check_circular": self._check_circular,
+                "skip_keys": self._skip_keys,
+                "prefix": self._prefix,
+                "suffix": self._suffix,
+                "auto_flush": self._auto_flush,
+            },
+        )
+
+    # ==========================================================================
+    # Part 5. Export Statistics
+    # ==========================================================================
+
+    @property
+    def export_count(self) -> int:
+        """
+        Return the total number of export attempts.
+
+        The underlying counter is owned by ``Exporter``.
+        """
+        return self._export_count
+
+    @property
+    def success_count(self) -> int:
+        """
+        Return the number of successful export attempts.
+
+        The underlying counter is owned by ``Exporter``.
+        """
+        return self._success_count
+
+    @property
+    def failure_count(self) -> int:
+        """Return the number of failed export attempts."""
+        return self.error_count
+
+    # ==========================================================================
+    # Part 5. Properties
+    # ==========================================================================
+
+    @property
+    def version(self) -> str:
+        """Return exporter version."""
+
+        return self._version
+
+    @property
+    def stream(self) -> TextIO:
+        """Return configured output stream."""
+
+        return self._stream
+
+    @property
+    def indent(self) -> Optional[int]:
+        """Return JSON indentation."""
+
+        return self._indent
+
+    @property
+    def ensure_ascii(self) -> bool:
+        """Return Unicode escaping configuration."""
+
+        return self._ensure_ascii
+
+    @property
+    def sort_keys(self) -> bool:
+        """Return key sorting configuration."""
+
+        return self._sort_keys
+
+    @property
+    def allow_nan(self) -> bool:
+        """Return NaN/Infinity configuration."""
+
+        return self._allow_nan
+
+    @property
+    def check_circular(self) -> bool:
+        """Return circular-reference checking configuration."""
+
+        return self._check_circular
+
+    @property
+    def skip_keys(self) -> bool:
+        """Return non-basic dictionary key handling."""
+
+        return self._skip_keys
+
+    @property
+    def prefix(self) -> str:
+        """Return output prefix."""
+
+        return self._prefix
+
+    @property
+    def suffix(self) -> str:
+        """Return output suffix."""
+
+        return self._suffix
+
+    @property
+    def auto_flush(self) -> bool:
+        """Return auto-flush configuration."""
+
+        return self._auto_flush
+
+    @property
+    def bytes_written(self) -> int:
+        """Return total number of encoded bytes written."""
+
+        return self._bytes_written
+
+    @property
+    def lines_written(self) -> int:
+        """Return number of newline characters written."""
+
+        return self._lines_written
+
+    @property
+    def objects_exported(self) -> int:
+        """Return number of successfully exported objects."""
+
+        return self._objects_exported
+
+    @property
+    def last_output(self) -> Optional[str]:
+        """Return the most recently written formatted output."""
+
+        return self._last_output
+
+    @property
+    def last_output_time(self) -> Optional[float]:
+        """Return timestamp of the last successful write."""
+
+        return self._last_output_time
+
+    # ==========================================================================
+    # Part 6. JSON Serialization
+    # ==========================================================================
+
+    def _json_kwargs(self) -> dict[str, Any]:
+        """Build the canonical ``json.dumps`` configuration."""
+
+        return {
+            "indent": self._indent,
+            "ensure_ascii": self._ensure_ascii,
+            "sort_keys": self._sort_keys,
+            "allow_nan": self._allow_nan,
+            "check_circular": self._check_circular,
+            "skipkeys": self._skip_keys,
+            "default": self._json_default,
+        }
+
+    def _json_default(self, obj: Any) -> Any:
+        """
+        Convert supported non-standard Python objects into JSON values.
+        """
+
+        # ------------------------------------------------------------------
+        # ExportPayload
+        # ------------------------------------------------------------------
+
+        if isinstance(obj, ExportPayload):
+            return {
+                "name": obj.name,
+                "value": obj.value,
+                "labels": dict(obj.labels),
+                "timestamp": obj.timestamp,
+                "metadata": dict(obj.metadata),
+                "options": dict(obj.options),
             }
+
+        # ------------------------------------------------------------------
+        # Dataclass
+        # ------------------------------------------------------------------
+
+        if is_dataclass(obj) and not isinstance(obj, type):
+            return asdict(obj)
+
+        # ------------------------------------------------------------------
+        # Enum
+        # ------------------------------------------------------------------
+
+        if isinstance(obj, Enum):
+            return obj.value
+
+        # ------------------------------------------------------------------
+        # to_dict()
+        # ------------------------------------------------------------------
+
+        to_dict = getattr(obj, "to_dict", None)
+
+        if callable(to_dict):
+            value = to_dict()
+
+            if value is obj:
+                raise TypeError(
+                    f"to_dict() returned self for "
+                    f"{type(obj).__name__}"
+                )
+
+            return value
+
+        # ------------------------------------------------------------------
+        # Mapping-like objects
+        # ------------------------------------------------------------------
+
+        if isinstance(obj, Mapping):
+            return dict(obj)
+
+        # ------------------------------------------------------------------
+        # __dict__
+        # ------------------------------------------------------------------
+
+        if hasattr(obj, "__dict__"):
+            return vars(obj)
+
+        raise TypeError(
+            f"Object of type {type(obj).__name__} "
+            "is not JSON serializable"
         )
 
-        self._capabilities |= (
-            ExportCapability.SERIALIZATION
-            | ExportCapability.DESERIALIZATION
-        )
-# ==============================================================================
-# Part 2. Serialization
-# ==============================================================================
-
-    def serialize(
-        self,
-        record: ExportRecord,
-    ) -> str:
+    def serialize(self, obj: Any) -> str:
         """
-        Serialize an ExportRecord into a JSON string.
-        """
+        Serialize an arbitrary object into pure JSON.
 
-        return self.encode(
-            {
-                "id": record.id,
-                "timestamp": record.timestamp,
-                "payload": record.payload,
-                "metadata": record.metadata,
-                "tags": record.tags,
-                "source": record.source,
-            }
-        )
+        This method intentionally does NOT add prefix/suffix.
 
-    # ------------------------------------------------------------------
+        Therefore:
 
-    def deserialize(
-        self,
-        payload: str,
-    ) -> ExportRecord:
-        """
-        Deserialize a JSON string into an ExportRecord.
-        """
+            exporter.serialize(value)
+            exporter.encode(value)
 
-        data = self.decode(payload)
-
-        return ExportRecord(
-            id=data.get("id", str(uuid.uuid4())),
-            timestamp=data.get("timestamp", time.time()),
-            payload=data.get("payload"),
-            metadata=data.get("metadata", {}),
-            tags=data.get("tags", []),
-            source=data.get("source", ""),
-        )
-
-    # ------------------------------------------------------------------
-
-    def encode(
-        self,
-        obj: Any,
-    ) -> str:
-        """
-        Encode a Python object as JSON.
-        """
-
-        if self._compact:
-            indent = None
-            separators = (",", ":")
-        else:
-            indent = self._indent
-            separators = None
-
-        return json.dumps(
-            obj,
-            cls=self._encoder,
-            indent=indent,
-            ensure_ascii=self._ensure_ascii,
-            sort_keys=self._sort_keys,
-            separators=separators,
-        )
-
-    # ------------------------------------------------------------------
-
-    def decode(
-        self,
-        payload: str,
-    ) -> Any:
-        """
-        Decode JSON into a Python object.
-        """
-
-        return json.loads(payload)
-
-    # ------------------------------------------------------------------
-
-    def pretty(
-        self,
-        obj: Any,
-    ) -> str:
-        """
-        Return formatted JSON.
-        """
-
-        return json.dumps(
-            obj,
-            cls=self._encoder,
-            indent=self._indent,
-            ensure_ascii=self._ensure_ascii,
-            sort_keys=self._sort_keys,
-        )
-
-    # ------------------------------------------------------------------
-
-    def compact(
-        self,
-        obj: Any,
-    ) -> str:
-        """
-        Return compact JSON.
-        """
-
-        return json.dumps(
-            obj,
-            cls=self._encoder,
-            ensure_ascii=self._ensure_ascii,
-            sort_keys=self._sort_keys,
-            separators=(",", ":"),
-        )
-
-    # ------------------------------------------------------------------
-
-    def validate_json(
-        self,
-        payload: str,
-    ) -> bool:
-        """
-        Check whether a string is valid JSON.
+        always produce the same string.
         """
 
         try:
-            json.loads(payload)
-            return True
+            return json.dumps(
+                obj,
+                **self._json_kwargs(),
+            )
 
         except (
             TypeError,
             ValueError,
-            json.JSONDecodeError,
+            OverflowError,
+        ) as exc:
+            raise ExportError(
+                f"JSON serialization failed: {exc}"
+            ) from exc
+
+    def format_string(self, obj: Any) -> str:
+        """
+        Serialize an object and add configured prefix/suffix.
+        """
+
+        serialized = self.serialize(obj)
+
+        return (
+            f"{self._prefix}"
+            f"{serialized}"
+            f"{self._suffix}"
+        )
+
+    def encode(self, obj: Any) -> str:
+        """
+        Encode an object as JSON.
+
+        Alias for ``serialize()``.
+        """
+
+        return self.serialize(obj)
+
+    def deserialize(
+        self,
+        payload: str,
+    ) -> Any:
+        """
+        Deserialize JSON text.
+
+        Configured prefix/suffix are stripped when present.
+
+        Raises
+        ------
+        TypeError
+            If payload is not a string.
+
+        ValueError
+            If payload is not valid JSON.
+        """
+
+        if not isinstance(
+            payload,
+            str,
         ):
+            raise TypeError(
+                "payload must be a string"
+            )
+
+        text = payload
+
+        if self._prefix and text.startswith(
+            self._prefix
+        ):
+            text = text[
+                len(self._prefix):
+            ]
+
+        if self._suffix and text.endswith(
+            self._suffix
+        ):
+            text = text[
+                : -len(self._suffix)
+            ]
+
+        return json.loads(text)
+
+    def decode(self, payload: str) -> Any:
+        """Decode JSON text."""
+
+        return self.deserialize(payload)
+
+    # ==========================================================================
+    # Part 7. Validation
+    # ==========================================================================
+
+    def validate_stream(self) -> bool:
+        """Validate configured stream."""
+
+        if not hasattr(self._stream, "write"):
+            raise TypeError(
+                "stream must provide a write() method"
+            )
+
+        if self._auto_flush and not hasattr(
+            self._stream,
+            "flush",
+        ):
+            raise TypeError(
+                "stream must provide a flush() method "
+                "when auto_flush is enabled"
+            )
+
+        return True
+
+    def validate_output(
+        self,
+        output: Any,
+        *,
+        raise_error: bool = False,
+    ) -> bool:
+        """
+        Validate JSON output.
+
+        Prefix/suffix are accepted when configured.
+        """
+
+        if not isinstance(output, str):
+            if raise_error:
+                raise TypeError(
+                    "JSON output must be a string"
+                )
             return False
-# ==============================================================================
-# Part 3. Writing API
-# ==============================================================================
+
+        text = output
+
+        if self._prefix and text.startswith(self._prefix):
+            text = text[len(self._prefix):]
+
+        if self._suffix and text.endswith(self._suffix):
+            text = text[:-len(self._suffix)]
+
+        try:
+            json.loads(text)
+
+        except (
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            if raise_error:
+                raise ValueError(
+                    "Invalid JSON output"
+                ) from exc
+
+            return False
+
+        return True
+
+    def validate_payload(
+        self,
+        payload: Any,
+        *,
+        raise_error: bool = False,
+    ) -> bool:
+        """
+        Validate a payload.
+
+        JSONExporter intentionally accepts arbitrary JSON-compatible
+        Python objects, not only ExportPayload.
+        """
+
+        try:
+            self.serialize(payload)
+            return True
+
+        except ExportError as exc:
+            if raise_error:
+                raise
+
+            return False
+
+    def validate(self) -> bool:
+        """
+        Validate exporter configuration.
+
+        This method is safe to call from ``Exporter.__init__`` because
+        subclass state is initialized beforehand.
+        """
+
+        result = super().validate()
+
+        self.validate_stream()
+
+        JSONExportOptions(
+            stream=self._stream,
+            indent=self._indent,
+            ensure_ascii=self._ensure_ascii,
+            sort_keys=self._sort_keys,
+            allow_nan=self._allow_nan,
+            check_circular=self._check_circular,
+            skip_keys=self._skip_keys,
+            prefix=self._prefix,
+            suffix=self._suffix,
+            auto_flush=self._auto_flush,
+        ).validate()
+
+        return bool(result)
+
+    # ==========================================================================
+    # Part 8. Snapshot / Diagnostics
+    # ==========================================================================
+
+    def snapshot(self) -> dict[str, Any]:
+        """
+        Return a complete runtime snapshot of the JSON exporter.
+
+        Base exporter lifecycle state is represented at the top level.
+        JSON-specific configuration and runtime state are grouped under
+        the ``"json"`` namespace.
+        """
+
+        return {
+            # ==================================================================
+            # Base exporter state
+            # ==================================================================
+
+            "name": self.name,
+            "format": self.format.value,
+            "version": self.version,
+            "enabled": self.enabled,
+
+            "export_count": self.export_count,
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+
+            "bytes_exported": getattr(
+                self,
+                "_bytes_exported",
+                0,
+            ),
+
+            "last_export": getattr(
+                self,
+                "_last_export",
+                None,
+            ),
+
+            "last_error": getattr(
+                self,
+                "_last_error",
+                None,
+            ),
+
+            # ==================================================================
+            # JSON exporter state
+            # ==================================================================
+
+            "json": {
+                # Configuration
+                "indent": self.indent,
+                "ensure_ascii": self.ensure_ascii,
+                "sort_keys": self.sort_keys,
+                "allow_nan": self.allow_nan,
+                "check_circular": self.check_circular,
+                "skip_keys": self.skip_keys,
+
+                "prefix": self.prefix,
+                "suffix": self.suffix,
+                "auto_flush": self.auto_flush,
+
+                # Runtime statistics
+                "bytes_written": self.bytes_written,
+                "lines_written": self.lines_written,
+                "objects_exported": self.objects_exported,
+
+                # Last output
+                "last_output": self.last_output,
+                "last_output_time": self.last_output_time,
+            },
+        }
+
+    # ==========================================================================
+    # Part 9. Writing
+    # ==========================================================================
 
     def write(
         self,
-        payload: str,
+        text: str,
     ) -> int:
         """
-        Write a JSON payload to the configured destination.
+        Write JSON text to the configured stream.
 
         Returns
         -------
         int
-            Number of bytes written.
+            Number of bytes written using the configured encoding.
         """
 
-        if hasattr(self._destination, "write"):
-            return self.write_stream(payload, self._destination)
+        if not isinstance(
+            text,
+            str,
+        ):
+            raise TypeError(
+                "text must be a string"
+            )
 
-        return self.write_file(payload, self._destination)
+        if not text:
+            return 0
 
-    # ------------------------------------------------------------------
+        byte_count = len(
+            text.encode(
+                self._encoding,
+            )
+        )
 
-    def write_file(
-        self,
-        payload: str,
-        path: ExportDestination,
-    ) -> int:
-        """
-        Write JSON payload to a file.
-        """
+        with self._json_lock:
+            self._stream.write(text)
 
-        path = Path(path)
+            if self._auto_flush:
+                self._stream.flush()
 
-        path.parent.mkdir(parents=True, exist_ok=True)
+            self._bytes_written += byte_count
+            self._lines_written += text.count("\n")
+            self._objects_exported += 1
 
-        mode = "a" if self._append else "w"
+            self._last_output = text
+            self._last_output_time = time.time()
 
-        with path.open(
-            mode,
-            encoding=self._encoding,
-        ) as fp:
-            fp.write(payload)
-
-            if self._append:
-                fp.write("\n")
-
-        written = len(payload.encode(self._encoding))
-
-        self._bytes_written += written
-        self._files_written += 1
-        self._last_path = path
-        self._last_export = time.time()
-
-        return written
-
-    # ------------------------------------------------------------------
+        return byte_count
 
     def write_stream(
         self,
-        payload: str,
-        stream,
+        text: str,
+        stream: TextIO,
     ) -> int:
         """
-        Write JSON payload to a file-like stream.
+        Write text to an arbitrary stream without changing exporter state.
         """
 
-        stream.write(payload)
+        if not isinstance(text, str):
+            raise TypeError(
+                "text must be a string"
+            )
 
-        if hasattr(stream, "flush"):
+        if not hasattr(stream, "write"):
+            raise TypeError(
+                "stream must provide a write() method"
+            )
+
+        if self._auto_flush and not hasattr(
+            stream,
+            "flush",
+        ):
+            raise TypeError(
+                "stream must provide a flush() method "
+                "when auto_flush is enabled"
+            )
+
+        if not text:
+            return 0
+
+        stream.write(text)
+
+        if self._auto_flush:
             stream.flush()
 
-        written = len(payload.encode(self._encoding))
+        return len(
+            text.encode(self._encoding)
+        )
 
-        self._bytes_written += written
-        self._last_export = time.time()
+    def flush(self) -> "JSONExporter":
+        """Flush configured stream."""
 
-        return written
+        with self._json_lock:
+            self._stream.flush()
 
-    # ------------------------------------------------------------------
+        return self
 
-    def append(
-        self,
-        payload: str,
-    ) -> int:
-        """
-        Append JSON payload to the configured destination.
-        """
-
-        previous = self._append
-
-        try:
-            self._append = True
-            return self.write(payload)
-        finally:
-            self._append = previous
-
-    # ------------------------------------------------------------------
-
-    def overwrite(
-        self,
-        payload: str,
-    ) -> int:
-        """
-        Overwrite the configured destination.
-        """
-
-        previous = self._append
-
-        try:
-            self._append = False
-            return self.write(payload)
-        finally:
-            self._append = previous
-
-    # ------------------------------------------------------------------
-
-    def flush(self) -> None:
-        """
-        Flush the configured stream if supported.
-
-        File writes are flushed automatically by the context manager.
-        """
-
-        if hasattr(self._destination, "flush"):
-            self._destination.flush()
-
-    # ------------------------------------------------------------------
-
-    def clear(self) -> None:
-        """
-        Clear runtime write state.
-
-        This does not remove exported files.
-        """
-
-        self._bytes_written = 0
-        self._files_written = 0
-        self._objects_exported = 0
-
-        self._last_path = None
-        self._last_export = None
-
-        self._history.clear()
-        self._cache.clear()
-# ==============================================================================
-# Part 4. Export API
-# ==============================================================================
+    # ==========================================================================
+    # Part 10. Export
+    # ==========================================================================
 
     def export(
         self,
-        record: ExportRecord,
+        payload: Any,
+        **options: Any,
     ) -> ExportResult:
-        """
-        Export a single ExportRecord.
-        """
+        """Serialize and export one object."""
 
-        return super().export(record)
+        start_time = time.perf_counter()
 
-    # ------------------------------------------------------------------
+        with self._json_lock:
+            self._export_count += 1
+            self._last_export = time.time()
 
-    def export_batch(
+        try:
+            self.validate()
+
+            serialized = self.serialize(
+                payload,
+                **options,
+            )
+
+            byte_count = self.write(
+                serialized,
+            )
+
+            with self._json_lock:
+                self._success_count += 1
+
+            return ExportResult(
+                success=True,
+                exporter=self._name,
+                count=1,
+                bytes_exported=byte_count,
+                duration=time.perf_counter() - start_time,
+                error=None,
+                data=serialized,
+                timestamp=time.time(),
+            )
+
+        except Exception as exc:
+            with self._json_lock:
+                self._failure_count += 1
+                self._last_error = str(exc)
+
+            return ExportResult(
+                success=False,
+                exporter=self._name,
+                count=0,
+                bytes_exported=0,
+                duration=time.perf_counter() - start_time,
+                error=str(exc),
+                data=None,
+                timestamp=time.time(),
+            )
+
+    def export_payload(
         self,
-        records: Sequence[ExportRecord],
-    ) -> List[ExportResult]:
-        """
-        Export multiple records.
-        """
-
-        return [self.export(record) for record in records]
-
-    # ------------------------------------------------------------------
-
-    def export_dict(
-        self,
-        data: Dict[str, Any],
+        payload: ExportPayload,
+        **options: Any,
     ) -> ExportResult:
-        """
-        Export a dictionary as JSON.
-        """
+        """Export an ExportPayload."""
 
-        record = ExportRecord(
-            payload=data,
-            source="dict",
+        return self.export(
+            payload,
+            **options,
         )
 
-        return self.export(record)
-
-    # ------------------------------------------------------------------
-
-    def export_list(
+    def export_many(
         self,
-        data: List[Any],
+        payloads: Any,
+        **options: Any,
+    ) -> list[ExportResult]:
+        """
+        Export multiple objects in input order.
+
+        Each object is exported independently. A failure for one object
+        does not prevent subsequent objects from being exported.
+        """
+
+        if isinstance(payloads, (str, bytes)):
+            raise TypeError(
+                "payloads must be an iterable of objects"
+            )
+
+        try:
+            iterator = iter(payloads)
+        except TypeError as exc:
+            raise TypeError(
+                "payloads must be iterable"
+            ) from exc
+
+        return [
+            self.export(
+                payload,
+                **options,
+            )
+            for payload in iterator
+        ]
+
+    def export_text(
+        self,
+        text: str,
     ) -> ExportResult:
         """
-        Export a list as JSON.
+        Export an already serialized JSON string.
+
+        The text must contain valid JSON. Prefix/suffix are not added
+        automatically because the caller supplied the serialized text.
         """
 
-        record = ExportRecord(
-            payload=data,
-            source="list",
-        )
+        if not isinstance(text, str):
+            raise TypeError(
+                "text must be a string"
+            )
 
-        return self.export(record)
+        if not self.validate_output(text):
+            raise ValueError(
+                "text is not valid JSON"
+            )
 
-    # ------------------------------------------------------------------
+        start_time = time.perf_counter()
+
+        try:
+            byte_count = self.write(text)
+
+            return ExportResult(
+                success=True,
+                exporter=self._name,
+                count=1,
+                bytes_exported=byte_count,
+                duration=(
+                    time.perf_counter()
+                    - start_time
+                ),
+                error=None,
+                data=text,
+                timestamp=time.time(),
+            )
+
+        except Exception as exc:
+            return ExportResult(
+                success=False,
+                exporter=self._name,
+                count=0,
+                bytes_exported=0,
+                duration=(
+                    time.perf_counter()
+                    - start_time
+                ),
+                error=str(exc),
+                data=None,
+                timestamp=time.time(),
+            )
 
     def export_object(
         self,
         obj: Any,
     ) -> ExportResult:
-        """
-        Export an arbitrary Python object.
-        """
+        """Serialize and export an arbitrary object."""
 
-        record = ExportRecord(
-            payload=obj,
-            source=type(obj).__name__,
+        return self.export(obj)
+
+    def export_dict(
+        self,
+        data: Mapping[str, Any],
+    ) -> ExportResult:
+        """Export a mapping as JSON."""
+
+        if not isinstance(data, Mapping):
+            raise TypeError(
+                "data must be a mapping"
+            )
+
+        return self.export_object(
+            dict(data)
         )
 
-        return self.export(record)
-
-    # ------------------------------------------------------------------
-
-    def export_file(
+    def export_list(
         self,
-        path: ExportDestination,
+        data: list[Any],
     ) -> ExportResult:
-        """
-        Export an existing JSON file.
+        """Export a list as JSON."""
 
-        The file is validated and then re-exported to the
-        current destination.
-        """
-
-        path = Path(path)
-
-        with path.open(
-            "r",
-            encoding=self._encoding,
-        ) as fp:
-            payload = fp.read()
-
-        if not self.validate_json(payload):
-            raise ValueError(
-                f"Invalid JSON file: {path}"
+        if not isinstance(data, list):
+            raise TypeError(
+                "data must be a list"
             )
-
-        data = self.decode(payload)
 
         return self.export_object(data)
 
-    # ------------------------------------------------------------------
-
-    def export_string(
-        self,
-        payload: str,
-    ) -> ExportResult:
-        """
-        Export a JSON string.
-        """
-
-        if not self.validate_json(payload):
-            raise ValueError(
-                "Invalid JSON string."
-            )
-
-        data = self.decode(payload)
-
-        return self.export_object(data)
-# ==============================================================================
-# Part 5. Configuration
-# ==============================================================================
+    # ==========================================================================
+    # Part 11. Configuration
+    # ==========================================================================
 
     def set_indent(
         self,
-        indent: int,
+        indent: Optional[int],
     ) -> "JSONExporter":
-        """
-        Set JSON indentation.
-        """
+        """Set JSON indentation."""
 
-        if indent < 0:
-            raise ValueError("indent must be >= 0")
-
-        self._indent = int(indent)
-
-        return self
-
-    # ------------------------------------------------------------------
-
-    def set_encoding(
-        self,
-        encoding: str,
-    ) -> "JSONExporter":
-        """
-        Set output encoding.
-        """
-
-        if not encoding:
-            raise ValueError("encoding cannot be empty")
-
-        self._encoding = encoding
-
-        return self
-
-    # ------------------------------------------------------------------
-
-    def set_ascii(
-        self,
-        enabled: bool,
-    ) -> "JSONExporter":
-        """
-        Enable or disable ASCII escaping.
-        """
-
-        self._ensure_ascii = bool(enabled)
-
-        return self
-
-    # ------------------------------------------------------------------
-
-    def set_sort_keys(
-        self,
-        enabled: bool,
-    ) -> "JSONExporter":
-        """
-        Enable or disable key sorting.
-        """
-
-        self._sort_keys = bool(enabled)
-
-        return self
-
-    # ------------------------------------------------------------------
-
-    def set_compact(
-        self,
-        enabled: bool,
-    ) -> "JSONExporter":
-        """
-        Enable or disable compact JSON output.
-        """
-
-        self._compact = bool(enabled)
-
-        return self
-
-    # ------------------------------------------------------------------
-
-    def options(self) -> Dict[str, Any]:
-        """
-        Return JSON configuration.
-        """
-
-        return {
-            "indent": self._indent,
-            "encoding": self._encoding,
-            "ensure_ascii": self._ensure_ascii,
-            "sort_keys": self._sort_keys,
-            "compact": self._compact,
-            "append": self._append,
-            "encoder": self._encoder,
-        }
-
-    # ------------------------------------------------------------------
-
-    def reset(self) -> "JSONExporter":
-        """
-        Restore default JSON configuration.
-        """
-
-        self._indent = DEFAULT_JSON_INDENT
-
-        self._encoding = DEFAULT_JSON_ENCODING
-
-        self._ensure_ascii = DEFAULT_JSON_ASCII
-
-        self._sort_keys = DEFAULT_JSON_SORT_KEYS
-
-        self._compact = DEFAULT_JSON_COMPACT
-
-        self._append = DEFAULT_JSON_APPEND
-
-        self._encoder = JSONEncoder
-
-        return self
-# ==============================================================================
-# Part 6. Runtime Operations
-# ==============================================================================
-
-    def snapshot(self) -> Dict[str, Any]:
-        """
-        Create a runtime snapshot of the JSON exporter.
-        """
-
-        state = super().snapshot()
-
-        state.update(
-            {
-                "json": {
-                    "indent": self._indent,
-                    "encoding": self._encoding,
-                    "ensure_ascii": self._ensure_ascii,
-                    "sort_keys": self._sort_keys,
-                    "compact": self._compact,
-                    "append": self._append,
-                    "bytes_written": self._bytes_written,
-                    "files_written": self._files_written,
-                    "objects_exported": self._objects_exported,
-                    "last_path": (
-                        str(self._last_path)
-                        if self._last_path is not None
-                        else None
-                    ),
-                    "last_export": self._last_export,
-                }
-            }
-        )
-
-        return state
-
-    # ------------------------------------------------------------------
-
-    def restore(
-        self,
-        snapshot: Dict[str, Any],
-    ) -> "JSONExporter":
-        """
-        Restore exporter state from snapshot.
-        """
-
-        super().restore(snapshot)
-
-        state = snapshot.get("json", {})
-
-        self._indent = state.get(
-            "indent",
-            self._indent,
-        )
-
-        self._encoding = state.get(
-            "encoding",
-            self._encoding,
-        )
-
-        self._ensure_ascii = state.get(
-            "ensure_ascii",
-            self._ensure_ascii,
-        )
-
-        self._sort_keys = state.get(
-            "sort_keys",
-            self._sort_keys,
-        )
-
-        self._compact = state.get(
-            "compact",
-            self._compact,
-        )
-
-        self._append = state.get(
-            "append",
-            self._append,
-        )
-
-        self._bytes_written = state.get(
-            "bytes_written",
-            self._bytes_written,
-        )
-
-        self._files_written = state.get(
-            "files_written",
-            self._files_written,
-        )
-
-        self._objects_exported = state.get(
-            "objects_exported",
-            self._objects_exported,
-        )
-
-        last_path = state.get("last_path")
-
-        self._last_path = (
-            Path(last_path)
-            if last_path
-            else None
-        )
-
-        self._last_export = state.get(
-            "last_export",
-            self._last_export,
-        )
-
-        return self
-
-    # ------------------------------------------------------------------
-
-    def clone(self) -> "JSONExporter":
-        """
-        Create a deep clone of this exporter.
-        """
-
-        return copy.deepcopy(self)
-
-    # ------------------------------------------------------------------
-
-    def copy(self) -> "JSONExporter":
-        """
-        Create a shallow copy of this exporter.
-        """
-
-        return copy.copy(self)
-
-    # ------------------------------------------------------------------
-
-    def cleanup(self) -> "JSONExporter":
-        """
-        Cleanup transient runtime resources.
-        """
-
-        super().cleanup()
-
-        self._last_export = None
-
-        return self
-
-    # ------------------------------------------------------------------
-
-    def compact(self) -> "JSONExporter":
-        """
-        Compact runtime memory usage.
-        """
-
-        super().compact()
-
-        if len(self._history) > self._batch_size:
-            self._history[:] = self._history[-self._batch_size :]
-
-        return self
-# ==============================================================================
-# Part 7. Statistics
-# ==============================================================================
-
-    @property
-    def bytes_written(self) -> int:
-        """
-        Total bytes written.
-        """
-
-        return self._bytes_written
-
-    # ------------------------------------------------------------------
-
-    @property
-    def files_written(self) -> int:
-        """
-        Total files written.
-        """
-
-        return self._files_written
-
-    # ------------------------------------------------------------------
-
-    @property
-    def objects_exported(self) -> int:
-        """
-        Total exported Python objects.
-        """
-
-        return self._objects_exported
-
-    # ------------------------------------------------------------------
-
-    @property
-    def average_size(self) -> float:
-        """
-        Average bytes per export.
-        """
-
-        if self._objects_exported == 0:
-            return 0.0
-
-        return (
-            self._bytes_written
-            / self._objects_exported
-        )
-
-    # ------------------------------------------------------------------
-
-    def report(self) -> Dict[str, Any]:
-        """
-        Return a complete JSON exporter report.
-        """
-
-        report = super().report()
-
-        report["json"] = {
-            "encoding": self._encoding,
-            "indent": self._indent,
-            "compact": self._compact,
-            "append": self._append,
-            "bytes_written": self.bytes_written,
-            "files_written": self.files_written,
-            "objects_exported": self.objects_exported,
-            "average_size": self.average_size,
-            "last_path": (
-                str(self._last_path)
-                if self._last_path is not None
-                else None
-            ),
-            "last_export": self._last_export,
-        }
-
-        return report
-
-    # ------------------------------------------------------------------
-
-    def summary(self) -> Dict[str, Any]:
-        """
-        Return a concise JSON exporter summary.
-        """
-
-        summary = super().summary()
-
-        summary.update(
-            {
-                "bytes_written": self.bytes_written,
-                "files_written": self.files_written,
-                "objects_exported": self.objects_exported,
-                "average_size": round(
-                    self.average_size,
-                    2,
-                ),
-            }
-        )
-
-        return summary
-# ==============================================================================
-# Part 8. Validation
-# ==============================================================================
-
-    def validate(
-        self,
-        raise_error: bool = False,
-    ) -> bool:
-        """
-        Validate the JSON exporter.
-        """
-
-        try:
-            super().validate(raise_error=True)
-
-            self.validate_path(raise_error=True)
-
-            self.check_integrity(raise_error=True)
-
-            return True
-
-        except Exception:
-            if raise_error:
-                raise
-            return False
-
-    # ------------------------------------------------------------------
-
-    def validate_path(
-        self,
-        raise_error: bool = False,
-    ) -> bool:
-        """
-        Validate export destination path.
-        """
-
-        try:
-            if hasattr(self._destination, "write"):
-                return True
-
-            path = Path(self._destination)
-
-            if path.exists() and path.is_dir():
-                raise ValueError(
-                    "destination must be a file, not a directory"
-                )
-
-            if path.parent and not path.parent.exists():
-                path.parent.mkdir(
-                    parents=True,
-                    exist_ok=True,
-                )
-
-            return True
-
-        except Exception:
-            if raise_error:
-                raise
-            return False
-
-    # ------------------------------------------------------------------
-
-    def validate_json(
-        self,
-        payload: str,
-        raise_error: bool = False,
-    ) -> bool:
-        """
-        Validate JSON text.
-        """
-
-        try:
-            json.loads(payload)
-
-            return True
-
-        except Exception:
-            if raise_error:
-                raise ValueError(
-                    "invalid JSON payload"
-                )
-
-            return False
-
-    # ------------------------------------------------------------------
-
-    def validate_payload(
-        self,
-        payload: Any,
-        raise_error: bool = False,
-    ) -> bool:
-        """
-        Validate whether an object can be serialized.
-        """
-
-        try:
-            json.dumps(
-                payload,
-                cls=self._encoder,
-            )
-
-            return True
-
-        except Exception:
-            if raise_error:
-                raise ValueError(
-                    "payload is not JSON serializable"
-                )
-
-            return False
-
-    # ------------------------------------------------------------------
-
-    def check_integrity(
-        self,
-        raise_error: bool = False,
-    ) -> bool:
-        """
-        Check JSON exporter internal integrity.
-        """
-
-        try:
-            super().check_integrity(raise_error=True)
-
-            if not isinstance(
-                self._encoding,
-                str,
-            ):
+        if indent is not None:
+            if not isinstance(indent, int):
                 raise TypeError(
-                    "invalid encoding"
+                    "indent must be an integer or None"
                 )
 
-            if self._indent < 0:
+            if indent < 0:
                 raise ValueError(
                     "indent must be >= 0"
                 )
 
-            if self._encoder is None:
-                raise RuntimeError(
-                    "JSON encoder is missing"
-                )
+        self._indent = indent
+        return self
 
-            return True
-
-        except Exception:
-            if raise_error:
-                raise
-            return False
-# ==============================================================================
-# Part 9. Events & Hooks
-# ==============================================================================
-
-    def before_encode(
+    def set_ensure_ascii(
         self,
-        payload: Any,
-    ) -> Any:
-        """
-        Hook executed before JSON encoding.
-        """
+        value: bool,
+    ) -> "JSONExporter":
+        """Set Unicode escaping behavior."""
 
-        self.emit_event(
-            "before_encode",
-            payload,
-        )
+        if not isinstance(value, bool):
+            raise TypeError(
+                "ensure_ascii must be bool"
+            )
 
-        return payload
+        self._ensure_ascii = value
+        return self
 
-    # ------------------------------------------------------------------
-
-    def after_encode(
+    def set_sort_keys(
         self,
-        payload: str,
-    ) -> str:
-        """
-        Hook executed after JSON encoding.
-        """
+        value: bool,
+    ) -> "JSONExporter":
+        """Set key sorting behavior."""
 
-        self.emit_event(
-            "after_encode",
-            payload,
-        )
+        if not isinstance(value, bool):
+            raise TypeError(
+                "sort_keys must be bool"
+            )
 
-        return payload
+        self._sort_keys = value
+        return self
 
-    # ------------------------------------------------------------------
-
-    def before_write(
+    def set_allow_nan(
         self,
-        payload: str,
-    ) -> str:
-        """
-        Hook executed before writing JSON.
-        """
+        value: bool,
+    ) -> "JSONExporter":
+        """Set NaN/Infinity handling."""
 
-        self.emit_event(
-            "before_write",
-            payload,
-        )
+        if not isinstance(value, bool):
+            raise TypeError(
+                "allow_nan must be bool"
+            )
 
-        return payload
+        self._allow_nan = value
+        return self
 
-    # ------------------------------------------------------------------
-
-    def after_write(
+    def set_check_circular(
         self,
-        payload: str,
-        bytes_written: int,
-    ) -> int:
-        """
-        Hook executed after writing JSON.
-        """
+        value: bool,
+    ) -> "JSONExporter":
+        """Set circular-reference checking."""
 
-        self.emit_event(
-            "after_write",
-            payload,
-            bytes_written,
-        )
+        if not isinstance(value, bool):
+            raise TypeError(
+                "check_circular must be bool"
+            )
 
-        return bytes_written
+        self._check_circular = value
+        return self
 
-    # ------------------------------------------------------------------
-
-    def before_export(
+    def set_skip_keys(
         self,
-        record: ExportRecord,
-    ) -> ExportRecord:
-        """
-        Hook executed before exporting.
-        """
+        value: bool,
+    ) -> "JSONExporter":
+        """Set non-basic dictionary key handling."""
 
-        super().before_export(record)
+        if not isinstance(value, bool):
+            raise TypeError(
+                "skip_keys must be bool"
+            )
 
-        self.emit_event(
-            "before_json_export",
-            record,
-        )
+        self._skip_keys = value
+        return self
 
-        return record
-
-    # ------------------------------------------------------------------
-
-    def after_export(
+    def set_prefix(
         self,
-        record: ExportRecord,
-        result: ExportResult,
-    ) -> ExportResult:
-        """
-        Hook executed after exporting.
-        """
+        value: str,
+    ) -> "JSONExporter":
+        """Set output prefix."""
 
-        super().after_export(
-            record,
-            result,
-        )
+        if not isinstance(value, str):
+            raise TypeError(
+                "prefix must be a string"
+            )
 
-        self.emit_event(
-            "after_json_export",
-            record,
-            result,
-        )
+        self._prefix = value
+        return self
 
-        return result
-
-    # ------------------------------------------------------------------
-
-    def emit_event(
+    def set_suffix(
         self,
-        event: str,
-        *args,
-        **kwargs,
-    ) -> None:
-        """
-        Emit a JSON exporter event.
+        value: str,
+    ) -> "JSONExporter":
+        """Set output suffix."""
 
-        Delegates to BaseExporter.
-        """
+        if not isinstance(value, str):
+            raise TypeError(
+                "suffix must be a string"
+            )
 
-        super().emit_event(
-            event,
-            *args,
-            **kwargs,
-        )
-# ==============================================================================
-# Part 10. Python Protocols
-# ==============================================================================
+        self._suffix = value
+        return self
 
-    def __repr__(self) -> str:
-        """
-        Developer-friendly representation.
-        """
+    def set_auto_flush(
+        self,
+        value: bool,
+    ) -> "JSONExporter":
+        """Set automatic stream flushing."""
 
-        return (
-            f"{self.__class__.__name__}("
-            f"name={self._name!r}, "
-            f"destination={str(self._destination)!r}, "
-            f"encoding={self._encoding!r}, "
-            f"indent={self._indent}, "
-            f"compact={self._compact}, "
-            f"status={self._status.value!r})"
-        )
+        if not isinstance(value, bool):
+            raise TypeError(
+                "auto_flush must be bool"
+            )
 
-    # ------------------------------------------------------------------
+        self._auto_flush = value
+        return self
 
-    def __str__(self) -> str:
-        """
-        Human-readable representation.
-        """
-
-        destination = (
-            str(self._destination)
-            if self._destination is not None
-            else "<memory>"
-        )
-
-        return (
-            f"{self._name} "
-            f"[JSON] -> {destination}"
-        )
-
-    # ------------------------------------------------------------------
-
-    def __len__(self) -> int:
-        """
-        Number of exported objects.
-        """
-
-        return self._objects_exported
-
-    # ------------------------------------------------------------------
+    # ==========================================================================
+    # Part 12. Protocols
+    # ==========================================================================
 
     def __call__(
         self,
         obj: Any,
     ) -> ExportResult:
-        """
-        Export an arbitrary Python object.
-        """
+        """Export an arbitrary object."""
 
         return self.export_object(obj)
 
-    # ------------------------------------------------------------------
+    def __len__(self) -> int:
+        """Return number of successfully exported objects."""
 
-    def __copy__(self) -> "JSONExporter":
-        """
-        Shallow copy.
-        """
+        return self._objects_exported
 
-        return self.copy()
+    def __repr__(self) -> str:
+        """Return concise developer representation."""
 
-    # ------------------------------------------------------------------
+        return (
+            "JSONExporter("
+            f"name={self._name!r}, "
+            f"format={self._format.value!r}, "
+            f"stream={type(self._stream).__name__!r}, "
+            f"indent={self._indent!r}, "
+            f"ensure_ascii={self._ensure_ascii!r}, "
+            f"sort_keys={self._sort_keys!r}"
+            ")"
+        )
 
-    def __deepcopy__(
-        self,
-        memo: Dict[int, Any],
-    ) -> "JSONExporter":
-        """
-        Deep copy.
-        """
+    def __str__(self) -> str:
+        """Return human-readable description."""
 
-        return self.clone()                                                                                
+        return (
+            "JSONExporter("
+            f"name={self._name!r}, "
+            f"format={self._format.value!r}"
+            ")"
+        )
+
+
+# ==============================================================================
+# Part 13. Public API
+# ==============================================================================
+
+__all__ = [
+    "JSONExporter",
+    "JSONExportOptions",
+    "JSON_EXPORTER_VERSION",
+    "DEFAULT_JSON_STREAM",
+    "DEFAULT_JSON_INDENT",
+    "DEFAULT_JSON_ENSURE_ASCII",
+    "DEFAULT_JSON_SORT_KEYS",
+    "DEFAULT_JSON_ALLOW_NAN",
+    "DEFAULT_JSON_CHECK_CIRCULAR",
+    "DEFAULT_JSON_SKIP_KEYS",
+    "DEFAULT_JSON_PREFIX",
+    "DEFAULT_JSON_SUFFIX",
+    "DEFAULT_JSON_AUTO_FLUSH",
+]

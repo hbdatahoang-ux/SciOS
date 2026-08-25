@@ -324,3 +324,15 @@ class MetricRegistry:
             f"metrics={len(self._metrics)}"
             ")"
         )
+
+# ==========================================================
+# Backward Compatibility
+# ==========================================================
+
+Registry = MetricRegistry
+
+
+__all__ = [
+    "MetricRegistry",
+    "Registry",
+]        

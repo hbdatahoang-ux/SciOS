@@ -7,24 +7,20 @@ Counter metric implementation.
 Responsibilities
 -----------------
 - Count monotonically increasing events.
-- Provide increment/decrement API.
-- Support labels.
+- Provide increment API.
+- Support labels and metadata through Metric.
 - Support snapshots.
-- Integrate with Metric base model.
+- Support serialization.
+- Integrate with the Metric base model.
 
 Python 3.11+
 """
 
 from __future__ import annotations
 
-
-from dataclasses import dataclass, field
 from typing import Any
 
-
 from .metric import Metric
-from .snapshot import MetricSnapshot
-
 
 
 __all__ = [
@@ -32,214 +28,247 @@ __all__ = [
 ]
 
 
-
 # ==========================================================
 # Counter Metric
 # ==========================================================
 
 
-@dataclass
 class Counter(Metric):
     """
     Monotonic counter metric.
 
+    A Counter represents a cumulative numeric value that may
+    increase during its lifetime.
+
     Examples
     --------
+    Count executed tasks::
 
-    Count executed tasks:
-
+        counter = Counter("tasks_total")
         counter.inc()
 
-    Count failures:
+    Increment by a specific amount::
 
         counter.inc(3)
 
+    Read the current value::
+
+        value = counter.value
+
+    Notes
+    -----
+    A Counter does not support negative increments.
+
+    ``reset()`` is intentionally provided for runtime restart,
+    testing, and snapshot restoration. It is not considered a
+    normal counter operation.
     """
 
+    # ======================================================
+    # Initialization
+    # ======================================================
+
+    def __init__(
+        self,
+        name: str,
+        value: int | float = 0.0,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Create a counter metric.
+
+        Parameters
+        ----------
+        name:
+            Metric name.
+
+        value:
+            Initial counter value. Must be non-negative.
+
+        kwargs:
+            Additional arguments forwarded to ``Metric``.
+        """
+
+        if value < 0:
+            raise ValueError(
+                "Counter value cannot be negative"
+            )
+
+        super().__init__(
+            name=name,
+            **kwargs,
+        )
+
+        self._value: float = float(value)
 
     # ======================================================
     # Value
     # ======================================================
 
+    @property
+    def value(
+        self,
+    ) -> float:
+        """
+        Return the current counter value.
 
-    _value: float = 0.0
+        ``value`` is intentionally a property so callers use::
 
+            counter.value
 
+        rather than::
 
-    # ======================================================
-    # Configuration
-    # ======================================================
+            counter.value()
+        """
 
-
-    labels: dict[str, str] = field(
-        default_factory=dict
-    )
-
-
+        return self._value
 
     # ======================================================
     # Increment
     # ======================================================
 
-
     def inc(
         self,
-        amount: float = 1.0,
-    ) -> None:
+        amount: int | float = 1.0,
+    ) -> float:
         """
-        Increase counter value.
+        Increase the counter.
 
         Parameters
         ----------
         amount:
-            Increment amount.
+            Non-negative increment amount.
 
+        Returns
+        -------
+        float
+            The new counter value.
+
+        Raises
+        ------
+        ValueError
+            If ``amount`` is negative.
         """
 
-        if amount < 0:
+        amount = float(amount)
 
+        if amount < 0:
             raise ValueError(
                 "Counter cannot decrease"
             )
 
+        self._value += amount
 
-        self._value += float(
-            amount
-        )
-
-
-
-    # ======================================================
-    # Read
-    # ======================================================
-
-
-    def value(
-        self,
-    ) -> float:
-        """
-        Current counter value.
-        """
+        self.touch()
 
         return self._value
 
+    # ======================================================
+    # Alias
+    # ======================================================
 
+    increment = inc
 
     # ======================================================
     # Reset
     # ======================================================
 
-
     def reset(
         self,
-    ) -> None:
+    ) -> float:
         """
-        Reset counter.
+        Reset the counter to zero.
 
-        Used by:
-        - tests
-        - runtime restart
-        - snapshot restore
-
+        Returns
+        -------
+        float
+            The new counter value.
         """
 
         self._value = 0.0
 
+        self.touch()
 
+        return self._value
 
     # ======================================================
     # Snapshot
     # ======================================================
 
-
     def snapshot(
         self,
-    ) -> MetricSnapshot:
+    ) -> dict[str, Any]:
         """
-        Create immutable metric snapshot.
+        Create a serializable snapshot of the counter.
+
+        The snapshot is detached from the live metric state.
         """
 
-        return MetricSnapshot(
-
-            name=self.name,
-
-            value=self._value,
-
-            labels=dict(
-                self.labels
-            ),
-
-            metric_type="counter",
-        )
-
-
+        return {
+            "name": self.name,
+            "value": self._value,
+            "labels": dict(self.labels),
+            "metric_type": "counter",
+        }
 
     # ======================================================
     # Serialization
     # ======================================================
 
-
     def to_dict(
         self,
     ) -> dict[str, Any]:
         """
-        Convert to dictionary.
+        Serialize the counter.
+
+        The returned dictionary is independent from the
+        internal metric state.
         """
 
         return {
-
-            "name":
-                self.name,
-
-            "type":
-                "counter",
-
-            "value":
-                self._value,
-
-            "labels":
-                dict(
-                    self.labels
-                ),
+            "name": self.name,
+            "type": "counter",
+            "value": self._value,
+            "labels": dict(self.labels),
         }
 
-
-
     # ======================================================
-    # Protocols
+    # Numeric Protocols
     # ======================================================
-
 
     def __float__(
         self,
     ) -> float:
+        """
+        Convert the counter to ``float``.
+        """
 
-        return float(
-            self._value
-        )
-
-
+        return self._value
 
     def __int__(
         self,
     ) -> int:
+        """
+        Convert the counter to ``int``.
+        """
 
-        return int(
-            self._value
-        )
+        return int(self._value)
 
-
+    # ======================================================
+    # Representation
+    # ======================================================
 
     def __repr__(
         self,
     ) -> str:
+        """
+        Return a concise debug representation.
+        """
 
         return (
-
             "Counter("
             f"name={self.name!r}, "
-            f"value={self._value}, "
-            f"labels={self.labels}"
+            f"value={self._value!r}, "
+            f"labels={self.labels!r}"
             ")"
-
         )

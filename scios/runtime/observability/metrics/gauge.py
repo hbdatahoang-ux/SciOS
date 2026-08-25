@@ -14,34 +14,30 @@ A Gauge represents a value that can:
 Examples
 --------
 
-gauge = Gauge(
-    name="cpu_usage",
-    value=25.0,
-)
+    gauge = Gauge(
+        name="cpu_usage",
+        value=25.0,
+    )
 
-gauge.set(42.5)
+    gauge.set(42.5)
 
-gauge.increment(5)
+    gauge.increment(5)
 
-gauge.decrement(2)
+    gauge.decrement(2)
 
 Python 3.11+
 """
 
 from __future__ import annotations
 
-
 from typing import Any
 
-
 from .metric import Metric
-
 
 
 __all__ = [
     "Gauge",
 ]
-
 
 
 # ==========================================================
@@ -59,12 +55,9 @@ class Gauge(Metric):
     - Gauge can move up and down.
     """
 
-
-
     # ======================================================
     # Initialization
     # ======================================================
-
 
     def __init__(
         self,
@@ -81,209 +74,254 @@ class Gauge(Metric):
             Metric name.
 
         value:
-            Initial value.
+            Initial gauge value.
 
         kwargs:
-            Extra metric metadata.
+            Extra metadata accepted by ``Metric``.
         """
-
 
         super().__init__(
             name=name,
-            value=float(value),
             **kwargs,
         )
 
+        self._value: float = float(value)
 
+    # ======================================================
+    # Value
+    # ======================================================
+
+    @property
+    def value(self) -> float:
+        """
+        Return the current gauge value.
+        """
+
+        return self._value
 
     # ======================================================
     # Set API
     # ======================================================
-
 
     def set(
         self,
         value: int | float,
     ) -> float:
         """
-        Set absolute gauge value.
+        Set the gauge to an absolute value.
+
+        Parameters
+        ----------
+        value:
+            New gauge value.
+
+        Returns
+        -------
+        float
+            Updated gauge value.
         """
 
-        self.update(
-            float(value)
-        )
+        self._value = float(value)
 
+        self.touch()
 
-        return self.value
-
-
+        return self._value
 
     # ======================================================
     # Increment API
     # ======================================================
-
 
     def increment(
         self,
         amount: int | float = 1,
     ) -> float:
         """
-        Increase gauge value.
+        Increase the gauge value.
+
+        Parameters
+        ----------
+        amount:
+            Amount to add.
+
+        Returns
+        -------
+        float
+            Updated gauge value.
         """
 
-        self.update(
-            self.value + float(amount)
-        )
+        self._value += float(amount)
 
+        self.touch()
 
-        return self.value
+        return self._value
 
-
-
+    # Short alias.
     inc = increment
-
-
 
     # ======================================================
     # Decrement API
     # ======================================================
-
 
     def decrement(
         self,
         amount: int | float = 1,
     ) -> float:
         """
-        Decrease gauge value.
+        Decrease the gauge value.
+
+        Parameters
+        ----------
+        amount:
+            Amount to subtract.
+
+        Returns
+        -------
+        float
+            Updated gauge value.
         """
 
-        self.update(
-            self.value - float(amount)
-        )
+        self._value -= float(amount)
 
+        self.touch()
 
-        return self.value
+        return self._value
 
-
-
+    # Short alias.
     dec = decrement
-
-
 
     # ======================================================
     # Add / Subtract
     # ======================================================
-
 
     def add(
         self,
         amount: int | float,
     ) -> float:
         """
-        Add value.
+        Add a value to the gauge.
+
+        This is an alias for ``increment()``.
         """
 
         return self.increment(
             amount
         )
 
-
-
     def subtract(
         self,
         amount: int | float,
     ) -> float:
         """
-        Subtract value.
+        Subtract a value from the gauge.
+
+        This is an alias for ``decrement()``.
         """
 
         return self.decrement(
             amount
         )
 
-
-
+    # Short alias.
     sub = subtract
-
-
 
     # ======================================================
     # Reset API
     # ======================================================
 
-
     def reset(
         self,
     ) -> float:
         """
-        Reset gauge value to zero.
+        Reset the gauge value to zero.
+
+        Returns
+        -------
+        float
+            The new gauge value.
         """
 
-        self.update(
-            0.0
-        )
+        self._value = 0.0
 
+        self.touch()
 
-        return self.value
-
-
+        return self._value
 
     # ======================================================
     # Snapshot API
     # ======================================================
 
-
     def snapshot(
         self,
     ) -> dict[str, Any]:
         """
-        Export gauge snapshot.
+        Create a serializable gauge snapshot.
         """
 
-        data = super().to_dict()
-
-
-        data["type"] = "gauge"
-
-
-        return data
-
-
+        return {
+            "name": self.name,
+            "type": "gauge",
+            "value": self._value,
+            "labels": dict(self.labels),
+            "metadata": dict(self.metadata),
+            "enabled": self.enabled,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
 
     # ======================================================
     # Serialization
     # ======================================================
 
-
     def to_dict(
         self,
     ) -> dict[str, Any]:
         """
-        Serialize gauge.
+        Serialize the gauge to a dictionary.
         """
 
-        data = super().to_dict()
+        return self.snapshot()
 
+    # ======================================================
+    # Numeric Protocols
+    # ======================================================
 
-        data["type"] = "gauge"
+    def __float__(
+        self,
+    ) -> float:
+        """
+        Convert gauge value to float.
+        """
 
+        return float(
+            self._value
+        )
 
-        return data
+    def __int__(
+        self,
+    ) -> int:
+        """
+        Convert gauge value to int.
+        """
 
-
+        return int(
+            self._value
+        )
 
     # ======================================================
     # Representation
     # ======================================================
 
-
     def __repr__(
         self,
     ) -> str:
+        """
+        Return a concise debug representation.
+        """
 
         return (
             "Gauge("
             f"name={self.name!r}, "
-            f"value={self.value}"
+            f"value={self._value!r}, "
+            f"labels={self.labels!r}"
             ")"
         )
