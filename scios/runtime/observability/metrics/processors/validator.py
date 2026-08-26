@@ -1,85 +1,56 @@
 """
-SciOS-NG Runtime Metrics Validation Processor
+SciOS Runtime Metrics Validator Processor
+=========================================
 
 Metric validation processor.
 
-SciOS-NG v0.2
-"""
+Responsibilities
+-----------------
+- Validate metric structure.
+- Apply custom validation rules.
+- Validate declared schemas.
+- Provide built-in required-field and range validators.
+- Collect validation diagnostics.
+- Expose processor statistics.
 
+Python 3.11+
+"""
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-
 from .processor import MetricProcessor
 
 
-
-# ==================================================================
-# ValidatorProcessor
-# ==================================================================
+__all__ = ["ValidatorProcessor"]
 
 
-class ValidatorProcessor(
-    MetricProcessor
-):
+class ValidatorProcessor(MetricProcessor):
     """
-    Runtime Metric Validation Processor.
+    Runtime metric validation processor.
 
-    Responsibilities
-    ----------------
-    - Validate metric structure
-    - Check schema consistency
-    - Verify value constraints
-    - Prevent invalid metrics entering pipeline
+    A metric is returned unchanged when all validation rules pass.
+    Invalid metrics return ``None`` and their validation errors are
+    recorded for diagnostics.
     """
-
-
-
-    # ==============================================================
-    # Constructor
-    # ==============================================================
 
     def __init__(
         self,
         name: str = "ValidatorProcessor",
         description: str = "",
     ) -> None:
-
-
         super().__init__(
             name=name,
             description=description,
         )
 
-
-        # ----------------------------------------------------------
-        # Validation Rules
-        # ----------------------------------------------------------
-
-        self._rules: list[
-            Callable
-        ] = []
-
-
+        self._rules: list[Callable[[Any], Any]] = []
         self._schema: dict[str, type] = {}
 
-
-
-        # ----------------------------------------------------------
-        # Statistics
-        # ----------------------------------------------------------
-
         self._validated = 0
-
         self._invalid = 0
-
-
-
         self._errors: list[str] = []
-
-
 
     # ==============================================================
     # Processing
@@ -88,43 +59,30 @@ class ValidatorProcessor(
     def transform(
         self,
         metric: Any,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> Any:
         """
-        Validate metric.
+        Validate a metric.
 
-        Returns:
-            metric if valid
-            None if invalid
+        Returns
+        -------
+        Any
+            The original metric if valid, otherwise ``None``.
         """
 
-        valid, errors = self.validate(
-            metric
-        )
-
+        valid, errors = self.validate(metric)
 
         if valid:
-
             self._validated += 1
-
             return metric
 
-
-
         self._invalid += 1
-
-
-        self._errors.extend(
-            errors
-        )
-
+        self._errors.extend(errors)
 
         return None
 
-
-
     # ==============================================================
-    # Validation API
+    # Validation
     # ==============================================================
 
     def validate(
@@ -132,68 +90,32 @@ class ValidatorProcessor(
         metric: Any,
     ) -> tuple[bool, list[str]]:
         """
-        Run all validators.
+        Run all registered rules and schema validation.
+
+        Returns
+        -------
+        tuple[bool, list[str]]
+            ``(True, [])`` when valid, otherwise ``(False, errors)``.
         """
 
-        errors = []
-
-
+        errors: list[str] = []
 
         for rule in self._rules:
-
             try:
-
-                result = rule(
-                    metric
-                )
-
+                result = rule(metric)
 
                 if result is False:
+                    errors.append("Rule validation failed")
 
-                    errors.append(
-                        "Rule validation failed"
-                    )
-
-
-                elif isinstance(
-                    result,
-                    str
-                ):
-
-                    errors.append(
-                        result
-                    )
-
-
+                elif isinstance(result, str):
+                    errors.append(result)
 
             except Exception as exc:
+                errors.append(str(exc))
 
-                errors.append(
-                    str(exc)
-                )
+        errors.extend(self.validate_schema(metric))
 
-
-
-        schema_errors = self.validate_schema(
-            metric
-        )
-
-
-        errors.extend(
-            schema_errors
-        )
-
-
-
-        return (
-
-            len(errors) == 0,
-
-            errors,
-
-        )
-
-
+        return len(errors) == 0, errors
 
     # ==============================================================
     # Rule Management
@@ -201,156 +123,97 @@ class ValidatorProcessor(
 
     def add_rule(
         self,
-        rule: Callable,
-    ):
+        rule: Callable[[Any], Any],
+    ) -> ValidatorProcessor:
+        """Register a custom validation rule."""
 
-        self._rules.append(
-            rule
-        )
+        if not callable(rule):
+            raise TypeError("rule must be callable")
 
-
+        self._rules.append(rule)
         return self
-
-
 
     def remove_rule(
         self,
-        rule: Callable,
-    ):
+        rule: Callable[[Any], Any],
+    ) -> ValidatorProcessor:
+        """Remove a previously registered validation rule."""
 
         if rule in self._rules:
-
-            self._rules.remove(
-                rule
-            )
-
+            self._rules.remove(rule)
 
         return self
 
-
-
-    def clear_rules(
-        self,
-    ):
+    def clear_rules(self) -> ValidatorProcessor:
+        """Remove all custom validation rules."""
 
         self._rules.clear()
-
-
         return self
 
+    def rules(self) -> list[Callable[[Any], Any]]:
+        """Return a copy of registered rules."""
 
-
-    def rules(
-        self,
-    ):
-
-        return list(
-            self._rules
-        )
-
-
+        return list(self._rules)
 
     # ==============================================================
-    # Schema Validation
+    # Schema
     # ==============================================================
 
     def define_field(
         self,
         name: str,
         field_type: type,
-    ):
+    ) -> ValidatorProcessor:
+        """Declare a required field and its expected type."""
+
+        if not isinstance(name, str) or not name:
+            raise ValueError("field name must be a non-empty string")
+
+        if not isinstance(field_type, type):
+            raise TypeError("field_type must be a type")
 
         self._schema[name] = field_type
-
-
         return self
-
-
 
     def remove_field(
         self,
         name: str,
-    ):
+    ) -> ValidatorProcessor:
+        """Remove a field from the schema."""
 
-        self._schema.pop(
-            name,
-            None,
-        )
-
-
+        self._schema.pop(name, None)
         return self
 
+    def schema(self) -> dict[str, type]:
+        """Return a copy of the declared schema."""
 
-
-    def schema(
-        self,
-    ):
-
-        return dict(
-            self._schema
-        )
-
-
+        return dict(self._schema)
 
     def validate_schema(
         self,
         metric: Any,
     ) -> list[str]:
-        """
-        Validate metric fields.
-        """
-
-        errors = []
-
-
+        """Validate a metric against the declared schema."""
 
         if not self._schema:
+            return []
 
-            return errors
+        if not isinstance(metric, dict):
+            return ["Metric must be dictionary"]
 
+        errors: list[str] = []
 
-
-        if not isinstance(
-            metric,
-            dict
-        ):
-
-            return [
-                "Metric must be dictionary"
-            ]
-
-
-
-        for field, expected in self._schema.items():
-
-
+        for field, expected_type in self._schema.items():
             if field not in metric:
-
-                errors.append(
-                    f"Missing field: {field}"
-                )
-
-
+                errors.append(f"Missing field: {field}")
                 continue
 
-
-
-            if not isinstance(
-                metric[field],
-                expected
-            ):
-
+            if not isinstance(metric[field], expected_type):
                 errors.append(
-
                     f"Invalid type for {field}"
-
                 )
 
-
-
         return errors
-
-
 
     # ==============================================================
     # Built-in Validators
@@ -359,194 +222,119 @@ class ValidatorProcessor(
     def require(
         self,
         *fields: str,
-    ):
+    ) -> ValidatorProcessor:
+        """Require one or more dictionary fields."""
 
-        def rule(metric):
-
-            if not isinstance(
-                metric,
-                dict
-            ):
-
+        def rule(metric: Any) -> bool | str:
+            if not isinstance(metric, dict):
                 return False
 
-
             for field in fields:
-
                 if field not in metric:
-
-                    return (
-                        f"Missing required field: {field}"
-                    )
-
+                    return f"Missing required field: {field}"
 
             return True
 
-
-        return self.add_rule(
-            rule
-        )
-
-
+        return self.add_rule(rule)
 
     def range(
         self,
         field: str,
-        minimum=None,
-        maximum=None,
-    ):
+        minimum: Any = None,
+        maximum: Any = None,
+    ) -> ValidatorProcessor:
+        """Validate that a numeric/comparable field is within a range."""
 
-        def rule(metric):
-
-            if not isinstance(
-                metric,
-                dict
-            ):
-
-                return False
-
-
-            value = metric.get(
-                field
+        if minimum is None and maximum is None:
+            raise ValueError(
+                "range() requires minimum or maximum"
             )
 
+        def rule(metric: Any) -> bool | str:
+            if not isinstance(metric, dict):
+                return False
 
-            if value is None:
+            if field not in metric:
+                return f"Missing field: {field}"
 
-                return (
-                    f"Missing field: {field}"
-                )
+            value = metric[field]
 
+            try:
+                if minimum is not None and value < minimum:
+                    return f"{field} below minimum"
 
-            if minimum is not None and value < minimum:
+                if maximum is not None and value > maximum:
+                    return f"{field} above maximum"
 
-                return (
-                    f"{field} below minimum"
-                )
-
-
-            if maximum is not None and value > maximum:
-
-                return (
-                    f"{field} above maximum"
-                )
-
+            except TypeError:
+                return f"Invalid value for {field}"
 
             return True
 
-
-        return self.add_rule(
-            rule
-        )
-
-
+        return self.add_rule(rule)
 
     # ==============================================================
     # Diagnostics
     # ==============================================================
 
-    def errors(
-        self,
-    ):
+    def errors(self) -> list[str]:
+        """Return collected validation errors."""
 
-        return list(
-            self._errors
-        )
+        return list(self._errors)
 
-
-
-    def clear_errors(
-        self,
-    ):
+    def clear_errors(self) -> ValidatorProcessor:
+        """Clear collected validation errors."""
 
         self._errors.clear()
-
         return self
-
-
 
     # ==============================================================
     # Statistics
     # ==============================================================
 
-    def statistics(
-        self,
-    ):
+    def statistics(self) -> dict[str, Any]:
+        """Return validator statistics."""
 
         data = super().statistics()
 
-
-        data.update({
-
-            "validated":
-                self._validated,
-
-
-            "invalid":
-                self._invalid,
-
-
-            "rules":
-                len(
-                    self._rules
-                ),
-
-
-            "schema_fields":
-                len(
-                    self._schema
-                ),
-
-        })
-
+        data.update(
+            {
+                "validated": self._validated,
+                "invalid": self._invalid,
+                "rules": len(self._rules),
+                "schema_fields": len(self._schema),
+            }
+        )
 
         return data
 
-
-
     # ==============================================================
-    # Reset
+    # Runtime
     # ==============================================================
 
-    def reset(
-        self,
-    ):
+    def reset(self) -> ValidatorProcessor:
+        """Reset runtime validation counters and diagnostics."""
 
         self._validated = 0
-
         self._invalid = 0
-
         self._errors.clear()
 
-
         return self
-
-
 
     # ==============================================================
     # Python Protocols
     # ==============================================================
 
-    def __len__(
-        self,
-    ):
+    def __len__(self) -> int:
+        """Return number of registered custom rules."""
 
-        return len(
-            self._rules
-        )
+        return len(self._rules)
 
-
-
-    def __repr__(
-        self,
-    ):
-
+    def __repr__(self) -> str:
         return (
-
-            f"ValidatorProcessor("
+            "ValidatorProcessor("
             f"rules={len(self._rules)}, "
             f"validated={self._validated}, "
             f"invalid={self._invalid}"
-            f")"
-
+            ")"
         )

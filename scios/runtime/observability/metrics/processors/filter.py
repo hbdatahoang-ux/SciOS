@@ -1,82 +1,57 @@
 """
-SciOS-NG Runtime Metrics Filter Processor
+SciOS Runtime Metrics Filter Processor
+======================================
 
 Metric filtering processor.
 
 SciOS-NG v0.2
 """
 
-
 from __future__ import annotations
 
 from typing import Any, Callable
 
-
 from .processor import MetricProcessor
 
 
+__all__ = [
+    "FilterProcessor",
+]
 
-# ==================================================================
-# FilterProcessor
-# ==================================================================
 
-
-class FilterProcessor(
-    MetricProcessor
-):
+class FilterProcessor(MetricProcessor):
     """
     Runtime Metric Filter Processor.
 
     Responsibilities
     ----------------
-    - Remove unwanted metrics
-    - Apply filtering rules
-    - Support custom predicates
-    - Control metric flow in pipeline
+    - Accept or reject metrics.
+    - Support callable predicates.
+    - Support multiple filter rules.
+    - Track accepted and rejected metrics.
+    - Allow dynamic rule management.
+    - Provide runtime statistics and reset.
     """
-
-
-
-    # ==============================================================
-    # Constructor
-    # ==============================================================
 
     def __init__(
         self,
+        predicate: Callable[[Any], bool] | None = None,
         name: str = "FilterProcessor",
         description: str = "",
-        predicate: Callable | None = None,
     ) -> None:
-
-
         super().__init__(
             name=name,
             description=description,
         )
 
-
-        # ----------------------------------------------------------
-        # Filtering Rules
-        # ----------------------------------------------------------
-
-        self._predicate = predicate
-
-
-        self._rules: list[
-            Callable
-        ] = []
-
-
-
-        # ----------------------------------------------------------
-        # Statistics
-        # ----------------------------------------------------------
+        self._rules: list[Callable[[Any], bool]] = []
 
         self._accepted = 0
-
         self._rejected = 0
+        self._total = 0
 
-
+        if predicate is not None:
+            self.add_rule(predicate)
 
     # ==============================================================
     # Processing
@@ -85,47 +60,51 @@ class FilterProcessor(
     def transform(
         self,
         metric: Any,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> Any | None:
         """
-        Apply filtering logic.
+        Apply all filter rules.
+
+        Returns
+        -------
+        metric | None
+            The original metric when accepted, otherwise ``None``.
+
+        Notes
+        -----
+        All configured rules must accept the metric.
+        An empty rule set accepts every metric.
         """
 
-        if self.accept(
-            metric
-        ):
+        self._total += 1
 
+        if self.accepts(metric):
             self._accepted += 1
-
             return metric
 
-
-
         self._rejected += 1
-
-
         return None
 
+    # ==============================================================
+    # Filtering
+    # ==============================================================
 
-
-    def process(
+    def accepts(
         self,
         metric: Any,
-        **kwargs,
-    ):
+    ) -> bool:
         """
-        Process metric with filter.
+        Determine whether a metric passes all filter rules.
         """
 
-        result = super().process(
-            metric,
-            **kwargs,
-        )
+        for rule in self._rules:
+            try:
+                if not bool(rule(metric)):
+                    return False
+            except Exception:
+                return False
 
-
-        return result
-
-
+        return True
 
     # ==============================================================
     # Rule Management
@@ -133,203 +112,124 @@ class FilterProcessor(
 
     def add_rule(
         self,
-        rule: Callable,
-    ):
+        rule: Callable[[Any], bool],
+    ) -> FilterProcessor:
+        """
+        Add a filter rule.
+        """
 
-        self._rules.append(
-            rule
-        )
+        if not callable(rule):
+            raise TypeError(
+                "Filter rule must be callable"
+            )
+
+        self._rules.append(rule)
 
         return self
-
-
 
     def remove_rule(
         self,
-        rule: Callable,
-    ):
+        rule: Callable[[Any], bool],
+    ) -> FilterProcessor:
+        """
+        Remove a filter rule if present.
+        """
 
         if rule in self._rules:
-
-            self._rules.remove(
-                rule
-            )
+            self._rules.remove(rule)
 
         return self
 
-
-
     def clear_rules(
         self,
-    ):
+    ) -> FilterProcessor:
+        """
+        Remove all filter rules.
+        """
 
         self._rules.clear()
 
         return self
 
-
-
     def rules(
         self,
-    ):
-
-        return list(
-            self._rules
-        )
-
-
-
-    # ==============================================================
-    # Filtering API
-    # ==============================================================
-
-    def accept(
-        self,
-        metric: Any,
-    ) -> bool:
+    ) -> list[Callable[[Any], bool]]:
         """
-        Check metric acceptance.
+        Return a copy of configured rules.
         """
 
-        # Custom predicate
-
-        if self._predicate:
-
-            if not self._predicate(
-                metric
-            ):
-
-                return False
-
-
-
-        # Registered rules
-
-        for rule in self._rules:
-
-            if not rule(
-                metric
-            ):
-
-                return False
-
-
-
-        return True
-
-
-
-    def reject(
-        self,
-        metric: Any,
-    ) -> bool:
-
-        return not self.accept(
-            metric
-        )
-
-
+        return list(self._rules)
 
     # ==============================================================
-    # Common Filters
+    # Built-in Filters
     # ==============================================================
 
-    def by_name(
+    def require_field(
         self,
-        name: str,
-    ):
+        field: str,
+    ) -> FilterProcessor:
+        """
+        Require a field to exist on dictionary metrics.
+        """
 
-        return self.add_rule(
-
-            lambda metric:
-                (
-                    metric.get("name")
-                    ==
-                    name
-                    if isinstance(
-                        metric,
-                        dict
-                    )
-                    else False
-                )
-
-        )
-
-
-
-    def by_type(
-        self,
-        metric_type: str,
-    ):
-
-        return self.add_rule(
-
-            lambda metric:
-                (
-                    metric.get("type")
-                    ==
-                    metric_type
-                    if isinstance(
-                        metric,
-                        dict
-                    )
-                    else False
-                )
-
-        )
-
-
-
-    def by_value(
-        self,
-        minimum=None,
-        maximum=None,
-    ):
-
-        def rule(metric):
-
-            if not isinstance(
-                metric,
-                dict
-            ):
-
-                return False
-
-
-            value = metric.get(
-                "value"
+        if not isinstance(field, str):
+            raise TypeError(
+                "field must be a string"
             )
 
+        def rule(metric: Any) -> bool:
+            return (
+                isinstance(metric, dict)
+                and field in metric
+            )
 
-            if value is None:
+        return self.add_rule(rule)
 
-                return False
+    def field_equals(
+        self,
+        field: str,
+        expected: Any,
+    ) -> FilterProcessor:
+        """
+        Require a dictionary field to equal a value.
+        """
 
+        if not isinstance(field, str):
+            raise TypeError(
+                "field must be a string"
+            )
 
-            if minimum is not None:
+        def rule(metric: Any) -> bool:
+            return (
+                isinstance(metric, dict)
+                and metric.get(field) == expected
+            )
 
-                if value < minimum:
+        return self.add_rule(rule)
 
-                    return False
+    def field_in(
+        self,
+        field: str,
+        values: Any,
+    ) -> FilterProcessor:
+        """
+        Require a dictionary field to belong to ``values``.
+        """
 
+        if not isinstance(field, str):
+            raise TypeError(
+                "field must be a string"
+            )
 
+        allowed = set(values)
 
-            if maximum is not None:
+        def rule(metric: Any) -> bool:
+            return (
+                isinstance(metric, dict)
+                and metric.get(field) in allowed
+            )
 
-                if value > maximum:
-
-                    return False
-
-
-
-            return True
-
-
-        return self.add_rule(
-            rule
-        )
-
-
+        return self.add_rule(rule)
 
     # ==============================================================
     # Statistics
@@ -337,32 +237,33 @@ class FilterProcessor(
 
     def statistics(
         self,
-    ):
+    ) -> dict[str, Any]:
+        """
+        Return processor statistics.
+        """
 
         data = super().statistics()
 
-
-        data.update({
-
-            "accepted":
-                self._accepted,
-
-
-            "rejected":
-                self._rejected,
-
-
-            "rules":
-                len(
-                    self._rules
+        data.update(
+            {
+                "total": self._total,
+                "accepted": self._accepted,
+                "rejected": self._rejected,
+                "rules": len(self._rules),
+                "acceptance_rate": (
+                    self._accepted / self._total
+                    if self._total
+                    else 0.0
                 ),
-
-        })
-
+                "rejection_rate": (
+                    self._rejected / self._total
+                    if self._total
+                    else 0.0
+                ),
+            }
+        )
 
         return data
-
-
 
     # ==============================================================
     # Reset
@@ -370,15 +271,18 @@ class FilterProcessor(
 
     def reset(
         self,
-    ):
+    ) -> FilterProcessor:
+        """
+        Reset runtime statistics.
 
+        Configured rules are preserved.
+        """
+
+        self._total = 0
         self._accepted = 0
-
         self._rejected = 0
 
         return self
-
-
 
     # ==============================================================
     # Python Protocols
@@ -386,24 +290,16 @@ class FilterProcessor(
 
     def __len__(
         self,
-    ):
-
-        return len(
-            self._rules
-        )
-
-
+    ) -> int:
+        return len(self._rules)
 
     def __repr__(
         self,
-    ):
-
+    ) -> str:
         return (
-
-            f"FilterProcessor("
+            "FilterProcessor("
             f"rules={len(self._rules)}, "
             f"accepted={self._accepted}, "
             f"rejected={self._rejected}"
-            f")"
-
+            ")"
         )

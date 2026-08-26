@@ -1,452 +1,412 @@
 """
-SciOS-NG Runtime Metrics Enrichment Processor
+SciOS Runtime Metrics Enrichment Processor
+==========================================
 
-Metadata enrichment processor.
+Metric enrichment processor.
 
-SciOS-NG v0.2
+Responsibilities
+-----------------
+- Add static fields to metrics.
+- Evaluate dynamic field providers.
+- Apply enrichment rules.
+- Preserve input immutability.
+- Track enrichment diagnostics and statistics.
+
+Python 3.11+
 """
-
 
 from __future__ import annotations
 
-from datetime import datetime
+from copy import deepcopy
 from typing import Any, Callable
-
 
 from .processor import MetricProcessor
 
 
+__all__ = [
+    "EnrichmentProcessor",
+]
 
-# ==================================================================
-# EnrichmentProcessor
-# ==================================================================
+
+# ======================================================================
+# Enrichment Processor
+# ======================================================================
 
 
-class EnrichmentProcessor(
-    MetricProcessor
-):
+class EnrichmentProcessor(MetricProcessor):
     """
-    Runtime Metric Metadata Enrichment Processor.
+    Runtime metric enrichment processor.
 
-    Responsibilities
-    ----------------
-    - Add runtime metadata
-    - Attach contextual information
-    - Inject tags and attributes
-    - Prepare metrics for observability backends
+    Fields may contain either concrete values or zero-argument callables.
+    Rules may transform the enriched metric and are executed sequentially.
+
+    The input metric is never mutated directly.
     """
 
-
-
-    # ==============================================================
+    # ==================================================================
     # Constructor
-    # ==============================================================
+    # ==================================================================
 
     def __init__(
         self,
         name: str = "EnrichmentProcessor",
         description: str = "",
+        fields: dict[str, Any] | None = None,
     ) -> None:
-
-
         super().__init__(
             name=name,
             description=description,
         )
 
+        self._fields: dict[str, Any] = {}
 
-        # ----------------------------------------------------------
-        # Enrichment Sources
-        # ----------------------------------------------------------
-
-        self._static_metadata: dict[str, Any] = {}
-
-        self._dynamic_sources: dict[
-            str,
-            Callable
-        ] = {}
-
-
-
-        self._tags: dict[str, str] = {}
-
-
-
-        # ----------------------------------------------------------
-        # Statistics
-        # ----------------------------------------------------------
+        self._rules: list[Callable[[Any], Any]] = []
 
         self._enriched = 0
+        self._skipped = 0
 
+        self._errors: list[str] = []
 
+        if fields is not None:
+            for field_name, value in fields.items():
+                self.add_field(
+                    field_name,
+                    value,
+                )
 
-    # ==============================================================
-    # Processing
-    # ==============================================================
+    # ==================================================================
+    # Static Fields
+    # ==================================================================
 
-    def transform(
+    def add_field(
         self,
-        metric: Any,
-        **kwargs,
-    ):
-        """
-        Add metadata to metric.
-        """
-
-        result = self.enrich(
-            metric,
-            **kwargs,
-        )
-
-
-        self._enriched += 1
-
-
-        return result
-
-
-
-    # ==============================================================
-    # Enrichment API
-    # ==============================================================
-
-    def enrich(
-        self,
-        metric: Any,
-        **kwargs,
-    ):
-        """
-        Enrich metric object.
-        """
-
-        if isinstance(
-            metric,
-            dict,
-        ):
-
-            result = dict(
-                metric
-            )
-
-        else:
-
-            result = {
-
-                "value":
-                    metric,
-
-            }
-
-
-
-        metadata = {}
-
-
-        metadata.update(
-            self._static_metadata
-        )
-
-
-        metadata.update(
-            self.collect_dynamic()
-        )
-
-
-        metadata.update(
-            kwargs
-        )
-
-
-
-        if metadata:
-
-            result[
-                "metadata"
-            ] = metadata
-
-
-
-        if self._tags:
-
-            result[
-                "tags"
-            ] = dict(
-                self._tags
-            )
-
-
-
-        return result
-
-
-
-    # ==============================================================
-    # Metadata Management
-    # ==============================================================
-
-    def add_metadata(
-        self,
-        key: str,
+        name: str,
         value: Any,
-    ):
+    ) -> "EnrichmentProcessor":
+        """
+        Add or replace an enrichment field.
 
-        self._static_metadata[key] = value
+        ``value`` may be a concrete value or a zero-argument callable.
+        """
 
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                "Field name must not be empty"
+            )
 
-        return self
-
-
-
-    def remove_metadata(
-        self,
-        key: str,
-    ):
-
-        self._static_metadata.pop(
-            key,
-            None,
-        )
-
+        self._fields[name] = value
 
         return self
 
-
-
-    def metadata(
-        self,
-    ):
-
-        return dict(
-            self._static_metadata
-        )
-
-
-
-    # ==============================================================
-    # Dynamic Sources
-    # ==============================================================
-
-    def register_source(
+    def remove_field(
         self,
         name: str,
-        provider: Callable,
-    ):
+    ) -> "EnrichmentProcessor":
+        """
+        Remove an enrichment field.
 
-        self._dynamic_sources[name] = provider
+        Missing fields are ignored.
+        """
 
-
-        return self
-
-
-
-    def remove_source(
-        self,
-        name: str,
-    ):
-
-        self._dynamic_sources.pop(
+        self._fields.pop(
             name,
             None,
         )
 
+        return self
+
+    def clear_fields(
+        self,
+    ) -> "EnrichmentProcessor":
+        """
+        Remove all configured enrichment fields.
+        """
+
+        self._fields.clear()
 
         return self
 
-
-
-    def collect_dynamic(
+    def fields(
         self,
     ) -> dict[str, Any]:
         """
-        Collect dynamic metadata.
+        Return a copy of configured enrichment fields.
         """
 
-        result = {}
-
-
-        for name, provider in self._dynamic_sources.items():
-
-            try:
-
-                result[name] = provider()
-
-
-            except Exception:
-
-                result[name] = None
-
-
-
-        return result
-
-
-
-    # ==============================================================
-    # Tag Management
-    # ==============================================================
-
-    def add_tag(
-        self,
-        key: str,
-        value: str,
-    ):
-
-        self._tags[key] = value
-
-
-        return self
-
-
-
-    def remove_tag(
-        self,
-        key: str,
-    ):
-
-        self._tags.pop(
-            key,
-            None,
-        )
-
-
-        return self
-
-
-
-    def tags(
-        self,
-    ):
-
         return dict(
-            self._tags
+            self._fields
         )
 
+    # ==================================================================
+    # Rules
+    # ==================================================================
 
-
-    # ==============================================================
-    # Built-in Enrichment
-    # ==============================================================
-
-    def add_timestamp(
+    def add_rule(
         self,
-    ):
+        rule: Callable[[Any], Any],
+    ) -> "EnrichmentProcessor":
+        """
+        Add an enrichment rule.
+        """
 
-        return self.add_metadata(
-            "processed_at",
-            datetime.utcnow().isoformat(),
+        if not callable(rule):
+            raise TypeError(
+                "rule must be callable"
+            )
+
+        self._rules.append(
+            rule
         )
 
+        return self
 
-
-    def add_runtime(
+    def remove_rule(
         self,
-        runtime_name: str,
-    ):
+        rule: Callable[[Any], Any],
+    ) -> "EnrichmentProcessor":
+        """
+        Remove a rule.
 
-        return self.add_metadata(
-            "runtime",
-            runtime_name,
-        )
+        Missing rules are ignored.
+        """
 
+        if rule in self._rules:
+            self._rules.remove(
+                rule
+            )
 
+        return self
 
-    def add_component(
+    def clear_rules(
         self,
-        component: str,
-    ):
+    ) -> "EnrichmentProcessor":
+        """
+        Remove all enrichment rules.
+        """
 
-        return self.add_metadata(
-            "component",
-            component,
+        self._rules.clear()
+
+        return self
+
+    def rules(
+        self,
+    ) -> list[Callable[[Any], Any]]:
+        """
+        Return a copy of configured rules.
+        """
+
+        return list(
+            self._rules
         )
 
+    # ==================================================================
+    # Field Evaluation
+    # ==================================================================
 
+    @staticmethod
+    def _resolve_value(
+        value: Any,
+    ) -> Any:
+        """
+        Resolve a field value.
 
-    # ==============================================================
+        Callable values are invoked without arguments.
+        Concrete values are deep-copied.
+        """
+
+        if callable(value):
+            return value()
+
+        return deepcopy(value)
+
+    # ==================================================================
+    # Transform
+    # ==================================================================
+
+    def transform(
+        self,
+        metric: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Enrich a metric.
+
+        Dictionary metrics are copied before modification.
+
+        Non-dictionary values pass through unchanged.
+
+        Rule failures cause the metric to be skipped and return ``None``.
+        """
+
+        if not isinstance(metric, dict):
+            return metric
+
+        result = deepcopy(metric)
+
+        try:
+            # ----------------------------------------------------------
+            # Static / dynamic fields
+            # ----------------------------------------------------------
+
+            for name, value in self._fields.items():
+                result[name] = self._resolve_value(
+                    value
+                )
+
+            # ----------------------------------------------------------
+            # Enrichment rules
+            # ----------------------------------------------------------
+
+            for rule in self._rules:
+                rule_result = rule(result)
+
+                # ``None`` means the rule intentionally leaves the
+                # current metric unchanged.
+                if rule_result is not None:
+                    result = rule_result
+
+            self._enriched += 1
+
+            return result
+
+        except Exception as exc:
+            self._skipped += 1
+            self._errors.append(
+                str(exc)
+            )
+
+            return None
+
+    # ==================================================================
+    # Convenience Enrichment
+    # ==================================================================
+
+    def enrich(
+        self,
+        metric: Any,
+        **fields: Any,
+    ) -> Any:
+        """
+        Temporarily enrich a metric with additional fields.
+
+        Temporary fields are applied only to this operation and do not
+        modify the processor's configured field set.
+        """
+
+        if not isinstance(metric, dict):
+            return metric
+
+        result = deepcopy(metric)
+
+        try:
+            for name, value in fields.items():
+                result[name] = self._resolve_value(
+                    value
+                )
+
+            return result
+
+        except Exception as exc:
+            self._skipped += 1
+            self._errors.append(
+                str(exc)
+            )
+
+            return None
+
+    # ==================================================================
+    # Diagnostics
+    # ==================================================================
+
+    def errors(
+        self,
+    ) -> list[str]:
+        """
+        Return a copy of recorded enrichment errors.
+        """
+
+        return list(
+            self._errors
+        )
+
+    def clear_errors(
+        self,
+    ) -> "EnrichmentProcessor":
+        """
+        Clear recorded errors.
+        """
+
+        self._errors.clear()
+
+        return self
+
+    # ==================================================================
     # Statistics
-    # ==============================================================
+    # ==================================================================
 
     def statistics(
         self,
-    ):
+    ) -> dict[str, Any]:
+        """
+        Return processor statistics.
+        """
 
         data = super().statistics()
 
-
-        data.update({
-
-            "enriched":
-                self._enriched,
-
-
-            "metadata_fields":
-                len(
-                    self._static_metadata
-                ),
-
-
-            "dynamic_sources":
-                len(
-                    self._dynamic_sources
-                ),
-
-
-            "tags":
-                len(
-                    self._tags
-                ),
-
-        })
-
+        data.update(
+            {
+                "enriched": self._enriched,
+                "skipped": self._skipped,
+                "fields": len(self._fields),
+                "rules": len(self._rules),
+                "errors": len(self._errors),
+            }
+        )
 
         return data
 
-
-
-    # ==============================================================
-    # Reset
-    # ==============================================================
+    # ==================================================================
+    # Runtime
+    # ==================================================================
 
     def reset(
         self,
-    ):
+    ) -> "EnrichmentProcessor":
+        """
+        Reset runtime state.
+
+        Configuration survives reset.
+        """
 
         self._enriched = 0
+        self._skipped = 0
+        self._errors.clear()
 
         return self
 
-
-
-    # ==============================================================
+    # ==================================================================
     # Python Protocols
-    # ==============================================================
+    # ==================================================================
 
     def __len__(
         self,
-    ):
+    ) -> int:
+        """
+        Return number of configured enrichment fields.
+        """
 
-        return (
-
-            len(self._static_metadata)
-
-            +
-
-            len(self._tags)
-
+        return len(
+            self._fields
         )
-
-
 
     def __repr__(
         self,
-    ):
-
+    ) -> str:
         return (
-
-            f"EnrichmentProcessor("
-            f"metadata={len(self._static_metadata)}, "
-            f"tags={len(self._tags)}, "
-            f"enriched={self._enriched}"
-            f")"
-
+            "EnrichmentProcessor("
+            f"fields={len(self._fields)}, "
+            f"rules={len(self._rules)}, "
+            f"enriched={self._enriched}, "
+            f"skipped={self._skipped}"
+            ")"
         )
