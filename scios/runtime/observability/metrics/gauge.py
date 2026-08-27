@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .labels import MetricLabels
 from .metric import Metric
 
 
@@ -257,16 +258,71 @@ class Gauge(Metric):
         Create a serializable gauge snapshot.
         """
 
-        return {
-            "name": self.name,
-            "type": "gauge",
-            "value": self._value,
-            "labels": dict(self.labels),
-            "metadata": dict(self.metadata),
-            "enabled": self.enabled,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-        }
+        snapshot = super().snapshot()
+
+        snapshot.update(
+            {
+                "type": "gauge",
+                "value": self._value,
+            }
+        )
+
+        return snapshot
+    # ======================================================
+    # Restore API
+    # ======================================================
+
+    def restore(
+        self,
+        snapshot: dict[str, Any],
+    ) -> "Gauge":
+        """
+        Restore gauge state from a snapshot.
+        """
+
+        if not isinstance(snapshot, dict):
+            raise TypeError(
+                "Gauge snapshot must be a dictionary"
+            )
+
+        if snapshot.get("type") not in (None, "gauge"):
+            raise ValueError(
+                "Invalid snapshot type for Gauge"
+            )
+
+        value = snapshot.get("value")
+
+        if value is None:
+            raise ValueError(
+                "Gauge snapshot is missing 'value'"
+            )
+
+        self._value = float(value)
+
+        if "labels" in snapshot:
+            self.labels = MetricLabels(
+                **dict(snapshot["labels"])
+            )
+
+        if "metadata" in snapshot:
+            self.metadata = dict(
+                snapshot["metadata"]
+            )
+
+        if "enabled" in snapshot:
+            self.enabled = bool(
+                snapshot["enabled"]
+            )
+
+        if "unit" in snapshot:
+            self.unit = str(
+                snapshot["unit"]
+            )
+
+        self.touch()
+
+        return self
+
 
     # ======================================================
     # Serialization

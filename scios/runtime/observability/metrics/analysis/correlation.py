@@ -8,10 +8,11 @@ SciOS/scios/runtime/observability/metrics/analysis/correlation.py
 
 from __future__ import annotations
 
+import copy
+import math
 import threading
 import time
 import uuid
-
 from datetime import datetime
 from typing import Any, Callable
 
@@ -559,13 +560,8 @@ class MetricCorrelationAnalyzer:
             else 0.0
         )
 
-        return {
+        return numerator / denominator
 
-            "algorithm": "pearson",
-
-            "correlation": value,
-
-        }
 
     def spearman(
         self,
@@ -666,7 +662,7 @@ class MetricCorrelationAnalyzer:
         y,
     ):
         """
-        Covariance.
+        Compute covariance between two sequences.
         """
 
         x, y = self._validate(x, y)
@@ -674,28 +670,12 @@ class MetricCorrelationAnalyzer:
         n = len(x)
 
         mean_x = sum(x) / n
-
         mean_y = sum(y) / n
 
-        cov = sum(
-
-            (a - mean_x)
-
-            *
-
-            (b - mean_y)
-
+        return sum(
+            (a - mean_x) * (b - mean_y)
             for a, b in zip(x, y)
-
-        ) / (n - 1)
-
-        return {
-
-            "algorithm": "covariance",
-
-            "covariance": cov,
-
-        }
+        ) / (len(x) - 1)
 
     def cosine(
         self,
@@ -738,13 +718,8 @@ class MetricCorrelationAnalyzer:
 
         )
 
-        return {
+        return dot / (norm_x * norm_y)
 
-            "algorithm": "cosine",
-
-            "correlation": value,
-
-        }
 
     def distance(
         self,
@@ -769,13 +744,7 @@ class MetricCorrelationAnalyzer:
 
         )
 
-        return {
-
-            "algorithm": "distance",
-
-            "distance": dist,
-
-        }
+        return dist
 
     def mutual_information(
         self,
@@ -957,24 +926,25 @@ class MetricCorrelationAnalyzer:
         default=None,
     ):
         """
-        Return algorithm metadata.
+        Return the registered algorithm callable.
         """
+        with self._lock:
+            entry = self._algorithms.get(name)
 
-        return self._algorithms.get(
-            name,
-            default,
-        )
+            if entry is None:
+                return default
 
-    def algorithms(
-        self,
-    ):
+            return entry["callable"]
+
+    def algorithms(self):
         """
-        Return all registered algorithms.
+        Return registered algorithms as a name -> callable mapping.
         """
-
-        return dict(
-            self._algorithms
-        )
+        with self._lock:
+            return {
+                name: entry["callable"]
+                for name, entry in self._algorithms.items()
+            }
 
     def contains_algorithm(
         self,
@@ -1457,22 +1427,108 @@ class MetricCorrelationAnalyzer:
         self,
     ):
         """
-        Create a cloned analyzer.
+        Create an independent analyzer clone.
+
+        Runtime synchronization primitives are recreated.
+        Built-in algorithm methods are rebound to the cloned instance.
+        Custom algorithm callables are preserved by reference.
+        Hooks are copied as independent callback lists.
         """
 
-        cloned = self.__class__(
+        with self._lock:
 
-            name=self._name,
+            cloned = self.__class__(
+                name=self._name,
+                description=self._description,
+            )
 
-            description=self._description,
+            # ------------------------------------------------------------
+            # Restore serializable/runtime state
+            # ------------------------------------------------------------
 
-        )
+            cloned.restore(
+                copy.deepcopy(
+                    self.snapshot()
+                )
+            )
 
-        cloned.restore(
-            self.snapshot()
-        )
+            # ------------------------------------------------------------
+            # Rebuild algorithm registry
+            #
+            # Built-in algorithms are rebound to the cloned instance.
+            # Custom callables are preserved by reference.
+            # ------------------------------------------------------------
 
-        return cloned
+            cloned._algorithms = {}
+
+            for name, entry in self._algorithms.items():
+
+                cloned_entry = dict(entry)
+
+                if "metadata" in cloned_entry:
+                    cloned_entry["metadata"] = copy.deepcopy(
+                        cloned_entry["metadata"]
+                    )
+
+                original_callable = entry["callable"]
+
+                # --------------------------------------------------------
+                # Detect built-in bound methods.
+                #
+                # A built-in algorithm is a method belonging to this
+                # analyzer class. Rebind it to the cloned instance.
+                # --------------------------------------------------------
+
+                bound_method = getattr(
+                    cloned,
+                    name,
+                    None,
+                )
+
+                if (
+                    bound_method is not None
+                    and callable(bound_method)
+                    and getattr(
+                        original_callable,
+                        "__self__",
+                        None,
+                    ) is self
+                    and getattr(
+                        original_callable,
+                        "__func__",
+                        None,
+                    ) is getattr(
+                        bound_method,
+                        "__func__",
+                        None,
+                    )
+                ):
+                    cloned_entry["callable"] = bound_method
+
+                else:
+                    # Custom callable: preserve identity.
+                    cloned_entry["callable"] = original_callable
+
+                cloned._algorithms[name] = cloned_entry
+
+            # ------------------------------------------------------------
+            # Hooks
+            #
+            # Preserve callback identity while separating containers.
+            # ------------------------------------------------------------
+
+            cloned._hooks = {
+                event: list(callbacks)
+                for event, callbacks in self._hooks.items()
+            }
+
+            # ------------------------------------------------------------
+            # Fresh synchronization primitive
+            # ------------------------------------------------------------
+
+            cloned._lock = threading.RLock()
+
+            return cloned
 
     def copy(
         self,

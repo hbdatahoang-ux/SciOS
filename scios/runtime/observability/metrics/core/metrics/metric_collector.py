@@ -24,7 +24,7 @@ from __future__ import annotations
 
 
 # ==========================================================
-# Part 2 — Imports
+# Part 2 â€” Imports
 # ==========================================================
 
 from collections.abc import Callable
@@ -41,9 +41,10 @@ from .metric import Metric
 from .metric_snapshot import MetricSnapshot
 from .metric_registry import MetricRegistry
 
+from copy import deepcopy
 
 # ==========================================================
-# Part 3 — Public API
+# Part 3 â€” Public API
 # ==========================================================
 
 __all__ = [
@@ -60,7 +61,7 @@ __all__ = [
 
 
 # ==========================================================
-# Part 4 — Version / Constants / Type Aliases
+# Part 4 â€” Version / Constants / Type Aliases
 # ==========================================================
 
 COLLECTOR_VERSION: Final[str] = "1.0.0"
@@ -80,7 +81,7 @@ MetricSnapshotSequence: TypeAlias = list[MetricSnapshot]
 
 CollectionStatistics: TypeAlias = dict[str, Any]
 # ==========================================================
-# Part 5 — CollectorEvent
+# Part 5 â€” CollectorEvent
 # ==========================================================
 
 from enum import Enum
@@ -102,7 +103,7 @@ class CollectorEvent(Enum):
 
 
 # ==========================================================
-# Part 6 — MetricCollector
+# Part 6 â€” MetricCollector
 # ==========================================================
 
 
@@ -170,7 +171,7 @@ class MetricCollector:
 
 
 # ==========================================================
-# Part 7 — Registry API
+# Part 7 â€” Registry API
 # ==========================================================
 
     def attach_registry(
@@ -207,8 +208,55 @@ class MetricCollector:
 
         return self._registry
     # ======================================================
-    # Part 8 — Lookup API
+    # Part 8 â€” Lookup API
     # ======================================================
+
+    def register(
+        self,
+        metric: Metric,
+    ) -> Metric:
+        """
+        Register a metric in the attached registry.
+
+        The collector delegates ownership and duplicate detection
+        to MetricRegistry.
+        """
+
+        if metric is None:
+            raise ValueError(
+                "metric must not be None."
+            )
+
+        registry = self.registry_or_raise()
+
+        with self._lock:
+            registry.register(metric)
+            self._revision += 1
+
+        return metric
+
+    def remove(
+        self,
+        name: str,
+    ) -> Metric | None:
+        """
+        Remove a metric by name.
+
+        Returns the removed metric, or None if it does not exist.
+        """
+
+        registry = self.registry_or_raise()
+
+        with self._lock:
+            metric = registry.get(name)
+
+            if metric is None:
+                return None
+
+            registry.remove(name)
+            self._revision += 1
+
+            return metric
 
     def get(
         self,
@@ -297,7 +345,7 @@ class MetricCollector:
 
 
     # ======================================================
-    # Part 9 — Iteration API
+    # Part 9 â€” Iteration API
     # ======================================================
 
     def metrics(
@@ -361,7 +409,7 @@ class MetricCollector:
 
 
     # ======================================================
-    # Part 10 — Snapshot API
+    # Part 10 â€” Snapshot API
     # ======================================================
 
     def snapshot(
@@ -432,7 +480,7 @@ class MetricCollector:
             self,
         )
     # ======================================================
-    # Part 11 — Statistics
+    # Part 11 â€” Statistics
     # ======================================================
 
     def size(
@@ -475,7 +523,7 @@ class MetricCollector:
 
 
     # ======================================================
-    # Part 12 — Validation
+    # Part 12 â€” Validation
     # ======================================================
 
     def validate(
@@ -515,7 +563,7 @@ class MetricCollector:
 
 
     # ======================================================
-    # Part 13 — Python Protocols
+    # Part 13 â€” Python Protocols
     # ======================================================
 
     def __len__(
@@ -575,7 +623,7 @@ class MetricCollector:
 
 
 # ==========================================================
-# Part 14 — Final Cleanup
+# Part 14 â€” Final Cleanup
 # ==========================================================
 
 __all__ = [
@@ -589,4 +637,4 @@ __all__ = [
     "MetricSequence",
     "MetricSnapshotSequence",
     "CollectionStatistics",
-]                
+]

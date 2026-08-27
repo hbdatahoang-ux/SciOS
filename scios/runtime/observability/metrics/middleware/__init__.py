@@ -13,8 +13,12 @@ from __future__ import annotations
 # Core Middleware Components
 # ============================================================
 
-from .runtime import (
-    MetricMiddlewareRuntime,
+from .middleware import (
+    MetricMiddleware,
+)
+
+from .async_middleware import (
+    MetricAsyncMiddleware,
 )
 
 from .stage import (
@@ -29,17 +33,14 @@ from .pipeline import (
     MetricMiddlewarePipeline,
 )
 
-from .async_runtime import (
-    MetricAsyncMiddlewareRuntime,
-)
-
-
 
 # ============================================================
 # Aliases
 # ============================================================
 
-RuntimeMiddleware = MetricMiddlewareRuntime
+Middleware = MetricMiddleware
+
+AsyncMiddleware = MetricAsyncMiddleware
 
 MiddlewareStage = MetricMiddlewareStage
 
@@ -47,45 +48,49 @@ MiddlewareTask = MetricMiddlewareTask
 
 MiddlewarePipeline = MetricMiddlewarePipeline
 
-AsyncMiddlewareRuntime = MetricAsyncMiddlewareRuntime
-
-
 
 # ============================================================
 # Registry
 # ============================================================
 
 MIDDLEWARE_COMPONENTS = {
-
-    "runtime":
-        MetricMiddlewareRuntime,
-
-    "stage":
-        MetricMiddlewareStage,
-
-    "task":
-        MetricMiddlewareTask,
-
-    "pipeline":
-        MetricMiddlewarePipeline,
-
-    "async_runtime":
-        MetricAsyncMiddlewareRuntime,
-
+    "middleware": MetricMiddleware,
+    "async_middleware": MetricAsyncMiddleware,
+    "stage": MetricMiddlewareStage,
+    "task": MetricMiddlewareTask,
+    "pipeline": MetricMiddlewarePipeline,
 }
-
 
 
 # ============================================================
 # Factory API
 # ============================================================
 
-def create_runtime(
+def create_middleware(
+    handler=None,
     **kwargs,
-) -> MetricMiddlewareRuntime:
+) -> MetricMiddleware:
+    """
+    Create a synchronous metric middleware.
+    """
 
-    return MetricMiddlewareRuntime(
-        **kwargs
+    return MetricMiddleware(
+        handler=handler,
+        **kwargs,
+    )
+
+
+def create_async_middleware(
+    handler=None,
+    **kwargs,
+) -> MetricAsyncMiddleware:
+    """
+    Create an asynchronous metric middleware.
+    """
+
+    return MetricAsyncMiddleware(
+        handler=handler,
+        **kwargs,
     )
 
 
@@ -94,6 +99,9 @@ def create_stage(
     handler=None,
     **kwargs,
 ) -> MetricMiddlewareStage:
+    """
+    Create a middleware stage.
+    """
 
     return MetricMiddlewareStage(
         name=name,
@@ -107,6 +115,9 @@ def create_task(
     handler=None,
     **kwargs,
 ) -> MetricMiddlewareTask:
+    """
+    Create a middleware task.
+    """
 
     return MetricMiddlewareTask(
         name=name,
@@ -118,34 +129,33 @@ def create_task(
 def create_pipeline(
     **kwargs,
 ) -> MetricMiddlewarePipeline:
+    """
+    Create a middleware pipeline.
+    """
 
     return MetricMiddlewarePipeline(
         **kwargs,
     )
 
 
-def create_async_runtime(
-    **kwargs,
-) -> MetricAsyncMiddlewareRuntime:
-
-    return MetricAsyncMiddlewareRuntime(
-        **kwargs,
-    )
-
-
-
 # ============================================================
 # Utilities
 # ============================================================
 
-def available_components():
+def available_components() -> tuple[str, ...]:
+    """
+    Return registered middleware component names.
+    """
 
     return tuple(
         MIDDLEWARE_COMPONENTS.keys()
     )
 
 
-def component_count():
+def component_count() -> int:
+    """
+    Return number of registered middleware components.
+    """
 
     return len(
         MIDDLEWARE_COMPONENTS
@@ -155,11 +165,15 @@ def component_count():
 def get_component(
     name: str,
 ):
+    """
+    Return a middleware component class by name.
+
+    Returns None when the component is unknown.
+    """
 
     return MIDDLEWARE_COMPONENTS.get(
         name
     )
-
 
 
 # ============================================================
@@ -168,60 +182,37 @@ def get_component(
 
 __all__ = [
 
-    # Core Classes
+    # Core classes
 
-    "MetricMiddlewareRuntime",
-
+    "MetricMiddleware",
+    "MetricAsyncMiddleware",
     "MetricMiddlewareStage",
-
     "MetricMiddlewareTask",
-
     "MetricMiddlewarePipeline",
-
-    "MetricAsyncMiddlewareRuntime",
-
-
 
     # Aliases
 
-    "RuntimeMiddleware",
-
+    "Middleware",
+    "AsyncMiddleware",
     "MiddlewareStage",
-
     "MiddlewareTask",
-
     "MiddlewarePipeline",
-
-    "AsyncMiddlewareRuntime",
-
-
 
     # Registry
 
     "MIDDLEWARE_COMPONENTS",
 
+    # Factories
 
-
-    # Factory
-
-    "create_runtime",
-
+    "create_middleware",
+    "create_async_middleware",
     "create_stage",
-
     "create_task",
-
     "create_pipeline",
-
-    "create_async_runtime",
-
-
 
     # Utilities
 
     "available_components",
-
     "component_count",
-
     "get_component",
-
 ]

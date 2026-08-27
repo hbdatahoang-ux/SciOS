@@ -1,403 +1,349 @@
 """
-SciOS-NG Runtime Metrics Storage Backend
+SciOS Runtime Metrics Storage Backend
+=====================================
 
-Base storage contract for metrics persistence.
+Abstract contract for Runtime Metrics Storage backends.
 
-SciOS-NG v0.2
+The storage backend defines the common lifecycle, CRUD, batch, inspection,
+and statistics API shared by all concrete metrics storage implementations.
+
+Python 3.11+
 """
-
 
 from __future__ import annotations
 
-import uuid
-import threading
-
-from datetime import datetime
+from abc import ABC, abstractmethod
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 
+# ==============================================================================
+# Part 1. Exceptions
+# ==============================================================================
 
-# ==================================================================
-# MetricStorageBackend
-# ==================================================================
+
+class StorageError(RuntimeError):
+    """Base exception for metrics storage failures."""
 
 
-class MetricStorageBackend:
+class StorageClosedError(StorageError):
+    """Raised when an operation requires an active storage backend."""
+
+
+# ==============================================================================
+# Part 2. MetricStorageBackend
+# ==============================================================================
+
+
+class MetricStorageBackend(ABC):
     """
-    Base Runtime Metrics Storage Backend.
+    Abstract base class for SciOS Runtime Metrics storage.
 
-    Responsibilities
-    ----------------
-    - Store runtime metrics
-    - Provide persistence abstraction
-    - Support multiple storage engines
+    Concrete implementations must provide the primitive CRUD operations:
 
-    Implementations:
+    - put()
+    - get()
+    - delete()
+    - exists()
+    - clear()
+    - keys()
+    - values()
+    - items()
 
-        MemoryStorage
-        SQLiteStorage
-        DuckDBStorage
-        ParquetStorage
+    Batch operations and lifecycle helpers are implemented here in terms of
+    those primitives so that all storage backends expose a consistent API.
     """
 
-
-
-    # ==============================================================
+    # ------------------------------------------------------------------
     # Constructor
-    # ==============================================================
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
-        name: str = "storage",
-        description: str = "",
+        *,
+        enabled: bool = True,
     ) -> None:
-
-
-        # ----------------------------------------------------------
-        # Identity
-        # ----------------------------------------------------------
-
-        self._id = str(
-            uuid.uuid4()
-        )
-
-        self._name = name
-
-        self._description = description
-
-
-
-        # ----------------------------------------------------------
-        # Runtime State
-        # ----------------------------------------------------------
-
-        self._enabled = True
-
+        self._enabled = bool(enabled)
         self._closed = False
 
+    # ------------------------------------------------------------------
+    # Lifecycle state
+    # ------------------------------------------------------------------
 
+    @property
+    def enabled(self) -> bool:
+        """Return whether the backend is enabled."""
+        return self._enabled
 
-        # ----------------------------------------------------------
-        # Synchronization
-        # ----------------------------------------------------------
+    @property
+    def closed(self) -> bool:
+        """Return whether the backend has been closed."""
+        return self._closed
 
-        self._lock = threading.RLock()
+    @property
+    def active(self) -> bool:
+        """Return whether the backend is enabled and open."""
+        return self._enabled and not self._closed
 
+    # ------------------------------------------------------------------
+    # Primitive storage API
+    # ------------------------------------------------------------------
 
-
-        # ----------------------------------------------------------
-        # Metadata
-        # ----------------------------------------------------------
-
-        self._created_at = datetime.utcnow()
-
-        self._updated_at = self._created_at
-
-        self._version = "0.2"
-
-
-
-        # ----------------------------------------------------------
-        # Statistics
-        # ----------------------------------------------------------
-
-        self._writes = 0
-
-        self._reads = 0
-
-        self._deletes = 0
-
-        self._failures = 0
-
-
-
-    # ==============================================================
-    # Storage API
-    # ==============================================================
-
+    @abstractmethod
     def put(
         self,
         key: str,
         value: Any,
-    ):
+    ) -> None:
+        """
+        Store a value under ``key``.
+        """
 
-        raise NotImplementedError
-
-
-
+    @abstractmethod
     def get(
         self,
         key: str,
-    ):
+        default: Any = None,
+    ) -> Any:
+        """
+        Retrieve a value by key.
 
-        raise NotImplementedError
+        ``default`` is returned when the key does not exist.
+        """
 
-
-
+    @abstractmethod
     def delete(
         self,
         key: str,
-    ):
+    ) -> bool:
+        """
+        Delete a key.
 
-        raise NotImplementedError
+        Returns
+        -------
+        bool
+            ``True`` when an item was removed, otherwise ``False``.
+        """
 
-
-
+    @abstractmethod
     def exists(
         self,
         key: str,
     ) -> bool:
+        """Return whether ``key`` exists."""
 
-        raise NotImplementedError
+    @abstractmethod
+    def clear(self) -> None:
+        """Remove all stored values."""
 
+    @abstractmethod
+    def keys(self) -> Iterable[str]:
+        """Return an iterable of stored keys."""
 
+    @abstractmethod
+    def values(self) -> Iterable[Any]:
+        """Return an iterable of stored values."""
 
-    def clear(
-        self,
-    ):
+    @abstractmethod
+    def items(self) -> Iterable[tuple[str, Any]]:
+        """Return an iterable of ``(key, value)`` pairs."""
 
-        raise NotImplementedError
-
-
-
-    def keys(
-        self,
-    ):
-
-        raise NotImplementedError
-
-
-
-    def values(
-        self,
-    ):
-
-        raise NotImplementedError
-
-
-
-    def items(
-        self,
-    ):
-
-        raise NotImplementedError
-
-
-
-    # ==============================================================
+    # ------------------------------------------------------------------
     # Batch API
-    # ==============================================================
+    # ------------------------------------------------------------------
 
     def put_many(
         self,
-        items: dict[str, Any],
-    ):
+        values: Mapping[str, Any],
+    ) -> None:
+        """
+        Store multiple values.
 
-        for key, value in items.items():
+        Parameters
+        ----------
+        values:
+            Mapping of keys to values.
+        """
+        if not isinstance(values, Mapping):
+            raise TypeError("values must be a mapping")
 
-            self.put(
-                key,
-                value,
-            )
+        self._ensure_active()
 
-
-        return self
-
-
+        for key, value in values.items():
+            self.put(key, value)
 
     def get_many(
         self,
-        keys: list[str],
-    ):
+        keys: Iterable[str],
+    ) -> dict[str, Any]:
+        """
+        Retrieve multiple values.
 
-        return {
+        Missing keys are omitted from the result.
+        """
+        self._ensure_active()
 
-            key:
-                self.get(key)
+        result: dict[str, Any] = {}
 
-            for key
-            in keys
+        for key in keys:
+            if self.exists(key):
+                result[key] = self.get(key)
 
-        }
-
-
+        return result
 
     def delete_many(
         self,
-        keys: list[str],
-    ):
+        keys: Iterable[str],
+    ) -> int:
+        """
+        Delete multiple values.
+
+        Returns
+        -------
+        int
+            Number of deleted entries.
+        """
+        self._ensure_active()
+
+        deleted = 0
 
         for key in keys:
+            if self.delete(key):
+                deleted += 1
 
-            self.delete(
-                key
+        return deleted
+
+    # ------------------------------------------------------------------
+    # Lifecycle API
+    # ------------------------------------------------------------------
+
+    def enable(self) -> None:
+        """Enable the backend."""
+        if self._closed:
+            raise StorageClosedError(
+                "cannot enable a closed storage backend"
             )
-
-
-        return self
-
-
-
-    # ==============================================================
-    # Lifecycle
-    # ==============================================================
-
-    def enable(
-        self,
-    ):
 
         self._enabled = True
 
-        return self
-
-
-
-    def disable(
-        self,
-    ):
+    def disable(self) -> None:
+        """Disable the backend."""
+        if self._closed:
+            raise StorageClosedError(
+                "cannot disable a closed storage backend"
+            )
 
         self._enabled = False
 
-        return self
-
-
-
-    def close(
-        self,
-    ):
-
+    def close(self) -> None:
+        """Close the backend."""
         self._closed = True
+        self._enabled = False
 
-        return self
+    def reopen(self) -> None:
+        """
+        Reopen the backend.
 
-
-
-    def reopen(
-        self,
-    ):
-
+        Concrete persistent backends may override this method if they need
+        to recreate a database connection or file handle.
+        """
         self._closed = False
+        self._enabled = True
 
-        return self
+    # ------------------------------------------------------------------
+    # Inspection API
+    # ------------------------------------------------------------------
 
+    def statistics(self) -> dict[str, Any]:
+        """
+        Return basic backend statistics.
+        """
+        self._ensure_active()
 
-
-    # ==============================================================
-    # Diagnostics
-    # ==============================================================
-
-    def statistics(
-        self,
-    ):
-
-        return {
-
-            "writes":
-                self._writes,
-
-            "reads":
-                self._reads,
-
-            "deletes":
-                self._deletes,
-
-            "failures":
-                self._failures,
-
-        }
-
-
-
-    def status(
-        self,
-    ):
+        try:
+            count = len(self)
+        except (TypeError, NotImplementedError):
+            count = sum(1 for _ in self.items())
 
         return {
-
-            "name":
-                self._name,
-
-            "enabled":
-                self._enabled,
-
-            "closed":
-                self._closed,
-
-            "active":
-                self._enabled
-                and
-                not self._closed,
-
+            "backend": self.__class__.__name__,
+            "enabled": self.enabled,
+            "closed": self.closed,
+            "active": self.active,
+            "count": count,
         }
 
+    def status(self) -> dict[str, Any]:
+        """
+        Return backend lifecycle status.
+        """
+        return {
+            "backend": self.__class__.__name__,
+            "enabled": self.enabled,
+            "closed": self.closed,
+            "active": self.active,
+        }
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-    # ==============================================================
-    # Internal
-    # ==============================================================
+    def _touch(self) -> None:
+        """
+        Hook for concrete backends.
 
-    def _touch(
-        self,
-    ):
+        Concrete implementations may override this when an operation should
+        update timestamps, access metadata, or connection state.
+        """
 
-        self._updated_at = datetime.utcnow()
-
-
-
-    def _ensure_active(
-        self,
-    ):
+    def _ensure_active(self) -> None:
+        """Raise when the backend is unavailable for normal operations."""
+        if self._closed:
+            raise StorageClosedError(
+                "storage backend is closed"
+            )
 
         if not self._enabled:
-
-            raise RuntimeError(
-                "Storage disabled"
+            raise StorageError(
+                "storage backend is disabled"
             )
 
+        self._touch()
 
-        if self._closed:
+    # ------------------------------------------------------------------
+    # Python protocol helpers
+    # ------------------------------------------------------------------
 
-            raise RuntimeError(
-                "Storage closed"
-            )
-
-
-
-    # ==============================================================
-    # Python Protocols
-    # ==============================================================
-
-    def __len__(
-        self,
-    ):
-
-        return len(
-            list(
-                self.keys()
-            )
-        )
-
-
+    def __len__(self) -> int:
+        """Return the number of stored entries."""
+        return sum(1 for _ in self.items())
 
     def __contains__(
         self,
-        key,
-    ):
+        key: object,
+    ) -> bool:
+        """Support ``key in storage``."""
+        if not isinstance(key, str):
+            return False
 
-        return self.exists(
-            key
-        )
+        if not self.active:
+            return False
 
+        return self.exists(key)
 
-
-    def __repr__(
-        self,
-    ):
-
+    def __repr__(self) -> str:
+        """Return a concise backend representation."""
         return (
-
-            f"MetricStorageBackend("
-            f"name={self._name!r}"
+            f"{self.__class__.__name__}("
+            f"enabled={self.enabled!r}, "
+            f"closed={self.closed!r}, "
+            f"active={self.active!r}"
             f")"
-
         )
+
+
+__all__ = [
+    "StorageError",
+    "StorageClosedError",
+    "MetricStorageBackend",
+]

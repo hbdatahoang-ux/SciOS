@@ -1,506 +1,571 @@
 """
-SciOS-NG Runtime Metrics Parquet Storage
+SciOS Runtime Metrics Parquet Storage
+=====================================
 
-Columnar data lake storage backend.
+Persistent Parquet-backed storage backend for runtime metrics.
 
-SciOS-NG v0.2
+The implementation intentionally keeps the in-memory record model simple::
+
+    {
+        "key": <str>,
+        "value": <Any>,
+    }
+
+The Parquet engine is loaded lazily so that constructing the backend does
+not require pandas/pyarrow until an operation actually needs the engine.
+
+Python 3.11+
 """
-
 
 from __future__ import annotations
 
-import json
-
+import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping, Optional
+
+from .backend import MetricStorageBackend, StorageError
 
 
-from .backend import MetricStorageBackend
+# ==============================================================================
+# Exceptions
+# ==============================================================================
 
 
+class ParquetStorageError(StorageError):
+    """Base exception for Parquet storage failures."""
 
-# ==================================================================
+
+# ==============================================================================
 # ParquetStorage
-# ==================================================================
+# ==============================================================================
 
 
-class ParquetStorage(
-    MetricStorageBackend
-):
+class ParquetStorage(MetricStorageBackend):
     """
-    Runtime Parquet Data Lake Storage.
+    Persistent metrics storage backed by a Parquet file.
 
-    Responsibilities
-    ----------------
-    - Long-term metric archival
-    - Columnar analytics storage
-    - Data lake integration
-    - Batch metric persistence
+    The storage maintains a deterministic ordered list of records.
+
+    Each key is unique. Putting an existing key replaces its value while
+    preserving the key's original position.
+
+    Mutation contract
+    -----------------
+    - ``put()`` returns the supplied value.
+    - ``delete()`` returns ``self``.
+    - ``clear()`` returns ``self``.
+    - ``restore()`` returns ``self``.
     """
 
-
-
-    # ==============================================================
+    # ==========================================================================
     # Constructor
-    # ==============================================================
+    # ==========================================================================
 
     def __init__(
         self,
-        path: str = "metrics.parquet",
-        name: str = "ParquetStorage",
+        path: str | Path = "metrics.parquet",
+        *,
+        enabled: bool = True,
+        name: str = "metrics",
         description: str = "",
     ) -> None:
+        super().__init__(enabled=enabled)
 
+        self._path = Path(path)
+        self._name = str(name)
+        self._description = str(description)
 
-        super().__init__(
-            name=name,
-            description=description,
-        )
+        self._records: list[dict[str, Any]] = []
 
+    # ==========================================================================
+    # Properties
+    # ==========================================================================
 
-        # ----------------------------------------------------------
-        # Storage
-        # ----------------------------------------------------------
+    @property
+    def path(self) -> Path:
+        """Return the configured Parquet path."""
+        return self._path
 
-        self._path = Path(
-            path
-        )
+    @property
+    def name(self) -> str:
+        """Return the storage name."""
+        return self._name
 
+    @property
+    def description(self) -> str:
+        """Return the storage description."""
+        return self._description
 
-        self._records: list[dict] = []
+    # ==========================================================================
+    # Dependency handling
+    # ==========================================================================
 
+    @staticmethod
+    def _require_engine() -> tuple[Any, Any]:
+        """
+        Lazily import pandas and pyarrow.
 
+        Returns
+        -------
+        tuple
+            ``(pandas, pyarrow)``.
 
-    # ==============================================================
-    # Dependency Check
-    # ==============================================================
-
-    def _require_engine(
-        self,
-    ):
-
+        Raises
+        ------
+        RuntimeError
+            If pandas or pyarrow is unavailable.
+        """
         try:
-
-            import pandas
-
+            import pandas as pd
             import pyarrow
-
-
-        except ImportError:
-
+        except ImportError as exc:
             raise RuntimeError(
+                "pandas and pyarrow are required for ParquetStorage; "
+                "install them with 'pip install pandas pyarrow'"
+            ) from exc
 
-                "ParquetStorage requires "
-                "pandas and pyarrow"
+        return pd, pyarrow
 
-            )
+    # ==========================================================================
+    # Validation
+    # ==========================================================================
 
+    @staticmethod
+    def _validate_key(key: str) -> str:
+        """Validate and normalize a storage key."""
+        if not isinstance(key, str):
+            raise TypeError("key must be a string")
 
+        if not key:
+            raise ValueError("key must not be empty")
 
-    # ==============================================================
-    # Storage API
-    # ==============================================================
+        return key
+
+    @staticmethod
+    def _validate_record(
+        record: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Validate and deep-copy one storage record.
+        """
+        if not isinstance(record, Mapping):
+            raise TypeError("each record must be a mapping")
+
+        if "key" not in record:
+            raise ValueError("record must contain 'key'")
+
+        if "value" not in record:
+            raise ValueError("record must contain 'value'")
+
+        key = ParquetStorage._validate_key(record["key"])
+
+        return {
+            "key": key,
+            "value": copy.deepcopy(record["value"]),
+        }
+
+    # ==========================================================================
+    # Internal record helpers
+    # ==========================================================================
+
+    def _find_record_index(
+        self,
+        key: str,
+    ) -> Optional[int]:
+        """Return the record index for ``key`` or ``None``."""
+        for index, record in enumerate(self._records):
+            if record["key"] == key:
+                return index
+
+        return None
+
+    def _upsert_record(
+        self,
+        key: str,
+        value: Any,
+    ) -> None:
+        """
+        Insert or replace a record.
+
+        Existing keys retain their original ordering.
+        """
+        index = self._find_record_index(key)
+
+        record = {
+            "key": key,
+            "value": copy.deepcopy(value),
+        }
+
+        if index is None:
+            self._records.append(record)
+        else:
+            self._records[index] = record
+
+    def _ensure_parent_directory(self) -> None:
+        """Create the configured parent directory when necessary."""
+        parent = self._path.parent
+
+        if parent != Path("."):
+            parent.mkdir(parents=True, exist_ok=True)
+
+    # ==========================================================================
+    # Primitive API
+    # ==========================================================================
 
     def put(
         self,
         key: str,
         value: Any,
-    ):
+    ) -> Any:
+        """
+        Store ``value`` under ``key``.
 
-        with self._lock:
+        Returns the original value supplied by the caller.
+        """
+        self._ensure_active()
 
-            self._ensure_active()
-
-
-            record = {
-
-                "key":
-                    key,
-
-
-                "value":
-                    value,
-
-            }
-
-
-            self._records.append(
-                record
-            )
-
-
-            self._writes += 1
-
-
-            self._touch()
-
-
+        key = self._validate_key(key)
+        self._upsert_record(key, value)
 
         return value
-
-
 
     def get(
         self,
         key: str,
-    ):
+        default: Any = None,
+    ) -> Any:
+        """Return the stored value associated with ``key``."""
+        self._ensure_active()
 
-        self._reads += 1
+        key = self._validate_key(key)
 
+        index = self._find_record_index(key)
 
+        if index is None:
+            return default
 
-        for record in reversed(
-            self._records
-        ):
-
-            if record["key"] == key:
-
-                return record["value"]
-
-
-
-        return None
-
-
+        return copy.deepcopy(
+            self._records[index]["value"]
+        )
 
     def delete(
         self,
         key: str,
-    ):
+    ) -> "ParquetStorage":
+        """
+        Delete ``key``.
 
-        self._records = [
+        Returns ``self`` whether or not the key exists.
+        """
+        self._ensure_active()
 
-            r
+        key = self._validate_key(key)
 
-            for r
-            in self._records
+        index = self._find_record_index(key)
 
-            if r["key"] != key
-
-        ]
-
-
-        self._deletes += 1
-
+        if index is not None:
+            del self._records[index]
 
         return self
-
-
 
     def exists(
         self,
         key: str,
     ) -> bool:
+        """Return whether ``key`` exists."""
+        self._ensure_active()
 
-        return any(
+        key = self._validate_key(key)
 
-            r["key"] == key
+        return self._find_record_index(key) is not None
 
-            for r
-            in self._records
+    def clear(self) -> "ParquetStorage":
+        """
+        Remove all records.
 
-        )
-
-
-
-    def clear(
-        self,
-    ):
+        Returns ``self``.
+        """
+        self._ensure_active()
 
         self._records.clear()
 
-
         return self
 
+    # ==========================================================================
+    # Collection API
+    # ==========================================================================
 
+    def count(self) -> int:
+        """Return the number of stored records."""
+        self._ensure_active()
 
-    # ==============================================================
-    # Enumeration
-    # ==============================================================
+        return len(self._records)
 
-    def keys(
-        self,
-    ):
+    def keys(self) -> list[str]:
+        """Return stored keys as a new list."""
+        self._ensure_active()
 
         return [
-
-            r["key"]
-
-            for r
-            in self._records
-
+            record["key"]
+            for record in self._records
         ]
 
-
-
-    def values(
-        self,
-    ):
+    def values(self) -> list[Any]:
+        """Return stored values as a new deep-copied list."""
+        self._ensure_active()
 
         return [
-
-            r["value"]
-
-            for r
-            in self._records
-
+            copy.deepcopy(record["value"])
+            for record in self._records
         ]
 
-
-
-    def items(
-        self,
-    ):
+    def items(self) -> list[tuple[str, Any]]:
+        """Return stored key/value pairs as a new list."""
+        self._ensure_active()
 
         return [
-
             (
-                r["key"],
-                r["value"]
+                record["key"],
+                copy.deepcopy(record["value"]),
             )
-
-            for r
-            in self._records
-
+            for record in self._records
         ]
 
+    # ==========================================================================
+    # Statistics
+    # ==========================================================================
 
-
-    # ==============================================================
-    # Data Lake Operations
-    # ==============================================================
-
-    def write(
-        self,
-    ):
-
+    def statistics(self) -> dict[str, Any]:
         """
-        Write records to parquet file.
+        Return Parquet-specific storage statistics.
         """
+        self._ensure_active()
 
-        self._require_engine()
+        return {
+            "backend": "parquet",
+            "name": self.name,
+            "description": self.description,
+            "path": str(self._path),
+            "enabled": self.enabled,
+            "closed": self.closed,
+            "active": self.active,
+            "count": self.count(),
+            "records": self.count(),
+            "format": "columnar",
+            "engine": "pandas + pyarrow",
+        }
 
+    # ==========================================================================
+    # Persistence
+    # ==========================================================================
 
-        import pandas as pd
+    def dataframe(self) -> Any:
+        """
+        Return the current records as a pandas DataFrame.
 
+        pandas/pyarrow are loaded lazily.
+        """
+        pd, _ = self._require_engine()
 
+        self._ensure_active()
 
-        dataframe = pd.DataFrame(
-            self._records
+        return pd.DataFrame(
+            [
+                {
+                    "key": record["key"],
+                    "value": copy.deepcopy(record["value"]),
+                }
+                for record in self._records
+            ],
+            columns=["key", "value"],
         )
 
+    def write(self) -> "ParquetStorage":
+        """
+        Write current records to the configured Parquet file.
+
+        Returns ``self``.
+        """
+        self._ensure_active()
+
+        self._ensure_parent_directory()
+
+        dataframe = self.dataframe()
 
         dataframe.to_parquet(
             self._path,
             index=False,
         )
 
-
         return self
 
-
-
-    def load(
-        self,
-    ):
-
+    def load(self) -> "ParquetStorage":
         """
-        Load parquet dataset.
+        Load records from the configured Parquet file.
+
+        A missing file is treated as empty storage.
+
+        Returns ``self``.
         """
+        self._ensure_active()
 
-        self._require_engine()
+        if not self._path.exists():
+            self._records.clear()
+            return self
 
+        pd, _ = self._require_engine()
 
-        import pandas as pd
+        try:
+            dataframe = pd.read_parquet(self._path)
+        except Exception as exc:
+            raise ParquetStorageError(
+                f"failed to load Parquet storage: {self._path}"
+            ) from exc
 
+        records: list[dict[str, Any]] = []
 
-
-        dataframe = pd.read_parquet(
-            self._path
-        )
-
-
-        self._records = (
-
-            dataframe
-            .to_dict(
-                orient="records"
+        for row in dataframe.to_dict(orient="records"):
+            records.append(
+                self._validate_record(row)
             )
 
-        )
-
+        self._records = records
 
         return self
 
-
-
-    def append(
-        self,
-    ):
-
+    def append(self) -> "ParquetStorage":
         """
-        Append current records to parquet.
+        Append current records to an existing Parquet file.
+
+        If the file does not exist, this behaves like ``write()``.
+
+        Returns ``self``.
         """
+        self._ensure_active()
 
-        existing = []
+        if not self._path.exists():
+            return self.write()
 
+        pd, _ = self._require_engine()
 
-        if self._path.exists():
+        existing = pd.read_parquet(self._path)
+        current = self.dataframe()
 
-            self.load()
-
-            existing = self._records
-
-
-
-        self._records.extend(
-            existing
+        combined = pd.concat(
+            [existing, current],
+            ignore_index=True,
         )
 
-
-        return self.write()
-
-
-
-    # ==============================================================
-    # Analytics
-    # ==============================================================
-
-    def dataframe(
-        self,
-    ):
-
-        self._require_engine()
-
-
-        import pandas as pd
-
-
-        return pd.DataFrame(
-            self._records
+        combined.to_parquet(
+            self._path,
+            index=False,
         )
 
+        return self
 
+    # ==========================================================================
+    # Snapshot / Restore
+    # ==========================================================================
 
-    def count(
-        self,
-    ):
+    def snapshot(self) -> list[dict[str, Any]]:
+        """
+        Return an independent snapshot of all records.
+        """
+        self._ensure_active()
 
-        return len(
-            self._records
-        )
-
-
-
-    # ==============================================================
-    # Snapshot
-    # ==============================================================
-
-    def snapshot(
-        self,
-    ):
-
-        return list(
-            self._records
-        )
-
-
+        return copy.deepcopy(self._records)
 
     def restore(
         self,
-        snapshot,
-    ):
+        snapshot: Iterable[Mapping[str, Any]],
+    ) -> "ParquetStorage":
+        """
+        Replace the current record set from ``snapshot``.
 
-        self._records = list(
-            snapshot
-        )
+        The supplied iterable and all contained values are deep-copied.
 
+        Duplicate keys are rejected because storage keys are unique.
+        """
+        self._ensure_active()
+
+        if isinstance(snapshot, (str, bytes, Mapping)):
+            raise TypeError(
+                "snapshot must be an iterable of record mappings"
+            )
+
+        records: list[dict[str, Any]] = []
+
+        for record in snapshot:
+            records.append(
+                self._validate_record(record)
+            )
+
+        seen: set[str] = set()
+
+        for record in records:
+            key = record["key"]
+
+            if key in seen:
+                raise ValueError(
+                    f"duplicate key in snapshot: {key!r}"
+                )
+
+            seen.add(key)
+
+        self._records = records
 
         return self
 
+    # ==========================================================================
+    # Python protocols
+    # ==========================================================================
 
+    def __len__(self) -> int:
+        """Return the number of records."""
+        return len(self._records)
 
-    # ==============================================================
-    # Statistics
-    # ==============================================================
+    def __iter__(self):
+        """
+        Iterate over independent raw records.
 
-    def statistics(
-        self,
-    ):
+        Iteration yields records rather than keys.
+        """
+        self._ensure_active()
 
-        data = super().statistics()
-
-
-        data.update({
-
-            "backend":
-                "parquet",
-
-
-            "path":
-                str(
-                    self._path
-                ),
-
-
-            "records":
-                self.count(),
-
-
-            "format":
-                "columnar",
-
-        })
-
-
-        return data
-
-
-
-    # ==============================================================
-    # Python Protocols
-    # ==============================================================
-
-    def __len__(
-        self,
-    ):
-
-        return len(
-            self._records
-        )
-
-
-
-    def __iter__(
-        self,
-    ):
-
-        return iter(
-            self._records
-        )
-
-
+        for record in self._records:
+            yield copy.deepcopy(record)
 
     def __contains__(
         self,
-        key,
-    ):
+        key: object,
+    ) -> bool:
+        """Support ``key in storage``."""
+        if not isinstance(key, str):
+            return False
 
-        return self.exists(
-            key
-        )
+        if not self.active:
+            return False
 
+        return self._find_record_index(key) is not None
 
-
-    def __repr__(
-        self,
-    ):
-
+    def __repr__(self) -> str:
+        """Return a concise storage representation."""
         return (
-
-            f"ParquetStorage("
-            f"path={str(self._path)!r}, "
-            f"records={len(self._records)}"
-            f")"
-
+            "ParquetStorage("
+            f"path={self.path}, "
+            f"count={len(self._records)}, "
+            f"enabled={self.enabled}, "
+            f"closed={self.closed}, "
+            f"active={self.active}"
+            ")"
         )
+
+
+# ==============================================================================
+# Public API
+# ==============================================================================
+
+__all__ = [
+    "ParquetStorage",
+    "ParquetStorageError",
+]

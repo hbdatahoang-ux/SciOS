@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .labels import MetricLabels
 from .metric import Metric
 
 
@@ -206,10 +207,82 @@ class Counter(Metric):
 
         return {
             "name": self.name,
+            "type": "counter",
             "value": self._value,
+            "description": self.description,
+            "namespace": self.namespace,
+            "unit": self.unit,
             "labels": dict(self.labels),
-            "metric_type": "counter",
+            "metadata": dict(self.metadata),
+            "enabled": self.enabled,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
+
+    # ======================================================
+    # Restore
+    # ======================================================
+
+    def restore(
+        self,
+        snapshot: dict[str, Any],
+    ) -> "Counter":
+        """
+        Restore counter state from a snapshot.
+
+        Only mutable runtime state is restored. The metric
+        identity and type remain owned by the current object.
+        """
+
+        if not isinstance(snapshot, dict):
+            raise TypeError(
+                "Counter snapshot must be a dictionary"
+            )
+
+        if snapshot.get("type") not in (None, "counter"):
+            raise ValueError(
+                "Invalid snapshot type for Counter"
+            )
+
+        value = snapshot.get("value")
+
+        if value is None:
+            raise ValueError(
+                "Counter snapshot is missing 'value'"
+            )
+
+        value = float(value)
+
+        if value < 0:
+            raise ValueError(
+                "Counter value cannot be negative"
+            )
+
+        self._value = value
+
+        if "labels" in snapshot:
+            self.labels = MetricLabels(
+                **dict(snapshot["labels"])
+            )
+
+        if "metadata" in snapshot:
+            self.metadata = dict(
+                snapshot["metadata"]
+            )
+
+        if "enabled" in snapshot:
+            self.enabled = bool(
+                snapshot["enabled"]
+            )
+
+        if "unit" in snapshot:
+            self.unit = str(
+                snapshot["unit"]
+            )
+
+        self.touch()
+
+        return self
 
     # ======================================================
     # Serialization

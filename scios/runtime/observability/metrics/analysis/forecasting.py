@@ -153,6 +153,36 @@ class MetricForecastEngine:
 
         self._context: dict[str, Any] = {}
 
+        # --------------------------------------------------
+        # Prediction aliases
+        #
+        # Bind the public forecast methods once at instance
+        # construction time.
+        #
+        # This is intentional: the forecasting contract requires
+        # identity-level aliases, e.g.
+        #
+        #     engine.predict is engine.forecast
+        #
+        # Normal class-bound methods do not guarantee this because
+        # attribute access creates bound-method objects dynamically.
+        # --------------------------------------------------
+
+        forecast = self.forecast
+        forecast_one = self.forecast_one
+        forecast_many = self.forecast_many
+        forecast_batch = self.forecast_batch
+
+        self.forecast = forecast
+        self.forecast_one = forecast_one
+        self.forecast_many = forecast_many
+        self.forecast_batch = forecast_batch
+
+        self.predict = forecast
+        self.predict_one = forecast_one
+        self.predict_many = forecast_many
+        self.predict_batch = forecast_batch
+
     # ======================================================
     # Identity
     # ======================================================
@@ -250,21 +280,6 @@ class MetricForecastEngine:
     # Registry
     # ======================================================
 
-    def register_model(
-        self,
-        name: str,
-        model: Callable,
-    ):
-
-        with self._lock:
-
-            self._models[name] = model
-
-            self._registry[name] = model
-
-            self._updated_at = datetime.utcnow()
-
-        return self
 
     def unregister_model(
         self,
@@ -305,11 +320,6 @@ class MetricForecastEngine:
     # ======================================================
     # Runtime Metrics
     # ======================================================
-
-    @property
-    def statistics(self):
-
-        return self._statistics
 
     @property
     def forecast_count(self):
@@ -357,6 +367,10 @@ class MetricForecastEngine:
     ):
         """
         Generic forecast entry point.
+
+        Forecast execution is exposed as the high-level API.
+        Unknown registered models are normalized to the public
+        "Unknown forecast model" contract.
         """
 
         if not self.active:
@@ -364,22 +378,31 @@ class MetricForecastEngine:
                 "MetricForecastEngine is not active."
             )
 
-        model = self._models.get(method)
-
-        if model is None:
-
-            raise KeyError(
-                f"Unknown forecast model: {method}"
-            )
-
         self._running = True
 
         try:
-
-            result = model(
+            self.before_forecast(
                 values,
+                method=method,
                 **kwargs,
             )
+
+            self.before_model(
+                method,
+                values=values,
+            )
+
+            try:
+                result = self.execute_model(
+                    method,
+                    values,
+                    **kwargs,
+                )
+
+            except KeyError as exc:
+                raise KeyError(
+                    f"Unknown forecast model: {method}"
+                ) from exc
 
             self._forecast_count += 1
 
@@ -395,7 +418,16 @@ class MetricForecastEngine:
             self._last_forecast = result
 
             self._history.append(
-                result
+                copy.deepcopy(result)
+            )
+
+            self.after_model(
+                method,
+                result=result,
+            )
+
+            self.after_forecast(
+                result=result,
             )
 
             self._updated_at = datetime.utcnow()
@@ -403,13 +435,10 @@ class MetricForecastEngine:
             return result
 
         except Exception:
-
             self._error_count += 1
-
             raise
 
         finally:
-
             self._running = False
 
     def forecast_one(
@@ -493,17 +522,7 @@ class MetricForecastEngine:
 
         return results
 
-    # ------------------------------------------------------
-    # Aliases
-    # ------------------------------------------------------
 
-    predict = forecast
-
-    predict_one = forecast_one
-
-    predict_many = forecast_many
-
-    predict_batch = forecast_batch
     # ======================================================
     # Part 3. Forecast Algorithms
     # ======================================================
@@ -1031,18 +1050,14 @@ class MetricForecastEngine:
         Execute a registered forecasting model.
         """
 
-        entry = self._models.get(
-            name
-        )
+        entry = self._models.get(name)
 
         if entry is None:
-
             raise KeyError(
                 f"Unknown model: {name}"
             )
 
         if not entry["enabled"]:
-
             raise RuntimeError(
                 f"Forecast model '{name}' is disabled."
             )
@@ -1438,12 +1453,9 @@ class MetricForecastEngine:
 
     def clone(self):
         """
-        Create deep clone.
+        Return an independent deep copy of this engine.
         """
-
-        return copy.deepcopy(
-            self
-        )
+        return copy.deepcopy(self)
 
     def copy(self):
         """
@@ -1781,22 +1793,46 @@ class MetricForecastEngine:
         data: dict,
     ):
         """
-        Restore engine from dictionary.
+        Restore a MetricForecastEngine from a dictionary.
+
+        Deserialization contract
+        ------------------------
+        - Creates a new engine identity.
+        - Restores descriptive metadata.
+        - Restores runtime state.
+        - Restores configuration and counters.
+        - Restores diagnostic state.
+        - Creates fresh runtime infrastructure.
+        - Does not restore executable model callables.
         """
 
-        engine = cls(
+        if not isinstance(data, dict):
+            raise TypeError(
+                "data must be a dictionary."
+            )
 
+        # --------------------------------------------------
+        # Construction
+        #
+        # __init__ intentionally creates a NEW identity.
+        # Deserialization represents a new runtime instance,
+        # not an identity-preserving clone.
+        # --------------------------------------------------
+
+        engine = cls(
             name=data.get(
                 "name",
                 "MetricForecastEngine",
             ),
-
             description=data.get(
                 "description",
                 "",
             ),
-
         )
+
+        # --------------------------------------------------
+        # Runtime State
+        # --------------------------------------------------
 
         engine._enabled = data.get(
             "enabled",
@@ -1818,14 +1854,25 @@ class MetricForecastEngine:
             False,
         )
 
-        engine._config.update(
+        # --------------------------------------------------
+        # Configuration
+        # --------------------------------------------------
 
-            data.get(
-                "config",
-                {},
+        config = data.get(
+            "config",
+            {},
+        )
+
+        if not isinstance(config, dict):
+            raise TypeError(
+                "config must be a dictionary."
             )
 
-        )
+        engine._config.update(config)
+
+        # --------------------------------------------------
+        # Runtime Counters
+        # --------------------------------------------------
 
         engine._forecast_count = data.get(
             "forecast_count",
@@ -1842,6 +1889,10 @@ class MetricForecastEngine:
             0,
         )
 
+        # --------------------------------------------------
+        # Runtime Metrics
+        # --------------------------------------------------
+
         engine._latency = data.get(
             "latency",
             0.0,
@@ -1852,12 +1903,42 @@ class MetricForecastEngine:
             0.0,
         )
 
-        engine._last_forecast = copy.deepcopy(
+        # --------------------------------------------------
+        # Last Forecast
+        # --------------------------------------------------
 
+        engine._last_forecast = copy.deepcopy(
             data.get(
                 "last_forecast",
+                None,
+            )
+        )
+
+        # --------------------------------------------------
+        # Metadata
+        # --------------------------------------------------
+
+        created_at = data.get(
+            "created_at"
+        )
+
+        if created_at:
+            engine._created_at = datetime.fromisoformat(
+                created_at
             )
 
+        updated_at = data.get(
+            "updated_at"
+        )
+
+        if updated_at:
+            engine._updated_at = datetime.fromisoformat(
+                updated_at
+            )
+
+        engine._version = data.get(
+            "version",
+            engine._version,
         )
 
         return engine
@@ -2304,46 +2385,288 @@ class MetricForecastEngine:
 
     def __copy__(self):
         """
-        Shallow copy protocol.
+        Create a shallow copy.
+
+        The identity is preserved, while the copied engine receives
+        independent top-level runtime containers and a fresh lock.
         """
 
-        cls = self.__class__
+        cls = type(self)
 
-        obj = cls.__new__(cls)
+        cloned = cls.__new__(cls)
 
-        obj.__dict__.update(
-            self.__dict__.copy()
+        cloned.__dict__ = self.__dict__.copy()
+
+        # --------------------------------------------------
+        # Fresh synchronization primitive
+        # --------------------------------------------------
+
+        cloned._lock = threading.RLock()
+
+        # --------------------------------------------------
+        # Independent top-level containers
+        # --------------------------------------------------
+
+        cloned._config = self._config.copy()
+
+        cloned._models = self._models.copy()
+
+        cloned._registry = self._registry.copy()
+
+        cloned._history = self._history.copy()
+
+        cloned._events = self._events.copy()
+
+        cloned._hooks = self._hooks.copy()
+
+        cloned._context = self._context.copy()
+
+        # --------------------------------------------------
+        # Rebind instance-level forecast methods
+        # --------------------------------------------------
+
+        forecast = cloned.__class__.forecast.__get__(
+            cloned,
+            cloned.__class__,
         )
 
-        return obj
+        forecast_one = cloned.__class__.forecast_one.__get__(
+            cloned,
+            cloned.__class__,
+        )
 
-    def __deepcopy__(
-        self,
-        memo,
-    ):
+        forecast_many = cloned.__class__.forecast_many.__get__(
+            cloned,
+            cloned.__class__,
+        )
+
+        forecast_batch = cloned.__class__.forecast_batch.__get__(
+            cloned,
+            cloned.__class__,
+        )
+
+        cloned.forecast = forecast
+        cloned.forecast_one = forecast_one
+        cloned.forecast_many = forecast_many
+        cloned.forecast_batch = forecast_batch
+
+        cloned.predict = forecast
+        cloned.predict_one = forecast_one
+        cloned.predict_many = forecast_many
+        cloned.predict_batch = forecast_batch
+
+        return cloned
+
+    def copy(self):
         """
-        Deep copy protocol.
+        Create shallow copy.
+        """
+        return copy.copy(self)
+
+
+    def __deepcopy__(self, memo):
+        """
+        Create an independent deep copy of the forecasting engine.
+
+        Deep-copy contract
+        ------------------
+        - The cloned engine is a different Python object.
+        - ``id`` is preserved.
+        - Runtime synchronization primitives are NOT copied.
+        - A fresh ``RLock`` is created.
+        - Mutable runtime containers are deeply copied.
+        - Registered executable callables are preserved by reference.
+        - Instance-level prediction aliases are rebound to the clone.
         """
 
-        cls = self.__class__
+        existing = memo.get(id(self))
 
-        obj = cls.__new__(cls)
+        if existing is not None:
+            return existing
 
-        memo[id(self)] = obj
+        cls = type(self)
 
-        for key, value in self.__dict__.items():
+        cloned = cls.__new__(cls)
 
-            setattr(
+        memo[id(self)] = cloned
 
-                obj,
+        # --------------------------------------------------
+        # Identity
+        # --------------------------------------------------
+        #
+        # Identity is part of the engine's serialized/runtime
+        # contract. A clone is independent but represents the
+        # same engine identity.
+        #
+        cloned._id = self._id
 
-                key,
+        # --------------------------------------------------
+        # Metadata
+        # --------------------------------------------------
 
-                copy.deepcopy(
-                    value,
+        cloned._name = self._name
+        cloned._description = self._description
+
+        cloned._created_at = copy.deepcopy(
+            self._created_at,
+            memo,
+        )
+
+        cloned._updated_at = copy.deepcopy(
+            self._updated_at,
+            memo,
+        )
+
+        cloned._version = self._version
+
+        # --------------------------------------------------
+        # Runtime state
+        # --------------------------------------------------
+
+        cloned._enabled = self._enabled
+        cloned._frozen = self._frozen
+        cloned._closed = self._closed
+        cloned._running = self._running
+
+        # --------------------------------------------------
+        # Configuration
+        # --------------------------------------------------
+
+        cloned._config = copy.deepcopy(
+            self._config,
+            memo,
+        )
+
+        # --------------------------------------------------
+        # Model registry
+        # --------------------------------------------------
+        #
+        # Model entries contain executable callables.
+        # Deep-copying arbitrary callables is neither required
+        # nor desirable. Preserve callable identity while
+        # independently copying the registry metadata.
+        # --------------------------------------------------
+
+        cloned._models = {}
+
+        for name, entry in self._models.items():
+
+            if isinstance(entry, dict):
+
+                cloned_entry = copy.deepcopy(
+                    entry,
                     memo,
-                ),
+                )
 
-            )
+                if "callable" in entry:
+                    cloned_entry["callable"] = entry[
+                        "callable"
+                    ]
 
-        return obj                
+                cloned._models[name] = cloned_entry
+
+            else:
+                cloned._models[name] = entry
+
+        cloned._registry = {}
+
+        for name, entry in self._registry.items():
+
+            if name in cloned._models:
+                cloned._registry[name] = cloned._models[name]
+
+            else:
+                cloned._registry[name] = copy.deepcopy(
+                    entry,
+                    memo,
+                )
+
+        # --------------------------------------------------
+        # Forecast runtime state
+        # --------------------------------------------------
+
+        cloned._history = copy.deepcopy(
+            self._history,
+            memo,
+        )
+
+        cloned._last_forecast = copy.deepcopy(
+            self._last_forecast,
+            memo,
+        )
+
+        cloned._snapshot = copy.deepcopy(
+            self._snapshot,
+            memo,
+        )
+
+        cloned._context = copy.deepcopy(
+            self._context,
+            memo,
+        )
+
+        # --------------------------------------------------
+        # Statistics
+        # --------------------------------------------------
+
+        cloned._statistics = copy.deepcopy(
+            self._statistics,
+            memo,
+        )
+
+        # --------------------------------------------------
+        # Counters / metrics
+        # --------------------------------------------------
+
+        cloned._forecast_count = self._forecast_count
+        cloned._prediction_count = self._prediction_count
+        cloned._error_count = self._error_count
+
+        cloned._latency = self._latency
+        cloned._uptime = self._uptime
+
+        # --------------------------------------------------
+        # Events / hooks
+        # --------------------------------------------------
+
+        cloned._events = copy.deepcopy(
+            self._events,
+            memo,
+        )
+
+        cloned._hooks = copy.deepcopy(
+            self._hooks,
+            memo,
+        )
+
+        # --------------------------------------------------
+        # Synchronization
+        # --------------------------------------------------
+        #
+        # Never copy the original RLock.
+        # --------------------------------------------------
+
+        cloned._lock = threading.RLock()
+
+        # --------------------------------------------------
+        # Prediction aliases
+        #
+        # Rebind stable instance-level method identities.
+        # --------------------------------------------------
+
+        forecast = cloned.forecast
+        forecast_one = cloned.forecast_one
+        forecast_many = cloned.forecast_many
+        forecast_batch = cloned.forecast_batch
+
+        cloned.forecast = forecast
+        cloned.forecast_one = forecast_one
+        cloned.forecast_many = forecast_many
+        cloned.forecast_batch = forecast_batch
+
+        cloned.predict = forecast
+        cloned.predict_one = forecast_one
+        cloned.predict_many = forecast_many
+        cloned.predict_batch = forecast_batch
+
+        return cloned

@@ -1521,19 +1521,22 @@ class MetricTrendAnalyzer:
     ):
         """
         Create a cloned analyzer.
+
+        The clone preserves the logical identity and runtime state
+        of the source analyzer while remaining a distinct object.
         """
 
         cloned = self.__class__(
-
             name=self._name,
-
             description=self._description,
-
         )
 
         cloned.restore(
             self.snapshot()
         )
+
+        # Preserve logical identity.
+        cloned._id = self._id
 
         return cloned
 

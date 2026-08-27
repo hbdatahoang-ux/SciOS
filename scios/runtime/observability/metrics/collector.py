@@ -2,46 +2,34 @@
 SciOS-NG Metrics Collector
 ==========================
 
-Runtime metric collection layer.
+Runtime metric collection and metric-container layer.
 
 Responsibilities
 -----------------
-- Collect metrics from runtime sources.
-- Aggregate recorded observations.
-- Provide collector lifecycle.
-- Export collected snapshots.
-- Work independently from exporters.
-
-Design
-------
-Collector does NOT know about:
-
-- ExecutionEngine
-- TelemetryPlugin
-- Prometheus
-- OpenTelemetry
-
-It only collects and exposes metrics.
+- Register and manage runtime metrics.
+- Collect metric observations.
+- Manage metric sources.
+- Snapshot and restore metric state.
+- Reset and clear metrics.
+- Merge collectors.
+- Provide thread-safe container semantics.
 
 Python 3.11+
 """
 
 from __future__ import annotations
 
-
+from copy import deepcopy
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any, Callable
-
+from typing import Any, Callable, Iterator
 
 from .registry import MetricRegistry
-
 
 
 __all__ = [
     "MetricCollector",
 ]
-
 
 
 # ==========================================================
@@ -51,21 +39,15 @@ __all__ = [
 
 @dataclass
 class CollectorState:
-    """
-    Collector runtime state.
-    """
-
+    """Runtime state of the collector."""
 
     started_at: float = field(
         default_factory=perf_counter
     )
 
-
     collections: int = 0
 
-
     active: bool = False
-
 
 
 # ==========================================================
@@ -75,122 +57,116 @@ class CollectorState:
 
 class MetricCollector:
     """
-    Metrics collection manager.
+    Runtime metric collector.
 
-    Example
-    -------
-
-        collector = MetricCollector()
-
-        collector.collect(
-            "cpu_usage",
-            25
-        )
-
-        data = collector.snapshot()
-
+    The collector acts as a façade over :class:`MetricRegistry`
+    while also providing runtime collection APIs.
     """
-
-
 
     def __init__(
         self,
         registry: MetricRegistry | None = None,
-    ):
+    ) -> None:
 
         self.registry = (
             registry
-            or MetricRegistry()
+            if registry is not None
+            else MetricRegistry()
         )
 
-
         self.state = CollectorState()
-
 
         self._sources: list[
             Callable[[], dict[str, Any]]
         ] = []
 
-
-
-    # ======================================================
+    # ==========================================================
     # Lifecycle
-    # ======================================================
+    # ==========================================================
 
-
-    def start(
-        self,
-    ) -> None:
-        """
-        Start collector.
-        """
-
+    def start(self) -> None:
+        """Start the collector."""
         self.state.active = True
 
-
-
-    def stop(
-        self,
-    ) -> None:
-        """
-        Stop collector.
-        """
-
+    def stop(self) -> None:
+        """Stop the collector."""
         self.state.active = False
 
-
-
     @property
-    def running(
-        self,
-    ) -> bool:
-
+    def running(self) -> bool:
+        """Whether the collector is running."""
         return self.state.active
 
+    # ==========================================================
+    # Registration
+    # ==========================================================
 
+    def register(self, metric: Any) -> Any:
+        """Register a metric."""
+        return self.registry.register(metric)
 
-    # ======================================================
+    def replace(self, metric: Any) -> Any:
+        """Replace an existing metric."""
+        return self.registry.replace(metric)
+
+    def remove(self, name: str) -> Any | bool:
+        """Remove a metric by name."""
+        return self.registry.remove(name)
+
+    def unregister(self, name: str) -> Any | bool:
+        """Alias for :meth:`remove`."""
+        return self.remove(name)
+
+    # ==========================================================
+    # Lookup
+    # ==========================================================
+
+    def get(
+        self,
+        name: str,
+        default: Any = None,
+    ) -> Any:
+        """Return a metric by name."""
+        return self.registry.get(name, default)
+
+    def exists(self, name: str) -> bool:
+        """Return whether a metric exists."""
+        return self.registry.exists(name)
+
+    @property
+    def empty(self) -> bool:
+        """Whether no metrics are registered."""
+        return len(self) == 0
+
+    # ==========================================================
     # Source Management
-    # ======================================================
-
+    # ==========================================================
 
     def register_source(
         self,
-        source: Callable[
-            [],
-            dict[str, Any]
-        ],
+        source: Callable[[], dict[str, Any]],
     ) -> None:
-        """
-        Register metric source.
-        """
+        """Register a runtime metric source."""
 
-        self._sources.append(
-            source
-        )
+        if not callable(source):
+            raise TypeError(
+                "source must be callable"
+            )
 
-
+        self._sources.append(source)
 
     def unregister_source(
         self,
-        source,
+        source: Callable[[], dict[str, Any]],
     ) -> None:
-        """
-        Remove metric source.
-        """
+        """Remove a registered metric source."""
 
         if source in self._sources:
+            self._sources.remove(source)
 
-            self._sources.remove(
-                source
-            )
-
-
-
-    # ======================================================
+    # ==========================================================
     # Collection API
-    # ======================================================
-
+    # ==========================================================
 
     def collect(
         self,
@@ -198,74 +174,103 @@ class MetricCollector:
         value: Any,
         metric_type: str = "gauge",
         **labels: Any,
-    ):
+    ) -> Any:
         """
-        Collect single metric.
+        Record an observation.
+
+        If the metric already exists, its value is updated using
+        the metric's native API where available.
+
+        Otherwise a compatible metric is created through the
+        registry when possible.
         """
 
-        metric = (
-            self.registry.record(
-                name=name,
-                value=value,
-                metric_type=metric_type,
-                **labels,
+        metric = self.get(name)
+
+        if metric is None:
+            from .counter import Counter
+            from .gauge import Gauge
+            from .histogram import Histogram
+
+            metric_type_normalized = (
+                metric_type.lower()
             )
-        )
 
+            if metric_type_normalized == "counter":
+                metric = Counter(
+                    name,
+                    **labels,
+                )
+
+            elif metric_type_normalized == "histogram":
+                metric = Histogram(
+                    name,
+                    **labels,
+                )
+
+            else:
+                metric = Gauge(
+                    name,
+                    **labels,
+                )
+
+            self.register(metric)
+
+        if metric_type.lower() == "counter":
+            updater = getattr(metric, "inc", None)
+
+            if callable(updater):
+                updater(value)
+
+        elif metric_type.lower() == "histogram":
+            updater = getattr(metric, "observe", None)
+
+            if callable(updater):
+                updater(value)
+
+        else:
+            updater = getattr(metric, "set", None)
+
+            if callable(updater):
+                updater(value)
 
         self.state.collections += 1
 
-
         return metric
-
-
 
     def collect_many(
         self,
         metrics: list[dict[str, Any]],
-    ):
-        """
-        Collect multiple metrics.
-        """
+    ) -> list[Any]:
+        """Collect multiple observations."""
 
-        results = []
-
-
-        for item in metrics:
-
-            results.append(
-                self.collect(
-                    **item
-                )
+        if not isinstance(metrics, list):
+            raise TypeError(
+                "metrics must be a list"
             )
 
+        return [
+            self.collect(**item)
+            for item in metrics
+        ]
 
-        return results
+    def collect_sources(self) -> list[Any]:
+        """Collect metrics from all registered sources."""
 
+        results: list[Any] = []
 
-
-    def collect_sources(
-        self,
-    ):
-        """
-        Collect metrics from registered sources.
-        """
-
-        results = []
-
-
-        for source in self._sources:
-
+        for source in tuple(self._sources):
             data = source()
 
-
             if not data:
-
                 continue
 
+            if not isinstance(data, dict):
+                raise TypeError(
+                    "metric source must return a dictionary"
+                )
 
             for name, value in data.items():
-
                 results.append(
                     self.collect(
                         name,
@@ -273,115 +278,212 @@ class MetricCollector:
                     )
                 )
 
-
         return results
 
-
-
-    # ======================================================
+    # ==========================================================
     # Snapshot
-    # ======================================================
+    # ==========================================================
 
+    def snapshot(self) -> dict[str, Any]:
+        """
+        Return a metric snapshot.
 
-    def snapshot(
+        Runtime lifecycle state intentionally does not appear
+        in this API. This keeps snapshot semantics compatible
+        with the metric-container contract.
+        """
+
+        return self.registry.snapshot()
+
+    # ==========================================================
+    # Restore
+    # ==========================================================
+
+    def restore(
         self,
-    ) -> dict[str, Any]:
+        snapshot: dict[str, Any],
+    ) -> None:
         """
-        Create collector snapshot.
+        Restore metric state from a snapshot.
         """
 
-        elapsed = (
-            perf_counter()
-            -
-            self.state.started_at
-        )
+        self.registry.restore(snapshot)
 
+    # ==========================================================
+    # Reset
+    # ==========================================================
 
-        return {
+    def reset(self) -> None:
+        """
+        Reset all metrics and collector runtime count.
+        """
 
-            "active":
-                self.state.active,
+        self.registry.reset()
 
+        self.state.collections = 0
 
-            "collections":
-                self.state.collections,
+    # ==========================================================
+    # Clear
+    # ==========================================================
 
+    def clear(self) -> None:
+        """Remove all registered metrics."""
 
-            "sources":
-                len(
-                    self._sources
-                ),
+        self.registry.clear()
 
+        self.state.collections = 0
 
-            "elapsed":
-                elapsed,
+    # ==========================================================
+    # Merge
+    # ==========================================================
 
-
-            "metrics":
-                self.registry.snapshot(),
-        }
-
-
-
-    def report(
+    def merge(
         self,
-    ) -> dict[str, Any]:
+        other: "MetricCollector",
+    ) -> "MetricCollector":
         """
-        Human readable report.
+        Merge another collector into this collector.
+
+        Existing metrics are left untouched. Missing metrics are
+        copied into this collector.
+        """
+
+        if not isinstance(
+            other,
+            MetricCollector,
+        ):
+            raise TypeError(
+                "other must be a MetricCollector"
+            )
+
+        for name, metric in other.registry.items():
+
+            if name in self.registry:
+                continue
+
+            if hasattr(metric, "copy"):
+                merged_metric = metric.copy()
+            else:
+                merged_metric = deepcopy(metric)
+
+            self.register(merged_metric)
+
+        return self
+
+    # ==========================================================
+    # Report
+    # ==========================================================
+
+    def report(self) -> dict[str, Any]:
+        """
+        Return a metric report.
+
+        This intentionally aliases snapshot() so metric state
+        remains the canonical exported representation.
         """
 
         return self.snapshot()
 
+    # ==========================================================
+    # Container Protocols
+    # ==========================================================
 
-
-    # ======================================================
-    # Reset
-    # ======================================================
-
-
-    def reset(
-        self,
-    ) -> None:
+    def __len__(self) -> int:
         """
-        Reset collector state.
+        Number of registered metrics.
         """
 
-        self.state = CollectorState()
+        return len(self.registry)
 
+    def __bool__(self) -> bool:
+        """Collector is truthy when it contains metrics."""
+        return not self.empty
 
-        self.registry.reset()
+    def __iter__(self) -> Iterator[Any]:
+        """
+        Iterate over metric instances.
+        """
 
-
-
-    # ======================================================
-    # Protocols
-    # ======================================================
-
-
-    def __len__(
-        self,
-    ) -> int:
-
-        return self.state.collections
-
-
-
-    def __bool__(
-        self,
-    ) -> bool:
-
-        return (
-            self.state.collections > 0
+        return iter(
+            tuple(self.registry.values())
         )
 
+    def __contains__(self, key: object) -> bool:
+        """Return whether a metric name is registered."""
+        return key in self.registry
 
+    def __getitem__(self, key: str) -> Any:
+        """Get metric by name."""
+        return self.registry[key]
 
-    def __repr__(
+    def __setitem__(
         self,
-    ) -> str:
+        key: str,
+        value: Any,
+    ) -> None:
+        """Register or replace metric under key."""
+
+        if value is None:
+            raise TypeError(
+                "value cannot be None"
+            )
+
+        metric_name = getattr(
+            value,
+            "name",
+            None,
+        )
+
+        if metric_name != key:
+            raise ValueError(
+                f"metric name {metric_name!r} "
+                f"does not match key {key!r}"
+            )
+
+        if key in self.registry:
+            self.registry.replace(value)
+        else:
+            self.registry.register(value)
+
+    def __delitem__(self, key: str) -> None:
+        """Remove metric by name."""
+
+        result = self.registry.remove(key)
+
+        if result is False:
+            raise KeyError(key)
+
+    # ==========================================================
+    # Mapping Helpers
+    # ==========================================================
+
+    def keys(self) -> list[str]:
+        """Return metric names."""
+        return self.registry.names()
+
+    def values(self) -> list[Any]:
+        """Return metric instances."""
+        return self.registry.values()
+
+    def items(self) -> list[tuple[str, Any]]:
+        """Return metric items."""
+        return self.registry.items()
+
+    def metrics(self) -> list[Any]:
+        """Return metrics as a list."""
+        return self.registry.values()
+
+    # ==========================================================
+    # Representation
+    # ==========================================================
+
+    def __repr__(self) -> str:
+        names = self.keys()
 
         return (
             "MetricCollector("
+            f"metrics={len(self)}, "
+            f"names={names!r}, "
             f"collections={self.state.collections}, "
             f"sources={len(self._sources)}"
             ")"

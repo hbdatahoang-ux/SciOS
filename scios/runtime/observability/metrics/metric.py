@@ -82,6 +82,9 @@ class Metric:
     namespace: str = "scios"
 
 
+    unit: str = ""
+
+
 
     # ======================================================
     # Labels
@@ -163,21 +166,20 @@ class Metric:
         Validate metric definition.
         """
 
-
         if not self.name:
-
             raise ValueError(
                 "metric name cannot be empty"
             )
 
-
-
         if " " in self.name:
-
             raise ValueError(
                 "metric name cannot contain spaces"
             )
 
+        if not isinstance(self.unit, str):
+            raise TypeError(
+                "metric unit must be a string"
+            )
 
 
     # ======================================================
@@ -335,46 +337,83 @@ class Metric:
         """
 
         return {
-
-            "name":
-                self.name,
-
-
-            "full_name":
-                self.full_name,
-
-
-            "description":
-                self.description,
-
-
-            "namespace":
-                self.namespace,
-
-
-            "labels":
-                self.labels.to_dict(),
-
-
-            "metadata":
-                deepcopy(
-                    self.metadata
-                ),
-
-
-            "enabled":
-                self.enabled,
-
-
-            "created_at":
-                self.created_at,
-
-
-            "updated_at":
-                self.updated_at,
+            "name": self.name,
+            "full_name": self.full_name,
+            "description": self.description,
+            "namespace": self.namespace,
+            "unit": self.unit,
+            "labels": self.labels.to_dict(),
+            "metadata": deepcopy(self.metadata),
+            "enabled": self.enabled,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 
+    # ======================================================
+    # Restore
+    # ======================================================
+
+    def restore(
+        self,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """
+        Restore common metric state from a snapshot.
+
+        Subclasses are responsible for restoring their own
+        metric-specific state such as numeric values,
+        buckets, samples, or timing state.
+        """
+
+        if not isinstance(snapshot, dict):
+            raise TypeError(
+                "snapshot must be a dictionary"
+            )
+
+        if "name" in snapshot:
+            self.name = snapshot["name"]
+
+        if "description" in snapshot:
+            self.description = snapshot["description"]
+
+        if "namespace" in snapshot:
+            self.namespace = snapshot["namespace"]
+
+        if "unit" in snapshot:
+            self.unit = snapshot["unit"]
+
+        if "labels" in snapshot:
+            labels = snapshot["labels"]
+
+            if isinstance(labels, MetricLabels):
+                self.labels = labels
+            else:
+                self.labels = MetricLabels(
+                    **dict(labels)
+                )
+
+        if "metadata" in snapshot:
+            self.metadata = deepcopy(
+                snapshot["metadata"]
+            )
+
+        if "enabled" in snapshot:
+            self.enabled = bool(
+                snapshot["enabled"]
+            )
+
+        if "created_at" in snapshot:
+            self.created_at = float(
+                snapshot["created_at"]
+            )
+
+        if "updated_at" in snapshot:
+            self.updated_at = float(
+                snapshot["updated_at"]
+            )
+
+        self.validate()
 
     # ======================================================
     # Copy

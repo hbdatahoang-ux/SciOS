@@ -1,2371 +1,1474 @@
 """
+Metric Bottleneck Detection
+===========================
+
 SciOS-NG Runtime Metrics Analysis
 
-Bottleneck Detection Engine
+This module provides a deterministic, stateful bottleneck detector for
+runtime metrics.
 
-SciOS/scios/runtime/observability/metrics/analysis/bottleneck.py
+Design contract
+---------------
+* Built-in algorithms are available as methods.
+* The algorithm registry starts empty.
+* Built-in algorithms are explicitly registered through
+  ``register_builtin_algorithms()``.
+* ``pipeline()`` is independent of the registry.
+* ``detect()`` executes algorithms through the registry.
+* Runtime state, statistics, history, hooks, snapshots, cloning and
+  serialization are supported.
 """
 
 from __future__ import annotations
 
-import threading
+import copy
+import json
 import time
 import uuid
-
-from datetime import datetime
-from typing import Any, Callable
-
-from .statistics import MetricStatistics
+from datetime import datetime, timezone
+from typing import Any, Callable, Iterable, Mapping
 
 
-# ==========================================================
+# ============================================================================
+# Types
+# ============================================================================
+
+AlgorithmCallable = Callable[..., Mapping[str, Any]]
+HookCallable = Callable[..., Any]
+
+
+# ============================================================================
 # MetricBottleneckDetector
-# ==========================================================
+# ============================================================================
+
 
 class MetricBottleneckDetector:
     """
-    Runtime Metrics Bottleneck Detection Engine.
+    Stateful runtime metric bottleneck detector.
 
-    Features
-    --------
-    - Latency Detection
-    - Throughput Analysis
-    - Resource Utilization
-    - Queue Analysis
-    - Contention Detection
-    - Saturation Detection
-    - Dependency Analysis
-    - Pipeline Bottleneck Detection
-    - Custom Detection Algorithms
+    The detector exposes seven canonical built-in detection algorithms:
+
+    * latency
+    * throughput
+    * utilization
+    * queue
+    * contention
+    * saturation
+    * dependency
+
+    Additional composite/helper algorithms:
+
+    * pipeline
+    * custom
+
+    The registry is intentionally empty after construction. Call
+    ``register_builtin_algorithms()`` when registry-based execution is
+    required.
     """
 
-    # ======================================================
-    # Part 1. Foundation
-    # ======================================================
+    VERSION = "0.2.0"
+
+    DEFAULT_CONFIG = {
+        "latency_threshold": 100.0,
+        "throughput_threshold": 1000.0,
+        "utilization_threshold": 0.80,
+        "queue_threshold": 100,
+        "contention_threshold": 0.75,
+        "saturation_threshold": 0.90,
+        "dependency_depth": 5,
+    }
+
+    BUILTIN_ALGORITHM_NAMES = (
+        "latency",
+        "throughput",
+        "utilization",
+        "queue",
+        "contention",
+        "saturation",
+        "dependency",
+        "pipeline",
+        "custom",
+    )
+
+    PIPELINE_ALGORITHM_NAMES = (
+        "latency",
+        "throughput",
+        "utilization",
+        "queue",
+        "contention",
+        "saturation",
+        "dependency",
+    )
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
         name: str = "MetricBottleneckDetector",
         description: str = "",
+        *,
+        config: Mapping[str, Any] | None = None,
     ) -> None:
+        self.name = str(name)
+        self.description = str(description)
+        self.version = self.VERSION
 
-        # --------------------------------------------------
-        # Identity
-        # --------------------------------------------------
+        self.id = str(uuid.uuid4())
 
-        self._id = str(uuid.uuid4())
-
-        self._name = name
-
-        self._description = description
-
-        self._version = "0.2.0"
-
-        # --------------------------------------------------
-        # Runtime State
-        # --------------------------------------------------
+        now = self._now_iso()
+        self.created_at = now
+        self.updated_at = now
 
         self._enabled = True
-
         self._frozen = False
-
         self._closed = False
-
         self._running = False
 
-        # --------------------------------------------------
-        # Bottleneck Configuration
-        # --------------------------------------------------
+        self._config = copy.deepcopy(self.DEFAULT_CONFIG)
 
-        self._config = {
+        if config is not None:
+            self._config.update(dict(config))
 
-            "latency_threshold": 100.0,
-
-            "throughput_threshold": 1000.0,
-
-            "utilization_threshold": 0.80,
-
-            "queue_threshold": 100,
-
-            "contention_threshold": 0.75,
-
-            "saturation_threshold": 0.90,
-
-            "dependency_depth": 5,
-
-        }
-
-        # --------------------------------------------------
-        # Detector Registry
-        # --------------------------------------------------
-
-        self._algorithms: dict[
-            str,
-            dict[str, Any],
-        ] = {}
-
-        self._history: list[dict] = []
-
-        self._last_result: dict | None = None
-
-        # --------------------------------------------------
-        # Metadata
-        # --------------------------------------------------
-
-        self._created_at = datetime.utcnow()
-
-        self._updated_at = self._created_at
-
-        self._started_at = time.perf_counter()
-
-        # --------------------------------------------------
-        # Statistics
-        # --------------------------------------------------
-
-        self._statistics = MetricStatistics()
-
-        self._bottleneck_count = 0
+        self._algorithms: dict[str, dict[str, Any]] = {}
 
         self._detection_count = 0
-
+        self._bottleneck_count = 0
         self._error_count = 0
 
-        self._latency = 0.0
+        self._latest_latency = 0.0
+        self._history: list[dict[str, Any]] = []
+        self._last_result: dict[str, Any] | None = None
 
-        # --------------------------------------------------
-        # Events
-        # --------------------------------------------------
+        self._hooks: dict[str, list[HookCallable]] = {}
+        self._events: list[dict[str, Any]] = []
 
-        self._hooks: dict[
-            str,
-            list[Callable],
-        ] = {}
+        self._started_monotonic = time.monotonic()
 
-        self._events: list[dict] = []
+    # ==================================================================
+    # Time helpers
+    # ==================================================================
 
-        # --------------------------------------------------
-        # Runtime Objects
-        # --------------------------------------------------
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
-        self._snapshot = None
+    def _touch(self) -> None:
+        self.updated_at = self._now_iso()
 
-        self._context: dict[
-            str,
-            Any,
-        ] = {}
-
-        self._lock = threading.RLock()
-
-    # ======================================================
+    # ==================================================================
     # Identity
-    # ======================================================
+    # ==================================================================
 
     @property
-    def id(self) -> str:
-
-        return self._id
-
-    @property
-    def name(self) -> str:
-
-        return self._name
-
-    @property
-    def description(self) -> str:
-
-        return self._description
-
-    @property
-    def version(self) -> str:
-
-        return self._version
-
-    # ======================================================
-    # Runtime State
-    # ======================================================
+    def active(self) -> bool:
+        return (
+            self._enabled
+            and not self._frozen
+            and not self._closed
+        )
 
     @property
     def enabled(self) -> bool:
-
         return self._enabled
 
     @property
     def disabled(self) -> bool:
-
         return not self._enabled
 
     @property
     def frozen(self) -> bool:
-
         return self._frozen
 
     @property
     def closed(self) -> bool:
-
         return self._closed
 
     @property
     def running(self) -> bool:
-
         return self._running
 
+    # ==================================================================
+    # Runtime lifecycle
+    # ==================================================================
+
+    def enable(self) -> MetricBottleneckDetector:
+        self._enabled = True
+        self._touch()
+        return self
+
+    def disable(self) -> MetricBottleneckDetector:
+        self._enabled = False
+        self._running = False
+        self._touch()
+        return self
+
+    def freeze(self) -> MetricBottleneckDetector:
+        self._frozen = True
+        self._running = False
+        self._touch()
+        return self
+
+    def unfreeze(self) -> MetricBottleneckDetector:
+        self._frozen = False
+        self._touch()
+        return self
+
+    def close(self) -> MetricBottleneckDetector:
+        self._closed = True
+        self._running = False
+        self._touch()
+        return self
+
+    def reopen(self) -> MetricBottleneckDetector:
+        self._closed = False
+        self._touch()
+        return self
+
+    def _require_active(self) -> None:
+        if not self.active:
+            raise RuntimeError(
+                "MetricBottleneckDetector is not active"
+            )
+
+    # ==================================================================
+    # Configuration
+    # ==================================================================
+
     @property
-    def active(self) -> bool:
-
-        return (
-
-            self._enabled
-            and
-            not self._frozen
-            and
-            not self._closed
-
-        )
-
-    # ======================================================
-    # Bottleneck Configuration
-    # ======================================================
-
-    @property
-    def config(self) -> dict:
-
-        return dict(
-            self._config
-        )
+    def config(self) -> dict[str, Any]:
+        return copy.deepcopy(self._config)
 
     def configure(
         self,
-        **kwargs,
-    ):
-        """
-        Update detector configuration.
-        """
+        **kwargs: Any,
+    ) -> MetricBottleneckDetector:
+        unknown = set(kwargs) - set(self.DEFAULT_CONFIG)
 
-        with self._lock:
-
-            self._config.update(
-                kwargs
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise KeyError(
+                f"Unknown bottleneck configuration: {names}"
             )
 
-            self._updated_at = datetime.utcnow()
-
+        self._config.update(kwargs)
+        self._touch()
         return self
 
-    # ======================================================
-    # Metadata
-    # ======================================================
-
-    @property
-    def created_at(self):
-
-        return self._created_at
-
-    @property
-    def updated_at(self):
-
-        return self._updated_at
-
-    # ======================================================
+    # ==================================================================
     # Statistics
-    # ======================================================
+    # ==================================================================
 
     @property
-    def statistics(self):
+    def detection_count(self) -> int:
+        return self._detection_count
 
-        return self._statistics
+    @property
+    def bottleneck_count(self) -> int:
+        return self._bottleneck_count
 
-    # ======================================================
-    # NOTE
-    # ======================================================
-    # Part 2  : Detection API
-    # Part 3  : Detection Algorithms
-    # Part 4  : Detector Registry API
-    # Part 5  : Lifecycle
-    # Part 6  : Runtime Operations
-    # Part 7  : Statistics & Diagnostics
-    # Part 8  : Serialization
-    # Part 9  : Events & Hooks
-    # Part 10 : Python Protocols
-    # ======================================================
-    # ======================================================
-    # Part 2. Detection API
-    # ======================================================
+    @property
+    def error_count(self) -> int:
+        return self._error_count
 
-    def detect(
+    @property
+    def latest_latency(self) -> float:
+        return self._latest_latency
+
+    @property
+    def latency_value(self) -> float:
+        return self._latest_latency
+
+    @property
+    def history_size(self) -> int:
+        return len(self._history)
+
+    @property
+    def last_result(self) -> dict[str, Any] | None:
+        return copy.deepcopy(self._last_result)
+
+    @property
+    def statistics(self) -> dict[str, Any]:
+        return {
+            "detection_count": self._detection_count,
+            "bottleneck_count": self._bottleneck_count,
+            "error_count": self._error_count,
+            "latency": self._latest_latency,
+            "history_size": len(self._history),
+        }
+
+    # ==================================================================
+    # Generic metric helpers
+    # ==================================================================
+
+    def _metric(
         self,
-        metrics,
-        method: str = "latency",
-        **kwargs,
-    ):
-        """
-        Detect runtime bottlenecks.
-
-        Parameters
-        ----------
-        metrics:
-            Runtime metrics.
-
-        method:
-            Detection algorithm.
-
-        Returns
-        -------
-        dict
-        """
-
-        if not self.active:
-
-            raise RuntimeError(
-                "MetricBottleneckDetector is not active."
-            )
-
-        entry = self._algorithms.get(
-            method
-        )
-
-        if entry is None:
-
-            raise KeyError(
-                f"Unknown bottleneck algorithm: {method}"
-            )
-
-        if not entry.get(
-            "enabled",
-            True,
-        ):
-
-            raise RuntimeError(
-                f"Bottleneck algorithm '{method}' is disabled."
-            )
-
-        start = time.perf_counter()
-
-        self._running = True
+        metrics: Mapping[str, Any],
+        name: str,
+        default: float = 0.0,
+    ) -> float:
+        value = metrics.get(name, default)
 
         try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
 
-            result = entry["callable"](
+    @staticmethod
+    def _severity(
+        bottleneck: bool,
+        *,
+        critical: bool = False,
+    ) -> str:
+        if not bottleneck:
+            return "normal"
 
-                metrics,
+        return "critical" if critical else "high"
 
-                **kwargs,
-
-            )
-
-            self._latency = (
-
-                time.perf_counter()
-
-                -
-
-                start
-
-            )
-
-            self._detection_count += 1
-
-            if isinstance(
-                result,
-                dict,
-            ):
-
-                if result.get(
-                    "bottleneck",
-                    False,
-                ):
-
-                    self._bottleneck_count += 1
-
-            self._last_result = result
-
-            self._history.append(
-                result
-            )
-
-            self._updated_at = datetime.utcnow()
-
-            return result
-
-        except Exception:
-
-            self._error_count += 1
-
-            raise
-
-        finally:
-
-            self._running = False
-
-    def detect_one(
+    def _result(
         self,
-        metrics,
-        method: str = "latency",
-        **kwargs,
-    ):
-        """
-        Detect bottleneck from one metric sample.
-        """
+        algorithm: str,
+        metric: float,
+        threshold: float,
+        bottleneck: bool,
+        *,
+        critical: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "algorithm": algorithm,
+            "metric": metric,
+            "threshold": threshold,
+            "bottleneck": bool(bottleneck),
+            "severity": self._severity(
+                bottleneck,
+                critical=critical,
+            ),
+        }
 
-        return self.detect(
-
-            metrics,
-
-            method=method,
-
-            **kwargs,
-
-        )
-
-    def detect_many(
-        self,
-        datasets,
-        method: str = "latency",
-        **kwargs,
-    ):
-        """
-        Detect bottlenecks from multiple datasets.
-        """
-
-        results = []
-
-        for metrics in datasets:
-
-            results.append(
-
-                self.detect(
-
-                    metrics,
-
-                    method=method,
-
-                    **kwargs,
-
-                )
-
-            )
-
-        return results
-
-    def detect_batch(
-        self,
-        batches,
-        method: str = "latency",
-        **kwargs,
-    ):
-        """
-        Batch bottleneck detection.
-        """
-
-        return self.detect_many(
-
-            batches,
-
-            method=method,
-
-            **kwargs,
-
-        )
-
-    # ------------------------------------------------------
-    # Aliases
-    # ------------------------------------------------------
-
-    run = detect
-
-    execute = detect
-
-    process = detect
-    # ======================================================
-    # Part 3. Detection Algorithms
-    # ======================================================
+    # ==================================================================
+    # Part 1. Built-in Algorithms
+    # ==================================================================
 
     def latency(
         self,
-        metrics,
+        metrics: Mapping[str, Any],
         *,
         threshold: float | None = None,
-    ):
-        """
-        Detect latency bottlenecks.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "latency_threshold"
-            ]
-
+    ) -> dict[str, Any]:
+        value = self._metric(metrics, "latency")
+        limit = (
+            self._config["latency_threshold"]
+            if threshold is None
+            else threshold
         )
 
-        value = float(
-
-            metrics.get(
-                "latency",
-                0.0,
-            )
-
+        return self._result(
+            "latency",
+            value,
+            limit,
+            value >= limit,
         )
-
-        return {
-
-            "algorithm": "latency",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "bottleneck":
-                value >= threshold,
-
-            "severity":
-
-                "high"
-
-                if value >= threshold
-
-                else
-
-                "normal",
-
-        }
 
     def throughput(
         self,
-        metrics,
+        metrics: Mapping[str, Any],
         *,
         threshold: float | None = None,
-    ):
-        """
-        Detect throughput bottlenecks.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "throughput_threshold"
-            ]
-
+    ) -> dict[str, Any]:
+        value = self._metric(metrics, "throughput")
+        limit = (
+            self._config["throughput_threshold"]
+            if threshold is None
+            else threshold
         )
 
-        value = float(
-
-            metrics.get(
-                "throughput",
-                0.0,
-            )
-
+        return self._result(
+            "throughput",
+            value,
+            limit,
+            value <= limit,
         )
-
-        return {
-
-            "algorithm": "throughput",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "bottleneck":
-                value <= threshold,
-
-            "severity":
-
-                "high"
-
-                if value <= threshold
-
-                else
-
-                "normal",
-
-        }
 
     def utilization(
         self,
-        metrics,
+        metrics: Mapping[str, Any],
         *,
         threshold: float | None = None,
-    ):
-        """
-        Detect resource utilization bottlenecks.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "utilization_threshold"
-            ]
-
+    ) -> dict[str, Any]:
+        value = self._metric(metrics, "utilization")
+        limit = (
+            self._config["utilization_threshold"]
+            if threshold is None
+            else threshold
         )
 
-        value = float(
-
-            metrics.get(
-                "utilization",
-                0.0,
-            )
-
+        return self._result(
+            "utilization",
+            value,
+            limit,
+            value >= limit,
         )
-
-        return {
-
-            "algorithm": "utilization",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "bottleneck":
-                value >= threshold,
-
-            "severity":
-
-                "high"
-
-                if value >= threshold
-
-                else
-
-                "normal",
-
-        }
 
     def queue(
         self,
-        metrics,
+        metrics: Mapping[str, Any],
         *,
-        threshold: int | None = None,
-    ):
-        """
-        Detect queue bottlenecks.
-        """
+        threshold: float | None = None,
+    ) -> dict[str, Any]:
+        if "queue" in metrics:
+            value = self._metric(metrics, "queue")
+        else:
+            value = self._metric(metrics, "queue_size")
 
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "queue_threshold"
-            ]
-
+        limit = (
+            self._config["queue_threshold"]
+            if threshold is None
+            else threshold
         )
 
-        value = int(
-
-            metrics.get(
-                "queue_size",
-                0,
-            )
-
+        return self._result(
+            "queue",
+            value,
+            limit,
+            value >= limit,
         )
-
-        return {
-
-            "algorithm": "queue",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "bottleneck":
-                value >= threshold,
-
-            "severity":
-
-                "high"
-
-                if value >= threshold
-
-                else
-
-                "normal",
-
-        }
 
     def contention(
         self,
-        metrics,
+        metrics: Mapping[str, Any],
         *,
         threshold: float | None = None,
-    ):
-        """
-        Detect lock/contention bottlenecks.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "contention_threshold"
-            ]
-
+    ) -> dict[str, Any]:
+        value = self._metric(metrics, "contention")
+        limit = (
+            self._config["contention_threshold"]
+            if threshold is None
+            else threshold
         )
 
-        value = float(
-
-            metrics.get(
-                "contention",
-                0.0,
-            )
-
+        return self._result(
+            "contention",
+            value,
+            limit,
+            value >= limit,
         )
-
-        return {
-
-            "algorithm": "contention",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "bottleneck":
-                value >= threshold,
-
-            "severity":
-
-                "high"
-
-                if value >= threshold
-
-                else
-
-                "normal",
-
-        }
 
     def saturation(
         self,
-        metrics,
+        metrics: Mapping[str, Any],
         *,
         threshold: float | None = None,
-    ):
-        """
-        Detect resource saturation.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "saturation_threshold"
-            ]
-
+    ) -> dict[str, Any]:
+        value = self._metric(metrics, "saturation")
+        limit = (
+            self._config["saturation_threshold"]
+            if threshold is None
+            else threshold
         )
 
-        value = float(
-
-            metrics.get(
-                "saturation",
-                0.0,
-            )
-
+        return self._result(
+            "saturation",
+            value,
+            limit,
+            value >= limit,
+            critical=True,
         )
-
-        return {
-
-            "algorithm": "saturation",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "bottleneck":
-                value >= threshold,
-
-            "severity":
-
-                "critical"
-
-                if value >= threshold
-
-                else
-
-                "normal",
-
-        }
 
     def dependency(
         self,
-        metrics,
+        metrics: Mapping[str, Any],
         *,
-        threshold: int | None = None,
-    ):
-        """
-        Detect dependency-chain bottlenecks.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "dependency_depth"
-            ]
-
+        threshold: float | None = None,
+    ) -> dict[str, Any]:
+        value = self._metric(metrics, "dependency_depth")
+        limit = (
+            self._config["dependency_depth"]
+            if threshold is None
+            else threshold
         )
 
-        value = int(
-
-            metrics.get(
-                "dependency_depth",
-                0,
-            )
-
+        return self._result(
+            "dependency",
+            value,
+            limit,
+            value >= limit,
         )
 
-        return {
-
-            "algorithm": "dependency",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "bottleneck":
-                value >= threshold,
-
-            "severity":
-
-                "high"
-
-                if value >= threshold
-
-                else
-
-                "normal",
-
-        }
+    # ==================================================================
+    # Part 2. Pipeline
+    # ==================================================================
 
     def pipeline(
         self,
-        metrics,
-    ):
-        """
-        Detect pipeline bottlenecks using all
-        built-in detectors.
-        """
-
+        metrics: Mapping[str, Any],
+    ) -> dict[str, Any]:
         results = [
-
             self.latency(metrics),
-
             self.throughput(metrics),
-
             self.utilization(metrics),
-
             self.queue(metrics),
-
             self.contention(metrics),
-
             self.saturation(metrics),
-
             self.dependency(metrics),
-
         ]
 
         bottlenecks = [
-
-            item
-
-            for item in results
-
-            if item["bottleneck"]
-
+            result
+            for result in results
+            if result["bottleneck"]
         ]
 
         return {
-
             "algorithm": "pipeline",
-
-            "bottleneck":
-                bool(bottlenecks),
-
-            "count":
-                len(bottlenecks),
-
-            "results":
-                results,
-
+            "bottleneck": bool(bottlenecks),
+            "count": len(bottlenecks),
+            "results": results,
         }
+
+    # ==================================================================
+    # Part 3. Custom Detection
+    # ==================================================================
 
     def custom(
         self,
-        metrics,
-        detector,
-        **kwargs,
-    ):
-        """
-        User-defined bottleneck detector.
-        """
+        metrics: Mapping[str, Any],
+        detector: AlgorithmCallable,
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        if not callable(detector):
+            raise TypeError("detector must be callable")
 
-        if not callable(
-            detector
-        ):
+        return detector(metrics, **kwargs)
 
-            raise TypeError(
-                "detector must be callable."
-            )
-
-        return detector(
-
-            metrics,
-
-            **kwargs,
-
-        )
-    # ======================================================
-    # Part 4. Detector Registry API
-    # ======================================================
+    # ==================================================================
+    # Part 4. Registry
+    # ==================================================================
 
     def register_algorithm(
         self,
         name: str,
-        algorithm: Callable,
+        algorithm: AlgorithmCallable,
         *,
         enabled: bool = True,
-        metadata: dict | None = None,
-    ):
-        """
-        Register a bottleneck detection algorithm.
-        """
-
+        metadata: Mapping[str, Any] | None = None,
+    ) -> MetricBottleneckDetector:
         if not callable(algorithm):
+            raise TypeError("algorithm must be callable")
 
-            raise TypeError(
-                "algorithm must be callable."
-            )
+        key = str(name)
 
-        with self._lock:
+        self._algorithms[key] = {
+            "name": key,
+            "callable": algorithm,
+            "enabled": bool(enabled),
+            "metadata": copy.deepcopy(
+                dict(metadata or {})
+            ),
+        }
 
-            self._algorithms[name] = {
-
-                "name": name,
-
-                "callable": algorithm,
-
-                "enabled": enabled,
-
-                "metadata": metadata or {},
-
-                "created_at": datetime.utcnow(),
-
-            }
-
-            self._updated_at = datetime.utcnow()
-
+        self._touch()
         return self
 
     def remove_algorithm(
         self,
         name: str,
-    ):
-        """
-        Remove a registered algorithm.
-        """
-
-        with self._lock:
-
-            self._algorithms.pop(
-                name,
-                None,
-            )
-
-            self._updated_at = datetime.utcnow()
-
+    ) -> MetricBottleneckDetector:
+        self._algorithms.pop(str(name), None)
+        self._touch()
         return self
 
-    # ------------------------------------------------------
-    # Backward Compatibility
-    # ------------------------------------------------------
+    def unregister_algorithm(
+        self,
+        name: str,
+    ) -> MetricBottleneckDetector:
+        return self.remove_algorithm(name)
 
-    unregister_algorithm = remove_algorithm
+    def algorithms(self) -> dict[str, dict[str, Any]]:
+        return copy.deepcopy(self._algorithms)
+
+    def algorithm_names(self) -> list[str]:
+        return list(self._algorithms.keys())
+
+    @property
+    def algorithm_count(self) -> int:
+        return len(self._algorithms)
+
+    def contains_algorithm(self, name: str) -> bool:
+        return str(name) in self._algorithms
+
+    def exists_algorithm(self, name: str) -> bool:
+        return self.contains_algorithm(name)
 
     def algorithm(
         self,
         name: str,
-        default=None,
-    ):
-        """
-        Return algorithm metadata.
-        """
+        default: Any = None,
+    ) -> Any:
+        entry = self._algorithms.get(str(name))
 
-        return self._algorithms.get(
-            name,
-            default,
-        )
+        if entry is None:
+            return default
 
-    def algorithms(
-        self,
-    ):
-        """
-        Return all registered algorithms.
-        """
-
-        return dict(
-            self._algorithms
-        )
-
-    def contains_algorithm(
-        self,
-        name: str,
-    ) -> bool:
-        """
-        Whether an algorithm exists.
-        """
-
-        return (
-
-            name
-
-            in
-
-            self._algorithms
-
-        )
-
-    def exists_algorithm(
-        self,
-        name: str,
-    ) -> bool:
-        """
-        Alias of contains_algorithm().
-        """
-
-        return self.contains_algorithm(
-            name
-        )
+        return copy.deepcopy(entry)
 
     def enable_algorithm(
         self,
         name: str,
-    ):
-        """
-        Enable a registered algorithm.
-        """
-
-        entry = self._algorithms.get(
-            name
-        )
+    ) -> MetricBottleneckDetector:
+        entry = self._algorithms.get(str(name))
 
         if entry is not None:
-
             entry["enabled"] = True
-
-            self._updated_at = datetime.utcnow()
+            self._touch()
 
         return self
 
     def disable_algorithm(
         self,
         name: str,
-    ):
-        """
-        Disable a registered algorithm.
-        """
-
-        entry = self._algorithms.get(
-            name
-        )
+    ) -> MetricBottleneckDetector:
+        entry = self._algorithms.get(str(name))
 
         if entry is not None:
-
             entry["enabled"] = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def algorithm_names(
-        self,
-    ):
-        """
-        Return registered algorithm names.
-        """
-
-        return list(
-            self._algorithms.keys()
-        )
-
-    @property
-    def algorithm_count(
-        self,
-    ) -> int:
-        """
-        Number of registered algorithms.
-        """
-
-        return len(
-            self._algorithms
-        )
-
-    def clear_algorithms(
-        self,
-    ):
-        """
-        Remove all registered algorithms.
-        """
-
-        with self._lock:
-
-            self._algorithms.clear()
-
-            self._updated_at = datetime.utcnow()
+            self._touch()
 
         return self
 
-    def execute_algorithm(
-        self,
-        name: str,
-        metrics,
-        **kwargs,
-    ):
-        """
-        Execute a registered algorithm.
-        """
-
-        entry = self._algorithms.get(
-            name
-        )
-
-        if entry is None:
-
-            raise KeyError(
-                f"Unknown bottleneck algorithm: {name}"
-            )
-
-        if not entry.get(
-            "enabled",
-            True,
-        ):
-
-            raise RuntimeError(
-                f"Bottleneck algorithm '{name}' is disabled."
-            )
-
-        return entry["callable"](
-
-            metrics,
-
-            **kwargs,
-
-        )
+    # ==================================================================
+    # Part 5. Built-in Registry
+    # ==================================================================
 
     def register_builtin_algorithms(
         self,
-    ):
-        """
-        Register all built-in detection algorithms.
-        """
-
+    ) -> MetricBottleneckDetector:
         self.register_algorithm(
             "latency",
             self.latency,
         )
-
         self.register_algorithm(
             "throughput",
             self.throughput,
         )
-
         self.register_algorithm(
             "utilization",
             self.utilization,
         )
-
         self.register_algorithm(
             "queue",
             self.queue,
         )
-
         self.register_algorithm(
             "contention",
             self.contention,
         )
-
         self.register_algorithm(
             "saturation",
             self.saturation,
         )
-
         self.register_algorithm(
             "dependency",
             self.dependency,
         )
-
         self.register_algorithm(
             "pipeline",
             self.pipeline,
         )
-
         self.register_algorithm(
             "custom",
             self.custom,
         )
 
         return self
-    # ======================================================
-    # Part 5. Lifecycle
-    # ======================================================
 
-    def enable(
+    # ==================================================================
+    # Part 6. Registry Execution
+    # ==================================================================
+
+    def execute_algorithm(
         self,
-    ):
-        """
-        Enable the bottleneck detector.
-        """
-
-        with self._lock:
-
-            self._enabled = True
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def disable(
-        self,
-    ):
-        """
-        Disable the bottleneck detector.
-        """
-
-        with self._lock:
-
-            self._enabled = False
-
-            self._running = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def freeze(
-        self,
-    ):
-        """
-        Freeze the bottleneck detector.
-        """
-
-        with self._lock:
-
-            self._frozen = True
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def unfreeze(
-        self,
-    ):
-        """
-        Unfreeze the bottleneck detector.
-        """
-
-        with self._lock:
-
-            self._frozen = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def close(
-        self,
-    ):
-        """
-        Close the bottleneck detector.
-        """
-
-        with self._lock:
-
-            self._closed = True
-
-            self._running = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def reopen(
-        self,
-    ):
-        """
-        Reopen the bottleneck detector.
-        """
-
-        with self._lock:
-
-            self._closed = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-    # ======================================================
-    # Part 6. Runtime Operations
-    # ======================================================
-
-    def reset(
-        self,
-    ):
-        """
-        Reset runtime statistics while preserving configuration
-        and registered algorithms.
-        """
-
-        with self._lock:
-
-            self._bottleneck_count = 0
-
-            self._detection_count = 0
-
-            self._error_count = 0
-
-            self._latency = 0.0
-
-            self._running = False
-
-            self._last_result = None
-
-            self._history.clear()
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def clear(
-        self,
-    ):
-        """
-        Clear runtime history.
-        """
-
-        with self._lock:
-
-            self._history.clear()
-
-            self._last_result = None
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def snapshot(
-        self,
-    ):
-        """
-        Create a runtime snapshot.
-        """
-
-        with self._lock:
-
-            self._snapshot = {
-
-                "config": dict(
-                    self._config
-                ),
-
-                "history": list(
-                    self._history
-                ),
-
-                "last_result": self._last_result,
-
-                "bottleneck_count":
-                    self._bottleneck_count,
-
-                "detection_count":
-                    self._detection_count,
-
-                "error_count":
-                    self._error_count,
-
-                "latency":
-                    self._latency,
-
-                "enabled":
-                    self._enabled,
-
-                "frozen":
-                    self._frozen,
-
-                "closed":
-                    self._closed,
-
-                "updated_at":
-                    self._updated_at,
-
-            }
-
-            return dict(
-                self._snapshot
+        name: str,
+        metrics: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        key = str(name)
+
+        entry = self._algorithms.get(key)
+
+        if entry is None:
+            raise KeyError(
+                f"Unknown bottleneck algorithm: {key}"
             )
+
+        if not entry["enabled"]:
+            raise RuntimeError(
+                f"Bottleneck algorithm '{key}' is disabled"
+            )
+
+        self.before_algorithm(key)
+
+        try:
+            result = entry["callable"](
+                metrics,
+                **kwargs,
+            )
+        finally:
+            # after_algorithm intentionally receives only a result
+            # when execution succeeds.
+            pass
+
+        self.after_algorithm(
+            key,
+            result,
+        )
+
+        return result
+
+    # ==================================================================
+    # Part 7. Detection API
+    # ==================================================================
+
+    def detect(
+        self,
+        metrics: Mapping[str, Any],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        self._require_active()
+
+        self.before_detect(
+            metrics,
+            method,
+            **kwargs,
+        )
+
+        self._running = True
+        started = time.perf_counter()
+
+        try:
+            result = self.execute_algorithm(
+                method,
+                metrics,
+                **kwargs,
+            )
+
+            elapsed = time.perf_counter() - started
+            self._latest_latency = float(elapsed)
+
+            self._detection_count += 1
+
+            if bool(result.get("bottleneck", False)):
+                self._bottleneck_count += 1
+
+            normalized = copy.deepcopy(
+                dict(result)
+            )
+
+            self._last_result = normalized
+            self._history.append(
+                copy.deepcopy(normalized)
+            )
+
+            self.after_detect(
+                normalized,
+                method,
+            )
+
+            self._touch()
+
+            return normalized
+
+        except Exception:
+            elapsed = time.perf_counter() - started
+            self._latest_latency = float(elapsed)
+            self._error_count += 1
+            self._touch()
+            raise
+
+        finally:
+            self._running = False
+
+    def detect_many(
+        self,
+        metrics_list: Iterable[Mapping[str, Any]],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> list[Mapping[str, Any]]:
+        return [
+            self.detect(
+                metrics,
+                method=method,
+                **kwargs,
+            )
+            for metrics in metrics_list
+        ]
+
+    def detect_batch(
+        self,
+        metrics_list: Iterable[Mapping[str, Any]],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> list[Mapping[str, Any]]:
+        return self.detect_many(
+            metrics_list,
+            method=method,
+            **kwargs,
+        )
+
+    def detect_one(
+        self,
+        metrics: Mapping[str, Any],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        return self.detect(
+            metrics,
+            method=method,
+            **kwargs,
+        )
+
+    def run(
+        self,
+        metrics: Mapping[str, Any],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        return self.detect(
+            metrics,
+            method=method,
+            **kwargs,
+        )
+
+    def execute(
+        self,
+        metrics: Mapping[str, Any],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        return self.detect(
+            metrics,
+            method=method,
+            **kwargs,
+        )
+
+    def process(
+        self,
+        metrics: Mapping[str, Any],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        return self.detect(
+            metrics,
+            method=method,
+            **kwargs,
+        )
+
+    def __call__(
+        self,
+        metrics: Mapping[str, Any],
+        method: str = "pipeline",
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        return self.detect(
+            metrics,
+            method=method,
+            **kwargs,
+        )
+
+    # ==================================================================
+    # Part 8. Reset / Clear
+    # ==================================================================
+
+    def clear(self) -> MetricBottleneckDetector:
+        self._history.clear()
+        self._last_result = None
+        self._touch()
+        return self
+
+    def reset(self) -> MetricBottleneckDetector:
+        self._detection_count = 0
+        self._bottleneck_count = 0
+        self._error_count = 0
+
+        self._latest_latency = 0.0
+        self._history.clear()
+        self._last_result = None
+        self._running = False
+
+        self._touch()
+        return self
+
+    # ==================================================================
+    # Part 9. Snapshot / Restore
+    # ==================================================================
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "enabled": self.enabled,
+            "frozen": self.frozen,
+            "closed": self.closed,
+            "running": self.running,
+            "config": self.config,
+            "detection_count": self.detection_count,
+            "bottleneck_count": self.bottleneck_count,
+            "error_count": self.error_count,
+            "latency": self.latest_latency,
+            "history": copy.deepcopy(self._history),
+            "last_result": copy.deepcopy(self._last_result),
+            "algorithm_names": self.algorithm_names(),
+        }
 
     def restore(
         self,
-        snapshot: dict | None = None,
-    ):
-        """
-        Restore runtime state from a snapshot.
-        """
-
+        snapshot: Mapping[str, Any] | None = None,
+    ) -> MetricBottleneckDetector:
         if snapshot is None:
-
-            snapshot = self._snapshot
-
-        if snapshot is None:
-
             return self
 
-        with self._lock:
+        data = dict(snapshot)
 
-            self._config = dict(
+        if "name" in data:
+            self.name = str(data["name"])
 
-                snapshot.get(
-                    "config",
-                    {},
-                )
-
+        if "description" in data:
+            self.description = str(
+                data["description"]
             )
 
-            self._history = list(
+        if "version" in data:
+            self.version = str(data["version"])
 
-                snapshot.get(
-                    "history",
-                    [],
-                )
+        if "id" in data:
+            self.id = str(data["id"])
 
+        if "created_at" in data:
+            self.created_at = str(
+                data["created_at"]
             )
 
-            self._last_result = snapshot.get(
-                "last_result"
+        if "updated_at" in data:
+            self.updated_at = str(
+                data["updated_at"]
             )
 
-            self._bottleneck_count = snapshot.get(
-                "bottleneck_count",
-                0,
+        if "enabled" in data:
+            self._enabled = bool(
+                data["enabled"]
             )
 
-            self._detection_count = snapshot.get(
+        if "frozen" in data:
+            self._frozen = bool(
+                data["frozen"]
+            )
+
+        if "closed" in data:
+            self._closed = bool(
+                data["closed"]
+            )
+
+        self._running = False
+
+        if "config" in data:
+            self._config = copy.deepcopy(
+                dict(data["config"])
+            )
+
+        self._detection_count = int(
+            data.get(
                 "detection_count",
                 0,
             )
+        )
 
-            self._error_count = snapshot.get(
+        self._bottleneck_count = int(
+            data.get(
+                "bottleneck_count",
+                0,
+            )
+        )
+
+        self._error_count = int(
+            data.get(
                 "error_count",
                 0,
             )
+        )
 
-            self._latency = snapshot.get(
+        self._latest_latency = float(
+            data.get(
                 "latency",
-                0.0,
+                data.get(
+                    "latest_latency",
+                    0.0,
+                ),
+            )
+        )
+
+        self._history = copy.deepcopy(
+            data.get(
+                "history",
+                [],
+            )
+        )
+
+        self._last_result = copy.deepcopy(
+            data.get(
+                "last_result",
+                None,
+            )
+        )
+
+        # IMPORTANT:
+        # Do not call _touch() during restore.
+        #
+        # restore() is a state-reconstruction operation and must
+        # preserve the exact created_at / updated_at values from
+        # the snapshot.
+
+        # Preserve an already existing registry.
+        #
+        # If the receiver has no registry but the snapshot declares
+        # builtin algorithms, reconstruct them.
+        if (
+            not self._algorithms
+            and data.get("algorithm_names")
+        ):
+            names = set(
+                data["algorithm_names"]
             )
 
-            self._enabled = snapshot.get(
-                "enabled",
-                True,
-            )
-
-            self._frozen = snapshot.get(
-                "frozen",
-                False,
-            )
-
-            self._closed = snapshot.get(
-                "closed",
-                False,
-            )
-
-            self._updated_at = datetime.utcnow()
+            if names.intersection(
+                self.BUILTIN_ALGORITHM_NAMES
+            ):
+                self.register_builtin_algorithms()
 
         return self
 
-    def clone(
-        self,
-    ):
-        """
-        Create a cloned detector.
-        """
+    # ==================================================================
+    # Part 10. Clone / Copy
+    # ==================================================================
 
-        cloned = self.__class__(
-
-            name=self._name,
-
-            description=self._description,
-
+    def clone(self) -> MetricBottleneckDetector:
+        cloned = MetricBottleneckDetector(
+            name=self.name,
+            description=self.description,
         )
 
-        cloned.restore(
-            self.snapshot()
+        cloned.version = self.version
+
+        cloned._enabled = self._enabled
+        cloned._frozen = self._frozen
+        cloned._closed = self._closed
+        cloned._running = False
+
+        cloned._config = copy.deepcopy(
+            self._config
         )
+
+        cloned._detection_count = (
+            self._detection_count
+        )
+        cloned._bottleneck_count = (
+            self._bottleneck_count
+        )
+        cloned._error_count = (
+            self._error_count
+        )
+
+        cloned._latest_latency = (
+            self._latest_latency
+        )
+
+        cloned._history = copy.deepcopy(
+            self._history
+        )
+
+        cloned._last_result = copy.deepcopy(
+            self._last_result
+        )
+
+        cloned.created_at = self.created_at
+        cloned.updated_at = self.updated_at
+
+        cloned._hooks = copy.deepcopy(
+            self._hooks
+        )
+
+        cloned._events = copy.deepcopy(
+            self._events
+        )
+
+        # Preserve callable references but never share registry mappings.
+        cloned._algorithms = {}
+
+        for name, entry in self._algorithms.items():
+            cloned._algorithms[name] = {
+                "name": entry["name"],
+                "callable": entry["callable"],
+                "enabled": entry["enabled"],
+                "metadata": copy.deepcopy(
+                    entry["metadata"]
+                ),
+            }
 
         return cloned
 
-    def copy(
-        self,
-    ):
-        """
-        Alias of clone().
-        """
-
+    def copy(self) -> MetricBottleneckDetector:
         return self.clone()
-    # ======================================================
-    # Part 7. Statistics & Diagnostics
-    # ======================================================
 
-    def summary(
+    def __copy__(self) -> MetricBottleneckDetector:
+        return self.clone()
+
+    def __deepcopy__(
         self,
-    ) -> dict:
-        """
-        Return a runtime summary.
-        """
+        memo: dict[int, Any],
+    ) -> MetricBottleneckDetector:
+        del memo
+        return self.clone()
 
-        return {
-
-            "name": self._name,
-
-            "id": self._id,
-
-            "version": self._version,
-
-            "enabled": self._enabled,
-
-            "running": self._running,
-
-            "bottleneck_count":
-                self._bottleneck_count,
-
-            "detection_count":
-                self._detection_count,
-
-            "error_count":
-                self._error_count,
-
-            "uptime":
-                self.uptime,
-
-            "latency":
-                self._latency,
-
-            "algorithms":
-                len(self._algorithms),
-
-        }
-
-    def report(
-        self,
-    ) -> dict:
-        """
-        Generate a diagnostic report.
-        """
-
-        return {
-
-            "summary":
-                self.summary(),
-
-            "configuration":
-                dict(self._config),
-
-            "statistics":
-                self._statistics,
-
-            "history_size":
-                len(self._history),
-
-            "last_result":
-                self._last_result,
-
-        }
-
-    def health(
-        self,
-    ) -> dict:
-        """
-        Runtime health information.
-        """
-
-        status = "healthy"
-
-        if self._closed:
-
-            status = "closed"
-
-        elif not self._enabled:
-
-            status = "disabled"
-
-        elif self._frozen:
-
-            status = "frozen"
-
-        return {
-
-            "status": status,
-
-            "active": self.active,
-
-            "running": self._running,
-
-            "errors": self._error_count,
-
-            "uptime": self.uptime,
-
-        }
-
-    def status(
-        self,
-    ) -> dict:
-        """
-        Alias of health().
-        """
-
-        return self.health()
-
-    # ======================================================
-    # Statistics Properties
-    # ======================================================
+    # ==================================================================
+    # Part 11. Diagnostics
+    # ==================================================================
 
     @property
-    def bottleneck_count(
-        self,
-    ) -> int:
-        """
-        Number of detected bottlenecks.
-        """
-
-        return self._bottleneck_count
-
-    @property
-    def detection_count(
-        self,
-    ) -> int:
-        """
-        Number of detections.
-        """
-
-        return self._detection_count
-
-    @property
-    def error_count(
-        self,
-    ) -> int:
-        """
-        Number of runtime errors.
-        """
-
-        return self._error_count
-
-    @property
-    def uptime(
-        self,
-    ) -> float:
-        """
-        Runtime uptime in seconds.
-        """
-
-        return (
-
-            time.perf_counter()
-
-            -
-
-            self._started_at
-
+    def uptime(self) -> float:
+        return max(
+            0.0,
+            time.monotonic()
+            - self._started_monotonic,
         )
 
-    @property
-    def latency(
-        self,
-    ) -> float:
-        """
-        Latest detection latency.
-        """
+    def summary(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "id": self.id,
+            "version": self.version,
+            "enabled": self.enabled,
+            "running": self.running,
+            "bottleneck_count": self.bottleneck_count,
+            "detection_count": self.detection_count,
+            "error_count": self.error_count,
+            "latency": self.latest_latency,
+            "algorithms": self.algorithm_count,
+            "uptime": self.uptime,
+        }
 
-        return self._latency
-    # ======================================================
-    # Part 8. Serialization
-    # ======================================================
-
-    def to_dict(
-        self,
-    ) -> dict:
-        """
-        Serialize detector to dictionary.
-        """
+    def health(self) -> dict[str, Any]:
+        if self.closed:
+            status = "closed"
+        elif self.disabled:
+            status = "disabled"
+        elif self.frozen:
+            status = "frozen"
+        elif self.error_count > 0:
+            status = "degraded"
+        else:
+            status = "healthy"
 
         return {
-
-            "id": self._id,
-
-            "name": self._name,
-
-            "description": self._description,
-
-            "version": self._version,
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "config": dict(
-                self._config
-            ),
-
-            "bottleneck_count":
-                self._bottleneck_count,
-
-            "detection_count":
-                self._detection_count,
-
-            "error_count":
-                self._error_count,
-
-            "latency":
-                self._latency,
-
-            "created_at":
-                self._created_at.isoformat(),
-
-            "updated_at":
-                self._updated_at.isoformat(),
-
-            "algorithm_names":
-                self.algorithm_names(),
-
-            "history":
-                list(self._history),
-
-            "last_result":
-                self._last_result,
-
+            "status": status,
+            "active": self.active,
+            "running": self.running,
+            "errors": self.error_count,
+            "uptime": self.uptime,
         }
+
+    def status(self) -> dict[str, Any]:
+        return self.health()
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary(),
+            "configuration": self.config,
+            "statistics": self.statistics,
+            "history_size": self.history_size,
+            "last_result": self.last_result,
+        }
+
+    # ==================================================================
+    # Part 12. Serialization
+    # ==================================================================
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "enabled": self.enabled,
+            "frozen": self.frozen,
+            "closed": self.closed,
+            "running": self.running,
+            "config": self.config,
+            "bottleneck_count": self.bottleneck_count,
+            "detection_count": self.detection_count,
+            "error_count": self.error_count,
+            "latency": self.latest_latency,
+            "algorithm_names": self.algorithm_names(),
+            "history": copy.deepcopy(
+                self._history
+            ),
+            "last_result": copy.deepcopy(
+                self._last_result
+            ),
+        }
+
+    def serialize(self) -> dict[str, Any]:
+        return self.to_dict()
 
     @classmethod
     def from_dict(
         cls,
-        data: dict,
-    ):
-        """
-        Restore detector from dictionary.
-        """
-
+        data: Mapping[str, Any],
+    ) -> MetricBottleneckDetector:
         obj = cls(
-
             name=data.get(
-
                 "name",
-
                 "MetricBottleneckDetector",
-
             ),
-
             description=data.get(
-
                 "description",
-
                 "",
-
             ),
-
         )
 
-        obj._id = data.get(
-
-            "id",
-
-            obj._id,
-
-        )
-
-        obj._version = data.get(
-
-            "version",
-
-            obj._version,
-
-        )
-
-        obj._enabled = data.get(
-
-            "enabled",
-
-            True,
-
-        )
-
-        obj._frozen = data.get(
-
-            "frozen",
-
-            False,
-
-        )
-
-        obj._closed = data.get(
-
-            "closed",
-
-            False,
-
-        )
-
-        obj._config.update(
-
-            data.get(
-
-                "config",
-
-                {},
-
-            )
-
-        )
-
-        obj._bottleneck_count = data.get(
-
-            "bottleneck_count",
-
-            0,
-
-        )
-
-        obj._detection_count = data.get(
-
-            "detection_count",
-
-            0,
-
-        )
-
-        obj._error_count = data.get(
-
-            "error_count",
-
-            0,
-
-        )
-
-        obj._latency = data.get(
-
-            "latency",
-
-            0.0,
-
-        )
-
-        obj._history = list(
-
-            data.get(
-
-                "history",
-
-                [],
-
-            )
-
-        )
-
-        obj._last_result = data.get(
-
-            "last_result"
-
-        )
-
-        created = data.get(
-
-            "created_at"
-
-        )
-
-        if created:
-
-            obj._created_at = datetime.fromisoformat(
-
-                created
-
-            )
-
-        updated = data.get(
-
-            "updated_at"
-
-        )
-
-        if updated:
-
-            obj._updated_at = datetime.fromisoformat(
-
-                updated
-
-            )
+        obj.restore(data)
 
         return obj
 
     def to_json(
         self,
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
-        """
-        Serialize detector to JSON.
-        """
-
-        import json
-
         return json.dumps(
-
             self.to_dict(),
-
             **kwargs,
-
         )
 
     @classmethod
     def from_json(
         cls,
         text: str,
-    ):
-        """
-        Restore detector from JSON.
-        """
-
-        import json
-
-        return cls.from_dict(
-
-            json.loads(
-
-                text
-
+    ) -> MetricBottleneckDetector:
+        if not isinstance(text, str):
+            raise TypeError(
+                "text must be a string"
             )
 
-        )
+        data = json.loads(text)
 
-    def serialize(
-        self,
-    ) -> dict:
-        """
-        Alias of to_dict().
-        """
+        if not isinstance(data, Mapping):
+            raise TypeError(
+                "JSON payload must decode to an object"
+            )
 
-        return self.to_dict()
+        return cls.from_dict(data)
 
     @classmethod
     def deserialize(
         cls,
-        data,
-    ):
-        """
-        Deserialize detector from dictionary or JSON.
-        """
+        data: Mapping[str, Any] | str,
+    ) -> MetricBottleneckDetector:
+        if isinstance(data, str):
+            return cls.from_json(data)
 
-        if isinstance(
+        return cls.from_dict(data)
 
-            data,
-
-            str,
-
-        ):
-
-            return cls.from_json(
-
-                data
-
-            )
-
-        return cls.from_dict(
-
-            data
-
-        )
-    # ======================================================
-    # Part 9. Events & Hooks
-    # ======================================================
-
-    def before_detect(
-        self,
-        metrics,
-        method: str,
-        **kwargs,
-    ):
-        """
-        Hook executed before bottleneck detection.
-        """
-
-        self.emit(
-
-            "before_detect",
-
-            metrics=metrics,
-
-            method=method,
-
-            kwargs=kwargs,
-
-        )
-
-        return self
-
-    def after_detect(
-        self,
-        result,
-        method: str,
-    ):
-        """
-        Hook executed after bottleneck detection.
-        """
-
-        self.emit(
-
-            "after_detect",
-
-            result=result,
-
-            method=method,
-
-        )
-
-        return self
-
-    def before_algorithm(
-        self,
-        name: str,
-    ):
-        """
-        Hook executed before algorithm execution.
-        """
-
-        self.emit(
-
-            "before_algorithm",
-
-            algorithm=name,
-
-        )
-
-        return self
-
-    def after_algorithm(
-        self,
-        name: str,
-        result=None,
-    ):
-        """
-        Hook executed after algorithm execution.
-        """
-
-        self.emit(
-
-            "after_algorithm",
-
-            algorithm=name,
-
-            result=result,
-
-        )
-
-        return self
+    # ==================================================================
+    # Part 13. Events / Hooks
+    # ==================================================================
 
     def add_hook(
         self,
         event: str,
-        callback: Callable,
-    ):
-        """
-        Register an event hook.
-        """
-
+        callback: HookCallable,
+    ) -> MetricBottleneckDetector:
         if not callable(callback):
-
             raise TypeError(
-                "callback must be callable."
+                "callback must be callable"
             )
 
-        with self._lock:
-
-            self._hooks.setdefault(
-
-                event,
-
-                []
-
-            ).append(
-
-                callback
-
-            )
-
-        return self
-
-    def remove_hook(
-        self,
-        event: str,
-        callback: Callable | None = None,
-    ):
-        """
-        Remove one hook or all hooks for an event.
-        """
-
-        with self._lock:
-
-            if event not in self._hooks:
-
-                return self
-
-            if callback is None:
-
-                self._hooks.pop(
-
-                    event,
-
-                    None,
-
-                )
-
-                return self
-
-            try:
-
-                self._hooks[event].remove(
-                    callback
-                )
-
-            except ValueError:
-
-                pass
-
-            if not self._hooks[event]:
-
-                self._hooks.pop(
-
-                    event,
-
-                    None,
-
-                )
-
-        return self
-
-    def emit(
-        self,
-        event: str,
-        **payload,
-    ):
-        """
-        Emit an event.
-        """
-
-        record = {
-
-            "timestamp":
-                datetime.utcnow(),
-
-            "event":
-                event,
-
-            "payload":
-                payload,
-
-        }
-
-        self._events.append(
-            record
-        )
-
-        for callback in self._hooks.get(
-            event,
+        self._hooks.setdefault(
+            str(event),
             [],
-        ):
-
-            callback(
-
-                self,
-
-                **payload,
-
-            )
+        ).append(callback)
 
         return self
 
     def subscribe(
         self,
         event: str,
-        callback: Callable,
-    ):
-        """
-        Alias of add_hook().
-        """
-
+        callback: HookCallable,
+    ) -> MetricBottleneckDetector:
         return self.add_hook(
-
             event,
-
             callback,
-
-        )
-    # ======================================================
-    # Part 10. Python Protocols
-    # ======================================================
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer representation.
-        """
-
-        return (
-
-            f"{self.__class__.__name__}("
-
-            f"name={self._name!r}, "
-
-            f"enabled={self._enabled}, "
-
-            f"algorithms={len(self._algorithms)}, "
-
-            f"detections={self._detection_count}"
-
-            f")"
-
         )
 
-    def __str__(
+    def remove_hook(
         self,
-    ) -> str:
-        """
-        Human-readable representation.
-        """
+        event: str,
+        callback: HookCallable | None = None,
+    ) -> MetricBottleneckDetector:
+        key = str(event)
 
-        return (
+        if key not in self._hooks:
+            return self
 
-            f"{self._name} "
+        if callback is None:
+            self._hooks.pop(key, None)
+            return self
 
-            f"(algorithms={len(self._algorithms)}, "
+        callbacks = self._hooks[key]
 
-            f"detections={self._detection_count}, "
+        self._hooks[key] = [
+            item
+            for item in callbacks
+            if item is not callback
+        ]
 
-            f"bottlenecks={self._bottleneck_count})"
+        if not self._hooks[key]:
+            self._hooks.pop(key, None)
 
+        return self
+
+    def emit(
+        self,
+        event: str,
+        **payload: Any,
+    ) -> MetricBottleneckDetector:
+        key = str(event)
+
+        record = {
+            "event": key,
+            "payload": copy.deepcopy(payload),
+            "timestamp": self._now_iso(),
+        }
+
+        self._events.append(record)
+
+        callbacks = list(
+            self._hooks.get(
+                key,
+                [],
+            )
         )
 
-    def __len__(
-        self,
-    ) -> int:
-        """
-        Number of registered algorithms.
-        """
+        for callback in callbacks:
+            callback(
+                self,
+                **payload,
+            )
 
-        return len(
-            self._algorithms
+        return self
+
+    def before_detect(
+        self,
+        metrics: Mapping[str, Any],
+        method: str,
+        **kwargs: Any,
+    ) -> MetricBottleneckDetector:
+        self.emit(
+            "before_detect",
+            metrics=copy.deepcopy(
+                dict(metrics)
+            ),
+            method=method,
+            kwargs=copy.deepcopy(kwargs),
         )
 
-    def __iter__(
-        self,
-    ):
-        """
-        Iterate over registered algorithms.
-        """
+        return self
 
+    def after_detect(
+        self,
+        result: Mapping[str, Any],
+        method: str,
+    ) -> MetricBottleneckDetector:
+        self.emit(
+            "after_detect",
+            result=copy.deepcopy(
+                dict(result)
+            ),
+            method=method,
+        )
+
+        return self
+
+    def before_algorithm(
+        self,
+        algorithm: str,
+    ) -> MetricBottleneckDetector:
+        self.emit(
+            "before_algorithm",
+            algorithm=algorithm,
+        )
+
+        return self
+
+    def after_algorithm(
+        self,
+        algorithm: str,
+        result: Mapping[str, Any],
+    ) -> MetricBottleneckDetector:
+        self.emit(
+            "after_algorithm",
+            algorithm=algorithm,
+            result=copy.deepcopy(
+                dict(result)
+            ),
+        )
+
+        return self
+
+    # ==================================================================
+    # Part 14. Python Protocols
+    # ==================================================================
+
+    def __len__(self) -> int:
+        return self.algorithm_count
+
+    def __iter__(self):
         return iter(
             self._algorithms.items()
         )
 
     def __contains__(
         self,
-        name: str,
+        name: object,
     ) -> bool:
-        """
-        Check whether an algorithm exists.
-        """
+        return name in self._algorithms
 
+    def __repr__(self) -> str:
         return (
-
-            name
-
-            in
-
-            self._algorithms
-
+            f"{self.__class__.__name__}("
+            f"name={self.name!r}, "
+            f"algorithms={self.algorithm_count}, "
+            f"detections={self.detection_count}"
+            f")"
         )
 
-    def __call__(
-        self,
-        metrics,
-        method: str = "latency",
-        **kwargs,
-    ):
-        """
-        Callable interface.
-
-        Equivalent to detect().
-        """
-
-        return self.detect(
-
-            metrics,
-
-            method=method,
-
-            **kwargs,
-
+    def __str__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"name={self.name!r}, "
+            f"algorithms={self.algorithm_count}, "
+            f"detections={self.detection_count}, "
+            f"bottlenecks={self.bottleneck_count}"
+            f")"
         )
 
-    def __copy__(
-        self,
-    ):
-        """
-        Shallow copy.
-        """
 
-        return self.clone()
-
-    def __deepcopy__(
-        self,
-        memo,
-    ):
-        """
-        Deep copy.
-        """
-
-        clone = self.clone()
-
-        memo[id(self)] = clone
-
-        return clone                                                                
+__all__ = [
+    "AlgorithmCallable",
+    "HookCallable",
+    "MetricBottleneckDetector",
+]
