@@ -1,253 +1,234 @@
 """
 SciOS-NG Runtime Metrics Analysis
-
-Runtime Health Analysis Engine
-
-SciOS/scios/runtime/observability/metrics/analysis/health.py
+Metric Health Analyzer
 """
 
 from __future__ import annotations
 
+import copy
+import json
 import threading
 import time
 import uuid
-
-from datetime import datetime
-from typing import Any, Callable
-
-from .statistics import MetricStatistics
+from typing import Any, Callable, Iterable, Mapping
 
 
-# ==========================================================
+# ============================================================================
+# Helpers
+# ============================================================================
+
+
+class _LatencyValue(float):
+    """
+    Float-compatible latency statistic that is also callable.
+
+    The public contract intentionally allows:
+
+        analyzer.latency == 0.0
+
+    and:
+
+        analyzer.latency({"latency": 20.0})
+
+    This avoids the historical collision between the latency statistic
+    property and the built-in latency analysis algorithm.
+    """
+
+    def __new__(
+        cls,
+        value: float,
+        analyzer: "MetricHealthAnalyzer",
+    ) -> "_LatencyValue":
+        obj = float.__new__(cls, value)
+        obj._analyzer = analyzer
+        return obj
+
+    def __call__(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._analyzer._algorithm_latency(
+            metrics or {},
+            **kwargs,
+        )
+
+
+# ============================================================================
 # MetricHealthAnalyzer
-# ==========================================================
+# ============================================================================
+
 
 class MetricHealthAnalyzer:
     """
-    Runtime Health Analysis Engine.
+    Runtime health analyzer for SciOS metrics.
 
-    Foundation
-    ----------
-    - Health Registry
-    - Algorithm Registry
-    - Runtime State
-    - Health Configuration
-    - Statistics Engine
+    The class deliberately exposes both:
+
+    * runtime statistics
+    * registered analysis algorithms
+
+    Algorithms are ordinary callables and are available both through the
+    registry and as convenient public methods.
     """
 
-    # ======================================================
-    # Constructor
-    # ======================================================
+    VERSION = "1.0.0"
+
+    DEFAULT_CONFIG: dict[str, Any] = {
+        "healthy_score": 90.0,
+        "warning_score": 70.0,
+        "availability_threshold": 0.99,
+        "reliability_threshold": 0.95,
+        "latency_threshold": 100.0,
+        "throughput_threshold": 100.0,
+        "utilization_threshold": 0.85,
+        "saturation_threshold": 1.0,
+    }
+
+    BUILTIN_ALGORITHMS = (
+        "availability",
+        "reliability",
+        "latency",
+        "throughput",
+        "utilization",
+        "saturation",
+        "health_score",
+        "overall",
+        "custom",
+    )
+
+    # ----------------------------------------------------------------------
+    # Construction
+    # ----------------------------------------------------------------------
 
     def __init__(
         self,
         name: str = "MetricHealthAnalyzer",
         description: str = "",
+        *,
+        config: Mapping[str, Any] | None = None,
     ) -> None:
+        self.name = name
+        self.description = description
+        self.id = str(uuid.uuid4())
+        self.version = self.VERSION
 
-        # --------------------------------------------------
-        # Identity
-        # --------------------------------------------------
+        self.enabled = True
+        self.frozen = False
+        self.closed = False
+        self.running = False
 
-        self._id = str(uuid.uuid4())
+        self._config: dict[str, Any] = copy.deepcopy(
+            self.DEFAULT_CONFIG
+        )
 
-        self._name = name
+        if config:
+            self._config.update(copy.deepcopy(dict(config)))
 
-        self._description = description
+        self._algorithms: dict[str, dict[str, Any]] = {}
+        self._hooks: dict[str, list[Callable[..., Any]]] = {}
+        self._events: list[dict[str, Any]] = []
 
-        # --------------------------------------------------
-        # Runtime State
-        # --------------------------------------------------
+        self._context: dict[str, Any] = {}
 
-        self._enabled = True
+        self._health_count = 0
+        self._analysis_count = 0
+        self._error_count = 0
+        self._latency = 0.0
 
-        self._frozen = False
+        self._history: list[dict[str, Any]] = []
+        self._last_result: dict[str, Any] | None = None
+        self._snapshot: dict[str, Any] | None = None
 
-        self._closed = False
+        self._created_at = time.time()
+        self._updated_at = self._created_at
 
-        self._running = False
-
-        # --------------------------------------------------
-        # Health Configuration
-        # --------------------------------------------------
-
-        self._config = {
-
-            "healthy_score": 90.0,
-
-            "warning_score": 70.0,
-
-            "critical_score": 50.0,
-
-            "latency_threshold": 100.0,
-
-            "throughput_threshold": 100.0,
-
-            "utilization_threshold": 0.85,
-
-            "availability_threshold": 0.99,
-
-            "reliability_threshold": 0.95,
-
-        }
-
-        # --------------------------------------------------
-        # Health Registry
-        # --------------------------------------------------
-
-        self._algorithms: dict[
-            str,
-            dict,
-        ] = {}
-
-        self._registry = self._algorithms
-
-        self._history: list[dict] = []
-
-        self._last_result = None
-
-        # --------------------------------------------------
-        # Synchronization
-        # --------------------------------------------------
+        self._health_cache: dict[str, Any] | None = None
 
         self._lock = threading.RLock()
 
-        # --------------------------------------------------
-        # Metadata
-        # --------------------------------------------------
+        self._register_builtin_algorithms()
 
-        self._created_at = datetime.utcnow()
-
-        self._updated_at = self._created_at
-
-        self._version = "0.2.0"
-
-        self._started_at = (
-            time.perf_counter()
-        )
-
-        # --------------------------------------------------
-        # Statistics
-        # --------------------------------------------------
-
-        self._statistics = MetricStatistics()
-
-        self._health_count = 0
-
-        self._analysis_count = 0
-
-        self._error_count = 0
-
-        self._latency = 0.0
-
-        self._uptime = 0.0
-
-        # --------------------------------------------------
-        # Internal Components
-        # --------------------------------------------------
-
-        self._hooks: dict[
-            str,
-            list[Callable],
-        ] = {}
-
-        self._events: list[
-            dict
-        ] = []
-
-        self._snapshot = None
-
-        self._context: dict[
-            str,
-            Any,
-        ] = {}
-
-        # --------------------------------------------------
-        # Built-in Algorithms
-        # --------------------------------------------------
-
-        self.register_builtin_algorithms()
-
-    # ======================================================
-    # Identity
-    # ======================================================
+    # ----------------------------------------------------------------------
+    # Basic runtime properties
+    # ----------------------------------------------------------------------
 
     @property
-    def id(self):
-
-        return self._id
-
-    @property
-    def name(self):
-
-        return self._name
+    def disabled(self) -> bool:
+        return not self.enabled
 
     @property
-    def description(self):
-
-        return self._description
-
-    # ======================================================
-    # Runtime State
-    # ======================================================
-
-    @property
-    def enabled(self):
-
-        return self._enabled
-
-    @property
-    def disabled(self):
-
-        return not self._enabled
-
-    @property
-    def frozen(self):
-
-        return self._frozen
-
-    @property
-    def closed(self):
-
-        return self._closed
-
-    @property
-    def running(self):
-
-        return self._running
-
-    @property
-    def active(self):
-
+    def active(self) -> bool:
         return (
-
-            self._enabled
-
-            and
-
-            not self._frozen
-
-            and
-
-            not self._closed
-
+            self.enabled
+            and not self.frozen
+            and not self.closed
         )
 
-    # ======================================================
-    # Health Configuration
-    # ======================================================
+    @property
+    def health_count(self) -> int:
+        return self._health_count
+
+    @property
+    def analysis_count(self) -> int:
+        return self._analysis_count
+
+    @property
+    def error_count(self) -> int:
+        return self._error_count
+
+    @property
+    def latency(self) -> _LatencyValue:
+        """
+        Runtime analysis latency.
+
+        The returned value behaves like a float while remaining callable
+        as the built-in latency algorithm.
+        """
+        return _LatencyValue(
+            self._latency,
+            self,
+        )
+
+    @property
+    def uptime(self) -> float:
+        return max(
+            0.0,
+            time.time() - self._created_at,
+        )
+
+    @property
+    def updated_at(self) -> float:
+        return self._updated_at
+
+    # ----------------------------------------------------------------------
+    # Internal state helpers
+    # ----------------------------------------------------------------------
+
+    def _touch(self) -> None:
+        self._updated_at = time.time()
+        self._health_cache = None
+
+    def _invalidate_health(self) -> None:
+        self._health_cache = None
+
+    def _require_active(self) -> None:
+        if not self.active:
+            raise RuntimeError(
+                "MetricHealthAnalyzer is not active"
+            )
+
+    # ----------------------------------------------------------------------
+    # Configuration
+    # ----------------------------------------------------------------------
 
     def config(
         self,
         key: str | None = None,
-        default=None,
-    ):
-
+        default: Any = None,
+    ) -> Any:
         if key is None:
-
-            return dict(
-                self._config
-            )
+            return copy.deepcopy(self._config)
 
         return self._config.get(
             key,
@@ -256,2090 +237,1493 @@ class MetricHealthAnalyzer:
 
     def configure(
         self,
-        **kwargs,
-    ):
-
+        **kwargs: Any,
+    ) -> "MetricHealthAnalyzer":
         with self._lock:
-
             self._config.update(
-                kwargs
+                copy.deepcopy(kwargs)
             )
-
-            self._updated_at = datetime.utcnow()
+            self._touch()
 
         return self
 
-    # ======================================================
-    # Statistics
-    # ======================================================
-
-    @property
-    def statistics(self):
-
-        return self._statistics
-
-    @property
-    def health_count(self):
-
-        return self._health_count
-
-    @property
-    def analysis_count(self):
-
-        return self._analysis_count
-
-    @property
-    def error_count(self):
-
-        return self._error_count
-
-    # ======================================================
-    # Metadata
-    # ======================================================
-
-    @property
-    def created_at(self):
-
-        return self._created_at
-
-    @property
-    def updated_at(self):
-
-        return self._updated_at
-
-    @property
-    def version(self):
-
-        return self._version
-
-    # ======================================================
-    # NOTE
-    # ======================================================
-    # Part 2  : Health Analysis API
-    # Part 3  : Health Algorithms
-    # Part 4  : Health Registry API
-    # Part 5  : Lifecycle
-    # Part 6  : Runtime Operations
-    # Part 7  : Statistics & Diagnostics
-    # Part 8  : Serialization
-    # Part 9  : Events & Hooks
-    # Part 10 : Python Protocols
-    # ======================================================
-    # ======================================================
-    # Part 2. Health Analysis API
-    # ======================================================
-
-    def analyze(
-        self,
-        metrics,
-        method: str = "overall",
-        **kwargs,
-    ):
-        """
-        Generic runtime health analysis.
-        """
-
-        if not self.active:
-
-            raise RuntimeError(
-                "MetricHealthAnalyzer is not active."
-            )
-
-        entry = self._algorithms.get(
-            method
-        )
-
-        if entry is None:
-
-            raise KeyError(
-                f"Unknown health algorithm: {method}"
-            )
-
-        if not entry.get(
-            "enabled",
-            True,
-        ):
-
-            raise RuntimeError(
-                f"Health algorithm '{method}' is disabled."
-            )
-
-        self.before_analyze(
-
-            metrics,
-
-            method,
-
-            **kwargs,
-
-        )
-
-        self.before_algorithm(
-            method
-        )
-
-        start = time.perf_counter()
-
-        self._running = True
-
-        try:
-
-            result = entry["callable"](
-
-                metrics,
-
-                **kwargs,
-
-            )
-
-            self._latency = (
-
-                time.perf_counter()
-
-                -
-
-                start
-
-            )
-
-            self.after_algorithm(
-
-                method,
-
-                result,
-
-            )
-
-            self.after_analyze(
-
-                result,
-
-                method,
-
-            )
-
-            self._analysis_count += 1
-
-            if isinstance(
-                result,
-                dict,
-            ):
-
-                if result.get(
-                    "healthy",
-                    False,
-                ):
-
-                    self._health_count += 1
-
-            self._last_result = result
-
-            self._history.append(
-                result
-            )
-
-            self._updated_at = datetime.utcnow()
-
-            return result
-
-        except Exception:
-
-            self._error_count += 1
-
-            raise
-
-        finally:
-
-            self._running = False
-
-    def analyze_one(
-        self,
-        metrics,
-        method: str = "overall",
-        **kwargs,
-    ):
-        """
-        Analyze one runtime snapshot.
-        """
-
-        return self.analyze(
-
-            metrics,
-
-            method=method,
-
-            **kwargs,
-
-        )
-
-    def analyze_many(
-        self,
-        datasets,
-        method: str = "overall",
-        **kwargs,
-    ):
-        """
-        Analyze multiple runtime snapshots.
-        """
-
-        results = []
-
-        for metrics in datasets:
-
-            results.append(
-
-                self.analyze(
-
-                    metrics,
-
-                    method=method,
-
-                    **kwargs,
-
-                )
-
-            )
-
-        return results
-
-    def analyze_batch(
-        self,
-        batches,
-        method: str = "overall",
-        **kwargs,
-    ):
-        """
-        Batch runtime health analysis.
-        """
-
-        return self.analyze_many(
-
-            batches,
-
-            method=method,
-
-            **kwargs,
-
-        )
-
-    # ------------------------------------------------------
-    # Aliases
-    # ------------------------------------------------------
-
-    run = analyze
-
-    execute = analyze
-
-    process = analyze
-    # ======================================================
-    # Part 3. Health Algorithms
-    # ======================================================
-
-    def availability(
-        self,
-        metrics,
-        *,
-        threshold: float | None = None,
-    ):
-        """
-        Analyze system availability.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "availability_threshold"
-            ]
-
-        )
-
-        value = float(
-
-            metrics.get(
-                "availability",
-                1.0,
-            )
-
-        )
-
-        return {
-
-            "algorithm": "availability",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "healthy":
-                value >= threshold,
-
-            "score":
-                min(
-                    100.0,
-                    value * 100.0,
-                ),
-
+    # ----------------------------------------------------------------------
+    # Algorithm registry
+    # ----------------------------------------------------------------------
+
+    def _register_builtin_algorithms(self) -> None:
+        self._algorithms = {
+            "availability": {
+                "name": "availability",
+                "callable": self._algorithm_availability,
+                "enabled": True,
+                "builtin": True,
+            },
+            "reliability": {
+                "name": "reliability",
+                "callable": self._algorithm_reliability,
+                "enabled": True,
+                "builtin": True,
+            },
+            "latency": {
+                "name": "latency",
+                "callable": self._algorithm_latency,
+                "enabled": True,
+                "builtin": True,
+            },
+            "throughput": {
+                "name": "throughput",
+                "callable": self._algorithm_throughput,
+                "enabled": True,
+                "builtin": True,
+            },
+            "utilization": {
+                "name": "utilization",
+                "callable": self._algorithm_utilization,
+                "enabled": True,
+                "builtin": True,
+            },
+            "saturation": {
+                "name": "saturation",
+                "callable": self._algorithm_saturation,
+                "enabled": True,
+                "builtin": True,
+            },
+            "health_score": {
+                "name": "health_score",
+                "callable": self._algorithm_health_score,
+                "enabled": True,
+                "builtin": True,
+            },
+            "overall": {
+                "name": "overall",
+                "callable": self._algorithm_overall,
+                "enabled": True,
+                "builtin": True,
+            },
+            "custom": {
+                "name": "custom",
+                "callable": self._algorithm_custom,
+                "enabled": True,
+                "builtin": True,
+            },
         }
-
-    def reliability(
-        self,
-        metrics,
-        *,
-        threshold: float | None = None,
-    ):
-        """
-        Analyze system reliability.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "reliability_threshold"
-            ]
-
-        )
-
-        value = float(
-
-            metrics.get(
-                "reliability",
-                1.0,
-            )
-
-        )
-
-        return {
-
-            "algorithm": "reliability",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "healthy":
-                value >= threshold,
-
-            "score":
-                min(
-                    100.0,
-                    value * 100.0,
-                ),
-
-        }
-
-    def latency(
-        self,
-        metrics,
-        *,
-        threshold: float | None = None,
-    ):
-        """
-        Analyze latency health.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "latency_threshold"
-            ]
-
-        )
-
-        value = float(
-
-            metrics.get(
-                "latency",
-                0.0,
-            )
-
-        )
-
-        score = max(
-
-            0.0,
-
-            100.0
-
-            *
-
-            (
-
-                1.0
-
-                -
-
-                min(
-                    value / threshold,
-                    1.0,
-                )
-
-            ),
-
-        )
-
-        return {
-
-            "algorithm": "latency",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "healthy":
-                value <= threshold,
-
-            "score": score,
-
-        }
-
-    def throughput(
-        self,
-        metrics,
-        *,
-        threshold: float | None = None,
-    ):
-        """
-        Analyze throughput health.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "throughput_threshold"
-            ]
-
-        )
-
-        value = float(
-
-            metrics.get(
-                "throughput",
-                0.0,
-            )
-
-        )
-
-        score = min(
-
-            100.0,
-
-            (
-
-                value
-
-                /
-
-                threshold
-
-            )
-
-            * 100.0,
-
-        )
-
-        return {
-
-            "algorithm": "throughput",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "healthy":
-                value >= threshold,
-
-            "score": score,
-
-        }
-
-    def utilization(
-        self,
-        metrics,
-        *,
-        threshold: float | None = None,
-    ):
-        """
-        Analyze utilization health.
-        """
-
-        threshold = (
-
-            threshold
-
-            if threshold is not None
-
-            else
-
-            self._config[
-                "utilization_threshold"
-            ]
-
-        )
-
-        value = float(
-
-            metrics.get(
-                "utilization",
-                0.0,
-            )
-
-        )
-
-        score = max(
-
-            0.0,
-
-            100.0
-
-            *
-
-            (
-
-                1.0
-
-                -
-
-                min(
-                    value / threshold,
-                    1.0,
-                )
-
-            ),
-
-        )
-
-        return {
-
-            "algorithm": "utilization",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "healthy":
-                value <= threshold,
-
-            "score": score,
-
-        }
-
-    def saturation(
-        self,
-        metrics,
-        *,
-        threshold: float = 1.0,
-    ):
-        """
-        Analyze resource saturation.
-        """
-
-        value = float(
-
-            metrics.get(
-                "saturation",
-                0.0,
-            )
-
-        )
-
-        score = max(
-
-            0.0,
-
-            100.0
-
-            *
-
-            (
-
-                1.0
-
-                -
-
-                min(
-                    value / threshold,
-                    1.0,
-                )
-
-            ),
-
-        )
-
-        return {
-
-            "algorithm": "saturation",
-
-            "metric": value,
-
-            "threshold": threshold,
-
-            "healthy":
-                value <= threshold,
-
-            "score": score,
-
-        }
-
-    def health_score(
-        self,
-        metrics,
-    ):
-        """
-        Compute overall health score.
-        """
-
-        results = [
-
-            self.availability(metrics),
-
-            self.reliability(metrics),
-
-            self.latency(metrics),
-
-            self.throughput(metrics),
-
-            self.utilization(metrics),
-
-            self.saturation(metrics),
-
-        ]
-
-        score = sum(
-
-            item["score"]
-
-            for item in results
-
-        ) / len(results)
-
-        return {
-
-            "algorithm": "health_score",
-
-            "healthy":
-                score >= self._config[
-                    "warning_score"
-                ],
-
-            "score": score,
-
-            "results": results,
-
-        }
-
-    def overall(
-        self,
-        metrics,
-    ):
-        """
-        Overall runtime health analysis.
-        """
-
-        result = self.health_score(
-            metrics
-        )
-
-        score = result["score"]
-
-        if score >= self._config[
-            "healthy_score"
-        ]:
-
-            level = "healthy"
-
-        elif score >= self._config[
-            "warning_score"
-        ]:
-
-            level = "warning"
-
-        else:
-
-            level = "critical"
-
-        result.update(
-
-            {
-
-                "algorithm":
-                    "overall",
-
-                "level":
-                    level,
-
-            }
-
-        )
-
-        return result
-
-    def custom(
-        self,
-        metrics,
-        analyzer,
-        **kwargs,
-    ):
-        """
-        User-defined health analyzer.
-        """
-
-        if not callable(
-            analyzer
-        ):
-
-            raise TypeError(
-                "analyzer must be callable."
-            )
-
-        return analyzer(
-
-            metrics,
-
-            **kwargs,
-
-        )
-    # ======================================================
-    # Part 4. Health Registry API
-    # ======================================================
 
     def register_algorithm(
         self,
         name: str,
-        algorithm: Callable,
+        algorithm: Callable[..., Any],
         *,
         enabled: bool = True,
-        metadata: dict | None = None,
-    ):
-        """
-        Register a health analysis algorithm.
-        """
-
+        **metadata: Any,
+    ) -> "MetricHealthAnalyzer":
         if not callable(algorithm):
-
             raise TypeError(
-                "algorithm must be callable."
+                "algorithm must be callable"
+            )
+
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                "algorithm name must be a non-empty string"
             )
 
         with self._lock:
-
-            self._algorithms[name] = {
-
+            entry = {
                 "name": name,
-
                 "callable": algorithm,
-
-                "enabled": enabled,
-
-                "metadata": metadata or {},
-
-                "created_at": datetime.utcnow(),
-
+                "enabled": bool(enabled),
+                "builtin": False,
             }
 
-            self._updated_at = datetime.utcnow()
+            entry.update(
+                copy.deepcopy(metadata)
+            )
+
+            self._algorithms[name] = entry
+            self._touch()
 
         return self
+
+    def unregister_algorithm(
+        self,
+        name: str,
+    ) -> "MetricHealthAnalyzer":
+        return self.remove_algorithm(name)
 
     def remove_algorithm(
         self,
         name: str,
-    ):
-        """
-        Remove a registered algorithm.
-        """
-
+    ) -> "MetricHealthAnalyzer":
         with self._lock:
-
             self._algorithms.pop(
                 name,
                 None,
             )
-
-            self._updated_at = datetime.utcnow()
+            self._touch()
 
         return self
 
-    # ------------------------------------------------------
-    # Backward Compatibility
-    # ------------------------------------------------------
+    def clear_algorithms(
+        self,
+    ) -> "MetricHealthAnalyzer":
+        with self._lock:
+            self._algorithms.clear()
+            self._touch()
 
-    unregister_algorithm = remove_algorithm
+        return self
 
     def algorithm(
         self,
         name: str,
-        default=None,
-    ):
-        """
-        Return algorithm metadata.
-        """
+        default: Any = None,
+    ) -> Any:
+        entry = self._algorithms.get(name)
 
-        return self._algorithms.get(
-            name,
-            default,
-        )
+        if entry is None:
+            return default
 
-    def algorithms(
-        self,
-    ):
-        """
-        Return all registered algorithms.
-        """
+        return {
+            key: value
+            for key, value in entry.items()
+        }
 
-        return dict(
-            self._algorithms
-        )
+    def algorithms(self) -> dict[str, dict[str, Any]]:
+        return {
+            name: dict(entry)
+            for name, entry in self._algorithms.items()
+        }
+
+    def algorithm_names(self) -> list[str]:
+        return list(self._algorithms.keys())
+
+    @property
+    def algorithm_count(self) -> int:
+        return len(self._algorithms)
 
     def contains_algorithm(
         self,
         name: str,
     ) -> bool:
-        """
-        Whether an algorithm exists.
-        """
-
-        return (
-
-            name
-
-            in
-
-            self._algorithms
-
-        )
+        return name in self._algorithms
 
     def exists_algorithm(
         self,
         name: str,
     ) -> bool:
-        """
-        Alias of contains_algorithm().
-        """
-
-        return self.contains_algorithm(
-            name
-        )
+        return self.contains_algorithm(name)
 
     def enable_algorithm(
         self,
         name: str,
-    ):
-        """
-        Enable a registered algorithm.
-        """
+    ) -> "MetricHealthAnalyzer":
+        entry = self._algorithms.get(name)
 
-        entry = self._algorithms.get(
-            name
-        )
+        if entry is None:
+            raise KeyError(
+                f"Unknown health algorithm: {name}"
+            )
 
-        if entry is not None:
-
-            entry["enabled"] = True
-
-            self._updated_at = datetime.utcnow()
+        entry["enabled"] = True
+        self._touch()
 
         return self
 
     def disable_algorithm(
         self,
         name: str,
-    ):
-        """
-        Disable a registered algorithm.
-        """
-
-        entry = self._algorithms.get(
-            name
-        )
-
-        if entry is not None:
-
-            entry["enabled"] = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def algorithm_names(
-        self,
-    ):
-        """
-        Return registered algorithm names.
-        """
-
-        return list(
-            self._algorithms.keys()
-        )
-
-    @property
-    def algorithm_count(
-        self,
-    ) -> int:
-        """
-        Number of registered algorithms.
-        """
-
-        return len(
-            self._algorithms
-        )
-
-    def clear_algorithms(
-        self,
-    ):
-        """
-        Remove all registered algorithms.
-        """
-
-        with self._lock:
-
-            self._algorithms.clear()
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def execute_algorithm(
-        self,
-        name: str,
-        metrics,
-        **kwargs,
-    ):
-        """
-        Execute a registered algorithm.
-        """
-
-        entry = self._algorithms.get(
-            name
-        )
+    ) -> "MetricHealthAnalyzer":
+        entry = self._algorithms.get(name)
 
         if entry is None:
-
             raise KeyError(
                 f"Unknown health algorithm: {name}"
             )
 
-        if not entry.get(
-            "enabled",
-            True,
-        ):
+        entry["enabled"] = False
+        self._touch()
 
+        return self
+
+    # ----------------------------------------------------------------------
+    # Algorithm execution
+    # ----------------------------------------------------------------------
+
+    def execute_algorithm(
+        self,
+        name: str,
+        metrics: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        entry = self._algorithms.get(name)
+
+        if entry is None:
+            raise KeyError(
+                f"Unknown health algorithm: {name}"
+            )
+
+        if not entry["enabled"]:
             raise RuntimeError(
-                f"Health algorithm '{name}' is disabled."
+                f"Health algorithm '{name}' is disabled"
             )
 
-        return entry["callable"](
+        algorithm = entry["callable"]
 
+        self.emit(
+            "before_algorithm",
+            algorithm=name,
+            metrics=metrics,
+        )
+
+        result = algorithm(
             metrics,
-
             **kwargs,
-
         )
 
-    def register_builtin_algorithms(
-        self,
-    ):
-        """
-        Register all built-in health algorithms.
-        """
-
-        self.register_algorithm(
-            "availability",
-            self.availability,
+        self.emit(
+            "after_algorithm",
+            algorithm=name,
+            result=result,
         )
 
-        self.register_algorithm(
-            "reliability",
-            self.reliability,
+        return result
+
+    # ----------------------------------------------------------------------
+    # Main analysis API
+    # ----------------------------------------------------------------------
+
+    def analyze(
+        self,
+        metrics: Mapping[str, Any],
+        *,
+        method: str = "overall",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        Analyze a single metric mapping.
+
+        Contract:
+        - Every accepted analysis increments ``analysis_count`` exactly once.
+        - A healthy result increments ``health_count`` exactly once.
+        - An execution failure increments ``error_count`` exactly once.
+        - The exact result object returned by the algorithm is returned to
+          the caller and stored as ``last_result``.
+        - History stores independent deep copies of successful results.
+        - Runtime state is finalized in ``finally``.
+        """
+        self._require_active()
+
+        started = time.perf_counter()
+        self._running = True
+        self._analysis_count += 1
+
+        self.emit(
+            "before_analyze",
+            metrics=metrics,
+            method=method,
         )
 
-        self.register_algorithm(
-            "latency",
-            self.latency,
-        )
-
-        self.register_algorithm(
-            "throughput",
-            self.throughput,
-        )
-
-        self.register_algorithm(
-            "utilization",
-            self.utilization,
-        )
-
-        self.register_algorithm(
-            "saturation",
-            self.saturation,
-        )
-
-        self.register_algorithm(
-            "health_score",
-            self.health_score,
-        )
-
-        self.register_algorithm(
-            "overall",
-            self.overall,
-        )
-
-        self.register_algorithm(
-            "custom",
-            self.custom,
-        )
-
-        return self
-    # ======================================================
-    # Part 5. Lifecycle
-    # ======================================================
-
-    def enable(
-        self,
-    ):
-        """
-        Enable the health analyzer.
-        """
-
-        with self._lock:
-
-            self._enabled = True
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def disable(
-        self,
-    ):
-        """
-        Disable the health analyzer.
-        """
-
-        with self._lock:
-
-            self._enabled = False
-
-            self._running = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def freeze(
-        self,
-    ):
-        """
-        Freeze the health analyzer.
-        """
-
-        with self._lock:
-
-            self._frozen = True
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def unfreeze(
-        self,
-    ):
-        """
-        Unfreeze the health analyzer.
-        """
-
-        with self._lock:
-
-            self._frozen = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def close(
-        self,
-    ):
-        """
-        Close the health analyzer.
-        """
-
-        with self._lock:
-
-            self._closed = True
-
-            self._running = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def reopen(
-        self,
-    ):
-        """
-        Reopen the health analyzer.
-        """
-
-        with self._lock:
-
-            self._closed = False
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-    # ======================================================
-    # Part 6. Runtime Operations
-    # ======================================================
-
-    def reset(
-        self,
-    ):
-        """
-        Reset runtime state while preserving configuration
-        and registered algorithms.
-        """
-
-        with self._lock:
-
-            self._health_count = 0
-
-            self._analysis_count = 0
-
-            self._error_count = 0
-
-            self._latency = 0.0
-
-            self._running = False
-
-            self._last_result = None
-
-            self._history.clear()
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def clear(
-        self,
-    ):
-        """
-        Clear runtime history.
-        """
-
-        with self._lock:
-
-            self._history.clear()
-
-            self._last_result = None
-
-            self._updated_at = datetime.utcnow()
-
-        return self
-
-    def snapshot(
-        self,
-    ):
-        """
-        Create a runtime snapshot.
-        """
-
-        with self._lock:
-
-            self._snapshot = {
-
-                "config": dict(
-                    self._config
-                ),
-
-                "history": list(
-                    self._history
-                ),
-
-                "last_result":
-                    self._last_result,
-
-                "health_count":
-                    self._health_count,
-
-                "analysis_count":
-                    self._analysis_count,
-
-                "error_count":
-                    self._error_count,
-
-                "latency":
-                    self._latency,
-
-                "enabled":
-                    self._enabled,
-
-                "frozen":
-                    self._frozen,
-
-                "closed":
-                    self._closed,
-
-                "updated_at":
-                    self._updated_at,
-
-            }
-
-            return dict(
-                self._snapshot
+        try:
+            result = self.execute_algorithm(
+                method,
+                metrics,
+                **kwargs,
             )
+
+            # Count successful healthy analyses only.
+            if result.get("healthy") is True:
+                self._health_count += 1
+
+            # Preserve the exact algorithm result object.
+            self._last_result = result
+
+            # History must never share mutable state with the caller/result.
+            self._history.append(copy.deepcopy(result))
+
+            self.emit(
+                "after_analyze",
+                method=method,
+                result=result,
+            )
+
+            return result
+
+        except Exception:
+            self._error_count += 1
+            raise
+
+        finally:
+            self._latency = time.perf_counter() - started
+            self._running = False
+            self._updated_at = time.time()
+
+            # Any new analysis invalidates cached runtime health.
+            self._health_cache = None
+
+    def analyze_one(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        Analyze one metric mapping using the overall algorithm.
+
+        ``None`` is normalized to an empty mapping.
+        """
+        return self.analyze(
+            {} if metrics is None else metrics,
+            method="overall",
+            **kwargs,
+        )
+
+    def analyze_many(
+        self,
+        metrics_list: Iterable[Mapping[str, Any]],
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """
+        Analyze multiple metric mappings sequentially.
+
+        Each item is processed through ``analyze()``, so all counters,
+        history, events, errors, and lifecycle semantics remain centralized.
+        """
+        return [
+            self.analyze(
+                metrics,
+                **kwargs,
+            )
+            for metrics in metrics_list
+        ]
+
+    def analyze_batch(
+        self,
+        metrics_list: Iterable[Mapping[str, Any]],
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """
+        Compatibility alias for ``analyze_many()``.
+        """
+        return self.analyze_many(
+            metrics_list,
+            **kwargs,
+        )
+
+    # ----------------------------------------------------------------------
+    # Intentional API aliases
+    # ----------------------------------------------------------------------
+
+    run = analyze
+    execute = analyze
+    process = analyze
+
+    # ----------------------------------------------------------------------
+    # Metric normalization
+    # ----------------------------------------------------------------------
+
+    @staticmethod
+    def _number(
+        metrics: Mapping[str, Any],
+        key: str,
+        default: float,
+    ) -> float:
+        value = metrics.get(key, default)
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _result(
+        algorithm: str,
+        metric: float,
+        threshold: float,
+        healthy: bool,
+        score: float,
+    ) -> dict[str, Any]:
+        return {
+            "algorithm": algorithm,
+            "metric": float(metric),
+            "threshold": float(threshold),
+            "healthy": bool(healthy),
+            "score": float(
+                max(0.0, min(100.0, score))
+            ),
+        }
+
+    # ----------------------------------------------------------------------
+    # Built-in algorithms
+    # ----------------------------------------------------------------------
+
+    def _algorithm_availability(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        metric = self._number(
+            metrics,
+            "availability",
+            1.0,
+        )
+
+        threshold = float(
+            self.config(
+                "availability_threshold"
+            )
+        )
+
+        score = metric * 100.0
+        healthy = metric >= threshold
+
+        return self._result(
+            "availability",
+            metric,
+            threshold,
+            healthy,
+            score,
+        )
+
+    def availability(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_availability(
+            metrics or {},
+            **kwargs,
+        )
+
+    def _algorithm_reliability(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        metric = self._number(
+            metrics,
+            "reliability",
+            1.0,
+        )
+
+        threshold = float(
+            self.config(
+                "reliability_threshold"
+            )
+        )
+
+        score = metric * 100.0
+        healthy = metric >= threshold
+
+        return self._result(
+            "reliability",
+            metric,
+            threshold,
+            healthy,
+            score,
+        )
+
+    def reliability(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_reliability(
+            metrics or {},
+            **kwargs,
+        )
+
+    def _algorithm_latency(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        metric = self._number(
+            metrics,
+            "latency",
+            0.0,
+        )
+
+        threshold = float(
+            self.config(
+                "latency_threshold"
+            )
+        )
+
+        if threshold <= 0.0:
+            score = 0.0
+        else:
+            score = max(
+                0.0,
+                100.0 * (
+                    1.0 - metric / threshold
+                ),
+            )
+
+        healthy = metric <= threshold
+
+        return self._result(
+            "latency",
+            metric,
+            threshold,
+            healthy,
+            score,
+        )
+
+    def _algorithm_throughput(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        metric = self._number(
+            metrics,
+            "throughput",
+            0.0,
+        )
+
+        threshold = float(
+            self.config(
+                "throughput_threshold"
+            )
+        )
+
+        if threshold <= 0.0:
+            score = 100.0
+        else:
+            score = min(
+                100.0,
+                max(
+                    0.0,
+                    100.0 * metric / threshold,
+                ),
+            )
+
+        healthy = metric >= threshold
+
+        return self._result(
+            "throughput",
+            metric,
+            threshold,
+            healthy,
+            score,
+        )
+
+    def throughput(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_throughput(
+            metrics or {},
+            **kwargs,
+        )
+
+    def _algorithm_utilization(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        metric = self._number(
+            metrics,
+            "utilization",
+            0.0,
+        )
+
+        threshold = float(
+            self.config(
+                "utilization_threshold"
+            )
+        )
+
+        if threshold <= 0.0:
+            score = 0.0
+        else:
+            score = max(
+                0.0,
+                100.0 * (
+                    1.0 - metric / threshold
+                ),
+            )
+
+        healthy = metric <= threshold
+
+        return self._result(
+            "utilization",
+            metric,
+            threshold,
+            healthy,
+            score,
+        )
+
+    def utilization(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_utilization(
+            metrics or {},
+            **kwargs,
+        )
+
+    def _algorithm_saturation(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        metric = self._number(
+            metrics,
+            "saturation",
+            0.0,
+        )
+
+        threshold = float(
+            self.config(
+                "saturation_threshold"
+            )
+        )
+
+        if threshold <= 0.0:
+            score = 0.0
+        else:
+            score = max(
+                0.0,
+                100.0 * (
+                    1.0 - metric / threshold
+                ),
+            )
+
+        healthy = metric <= threshold
+
+        return self._result(
+            "saturation",
+            metric,
+            threshold,
+            healthy,
+            score,
+        )
+
+    def saturation(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_saturation(
+            metrics or {},
+            **kwargs,
+        )
+
+    # ----------------------------------------------------------------------
+    # Composite algorithms
+    # ----------------------------------------------------------------------
+
+    def _algorithm_health_score(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        results = [
+            self._algorithm_availability(metrics),
+            self._algorithm_reliability(metrics),
+            self._algorithm_latency(metrics),
+            self._algorithm_throughput(metrics),
+            self._algorithm_utilization(metrics),
+            self._algorithm_saturation(metrics),
+        ]
+
+        score = (
+            sum(
+                item["score"]
+                for item in results
+            )
+            / len(results)
+        )
+
+        healthy = (
+            score
+            >= float(
+                self.config("healthy_score")
+            )
+        )
+
+        return {
+            "algorithm": "health_score",
+            "metric": float(score),
+            "threshold": float(
+                self.config("healthy_score")
+            ),
+            "healthy": healthy,
+            "score": float(score),
+            "results": results,
+        }
+
+    def health_score(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_health_score(
+            metrics or {},
+            **kwargs,
+        )
+
+    def _algorithm_overall(
+        self,
+        metrics: Mapping[str, Any],
+        **_: Any,
+    ) -> dict[str, Any]:
+        score_result = self._algorithm_health_score(
+            metrics
+        )
+
+        score = float(
+            score_result["score"]
+        )
+
+        healthy_threshold = float(
+            self.config("healthy_score")
+        )
+        warning_threshold = float(
+            self.config("warning_score")
+        )
+
+        results = score_result["results"]
+
+        # Overall health is determined by the health state of
+        # every evaluated component, not by the aggregate score.
+        healthy = all(
+            bool(item.get("healthy", False))
+            for item in results
+        )
+
+        if healthy:
+            level = "healthy"
+        elif score >= warning_threshold:
+            level = "warning"
+        else:
+            level = "critical"
+
+        return {
+            "algorithm": "overall",
+            "metric": score,
+            "score": score,
+            "healthy": healthy,
+            "level": level,
+            "threshold": healthy_threshold,
+            "results": results,
+        }
+
+    def overall(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_overall(
+            metrics or {},
+            **kwargs,
+        )
+
+    def _algorithm_custom(
+        self,
+        metrics: Mapping[str, Any],
+        analyzer: Callable[..., Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if not callable(analyzer):
+            raise TypeError(
+                "analyzer must be callable"
+            )
+
+        return analyzer(
+            metrics,
+            **kwargs,
+        )
+
+    def custom(
+        self,
+        metrics: Mapping[str, Any] | None = None,
+        analyzer: Callable[..., Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self._algorithm_custom(
+            metrics or {},
+            analyzer,
+            **kwargs,
+        )
+
+    # ----------------------------------------------------------------------
+    # Lifecycle
+    # ----------------------------------------------------------------------
+
+    def enable(self) -> "MetricHealthAnalyzer":
+        self.enabled = True
+        self.frozen = False
+        self._touch()
+        return self
+
+    def disable(self) -> "MetricHealthAnalyzer":
+        self.enabled = False
+        self.running = False
+        self._touch()
+        return self
+
+    def freeze(self) -> "MetricHealthAnalyzer":
+        self.frozen = True
+        self.running = False
+        self._touch()
+        return self
+
+    def unfreeze(self) -> "MetricHealthAnalyzer":
+        self.frozen = False
+        self._touch()
+        return self
+
+    def close(self) -> "MetricHealthAnalyzer":
+        self.closed = True
+        self.running = False
+        self._touch()
+        return self
+
+    def reopen(self) -> "MetricHealthAnalyzer":
+        self.closed = False
+        self._touch()
+        return self
+
+    # ----------------------------------------------------------------------
+    # Reset / clear
+    # ----------------------------------------------------------------------
+
+    def reset(self) -> "MetricHealthAnalyzer":
+        with self._lock:
+            self._health_count = 0
+            self._analysis_count = 0
+            self._error_count = 0
+            self._latency = 0.0
+            self.running = False
+
+            self._last_result = None
+            self._history.clear()
+
+            self._touch()
+
+        return self
+
+    def clear(self) -> "MetricHealthAnalyzer":
+        with self._lock:
+            self._history.clear()
+            self._last_result = None
+            self._touch()
+
+        return self
+
+    def clear_history(self) -> "MetricHealthAnalyzer":
+        return self.clear()
+
+    # ----------------------------------------------------------------------
+    # Snapshot / restore
+    # ----------------------------------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        snapshot = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "enabled": self.enabled,
+            "frozen": self.frozen,
+            "closed": self.closed,
+            "config": copy.deepcopy(
+                self._config
+            ),
+            "health_count": self._health_count,
+            "analysis_count": self._analysis_count,
+            "error_count": self._error_count,
+            "latency": self._latency,
+            "history": copy.deepcopy(
+                self._history
+            ),
+            "last_result": copy.deepcopy(
+                self._last_result
+            ),
+        }
+
+        self._snapshot = copy.deepcopy(
+            snapshot
+        )
+
+        return copy.deepcopy(snapshot)
 
     def restore(
         self,
-        snapshot: dict | None = None,
-    ):
-        """
-        Restore runtime state from a snapshot.
-        """
-
+        snapshot: Mapping[str, Any] | None = None,
+    ) -> "MetricHealthAnalyzer":
         if snapshot is None:
-
             snapshot = self._snapshot
 
         if snapshot is None:
-
             return self
 
         with self._lock:
-
-            self._config = dict(
-
-                snapshot.get(
-                    "config",
-                    {},
+            if "config" in snapshot:
+                self._config = copy.deepcopy(
+                    snapshot["config"]
                 )
 
+            self.enabled = bool(
+                snapshot.get(
+                    "enabled",
+                    self.enabled,
+                )
             )
 
-            self._history = list(
+            self.frozen = bool(
+                snapshot.get(
+                    "frozen",
+                    self.frozen,
+                )
+            )
 
+            self.closed = bool(
+                snapshot.get(
+                    "closed",
+                    self.closed,
+                )
+            )
+
+            self._health_count = int(
+                snapshot.get(
+                    "health_count",
+                    0,
+                )
+            )
+
+            self._analysis_count = int(
+                snapshot.get(
+                    "analysis_count",
+                    0,
+                )
+            )
+
+            self._error_count = int(
+                snapshot.get(
+                    "error_count",
+                    0,
+                )
+            )
+
+            self._latency = float(
+                snapshot.get(
+                    "latency",
+                    0.0,
+                )
+            )
+
+            self._history = copy.deepcopy(
                 snapshot.get(
                     "history",
                     [],
                 )
-
             )
 
-            self._last_result = snapshot.get(
-                "last_result"
+            self._last_result = copy.deepcopy(
+                snapshot.get(
+                    "last_result"
+                )
             )
 
-            self._health_count = snapshot.get(
-                "health_count",
-                0,
-            )
-
-            self._analysis_count = snapshot.get(
-                "analysis_count",
-                0,
-            )
-
-            self._error_count = snapshot.get(
-                "error_count",
-                0,
-            )
-
-            self._latency = snapshot.get(
-                "latency",
-                0.0,
-            )
-
-            self._enabled = snapshot.get(
-                "enabled",
-                True,
-            )
-
-            self._frozen = snapshot.get(
-                "frozen",
-                False,
-            )
-
-            self._closed = snapshot.get(
-                "closed",
-                False,
-            )
-
-            self._updated_at = datetime.utcnow()
+            self._touch()
 
         return self
 
-    def clone(
-        self,
-    ):
-        """
-        Create a cloned analyzer.
-        """
+    # ----------------------------------------------------------------------
+    # Clone / copy protocol
+    # ----------------------------------------------------------------------
 
+    def clone(self) -> "MetricHealthAnalyzer":
         cloned = self.__class__(
-
-            name=self._name,
-
-            description=self._description,
-
+            name=self.name,
+            description=self.description,
+            config=self._config,
         )
 
-        cloned.restore(
-            self.snapshot()
+        cloned.id = self.id
+        cloned.version = self.version
+
+        cloned.enabled = self.enabled
+        cloned.frozen = self.frozen
+        cloned.closed = self.closed
+        cloned.running = False
+
+        cloned._health_count = self._health_count
+        cloned._analysis_count = self._analysis_count
+        cloned._error_count = self._error_count
+        cloned._latency = self._latency
+
+        cloned._history = copy.deepcopy(
+            self._history
         )
+
+        cloned._last_result = copy.deepcopy(
+            self._last_result
+        )
+
+        cloned._snapshot = copy.deepcopy(
+            self._snapshot
+        )
+
+        cloned._context = copy.deepcopy(
+            self._context
+        )
+
+        cloned._events = copy.deepcopy(
+            self._events
+        )
+
+        cloned._created_at = self._created_at
+        cloned._updated_at = self._updated_at
+
+        # Preserve registered algorithms.
+        # Built-in bound methods must belong to the clone.
+        builtin_names = set(
+            self.BUILTIN_ALGORITHMS
+        )
+
+        for name, entry in self._algorithms.items():
+            if name in builtin_names:
+                builtin_callable = getattr(
+                    cloned,
+                    f"_algorithm_{name}",
+                    None,
+                )
+
+                if builtin_callable is not None:
+                    cloned._algorithms[name][
+                        "enabled"
+                    ] = entry["enabled"]
+
+                    for key, value in entry.items():
+                        if key not in {
+                            "name",
+                            "callable",
+                            "enabled",
+                            "builtin",
+                        }:
+                            cloned._algorithms[name][
+                                key
+                            ] = copy.deepcopy(value)
+            else:
+                cloned._algorithms[name] = {
+                    key: (
+                        value
+                        if key == "callable"
+                        else copy.deepcopy(value)
+                    )
+                    for key, value in entry.items()
+                }
 
         return cloned
 
-    def copy(
-        self,
-    ):
-        """
-        Alias of clone().
-        """
-
+    def copy(self) -> "MetricHealthAnalyzer":
         return self.clone()
-    # ======================================================
-    # Part 7. Statistics & Diagnostics
-    # ======================================================
 
-    def summary(
+    def __copy__(self) -> "MetricHealthAnalyzer":
+        return self.clone()
+
+    def __deepcopy__(
         self,
-    ) -> dict:
-        """
-        Return runtime summary.
-        """
+        memo: dict[int, Any],
+    ) -> "MetricHealthAnalyzer":
+        cloned = self.clone()
+        memo[id(self)] = cloned
+        return cloned
+
+    # ----------------------------------------------------------------------
+    # Serialization
+    # ----------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        algorithms = {}
+
+        for name, entry in self._algorithms.items():
+            algorithms[name] = {
+                key: value
+                for key, value in entry.items()
+                if key != "callable"
+            }
 
         return {
-
-            "id": self._id,
-
-            "name": self._name,
-
-            "version": self._version,
-
-            "enabled": self._enabled,
-
-            "running": self._running,
-
-            "health_count":
-                self._health_count,
-
-            "analysis_count":
-                self._analysis_count,
-
-            "error_count":
-                self._error_count,
-
-            "uptime":
-                self.uptime,
-
-            "latency":
-                self._latency,
-
-            "algorithms":
-                self.algorithm_names(),
-
-        }
-
-    def report(
-        self,
-    ) -> dict:
-        """
-        Return detailed runtime report.
-        """
-
-        return {
-
-            "summary":
-                self.summary(),
-
-            "configuration":
-                dict(self._config),
-
-            "history":
-                list(self._history),
-
-            "last_result":
-                self._last_result,
-
-            "statistics":
-                self._statistics,
-
-            "created_at":
-                self._created_at,
-
-            "updated_at":
-                self._updated_at,
-
-        }
-
-    def health(
-        self,
-    ) -> dict:
-        """
-        Runtime health diagnostics.
-        """
-
-        if self._closed:
-
-            state = "closed"
-
-        elif self._frozen:
-
-            state = "frozen"
-
-        elif not self._enabled:
-
-            state = "disabled"
-
-        elif self._running:
-
-            state = "running"
-
-        else:
-
-            state = "idle"
-
-        return {
-
-            "healthy":
-                self.active,
-
-            "state":
-                state,
-
-            "errors":
-                self._error_count,
-
-            "uptime":
-                self.uptime,
-
-            "latency":
-                self._latency,
-
-        }
-
-    def status(
-        self,
-    ) -> dict:
-        """
-        Alias of health().
-        """
-
-        return self.health()
-
-    # ======================================================
-    # Statistics Properties
-    # ======================================================
-
-    @property
-    def health_count(
-        self,
-    ) -> int:
-        """
-        Number of healthy analyses.
-        """
-
-        return self._health_count
-
-    @property
-    def analysis_count(
-        self,
-    ) -> int:
-        """
-        Total number of analyses.
-        """
-
-        return self._analysis_count
-
-    @property
-    def error_count(
-        self,
-    ) -> int:
-        """
-        Total number of errors.
-        """
-
-        return self._error_count
-
-    @property
-    def uptime(
-        self,
-    ) -> float:
-        """
-        Runtime uptime (seconds).
-        """
-
-        return (
-
-            time.perf_counter()
-
-            -
-
-            self._started_at
-
-        )
-
-    @property
-    def latency(
-        self,
-    ) -> float:
-        """
-        Last analysis latency (seconds).
-        """
-
-        return self._latency
-    # ======================================================
-    # Part 8. Serialization
-    # ======================================================
-
-    import json
-
-    def to_dict(
-        self,
-    ) -> dict:
-        """
-        Serialize analyzer to a dictionary.
-        """
-
-        return {
-
-            "id": self._id,
-
-            "name": self._name,
-
-            "description": self._description,
-
-            "version": self._version,
-
-            "enabled": self._enabled,
-
-            "frozen": self._frozen,
-
-            "closed": self._closed,
-
-            "config": dict(
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "enabled": self.enabled,
+            "frozen": self.frozen,
+            "closed": self.closed,
+            "config": copy.deepcopy(
                 self._config
             ),
-
-            "health_count":
-                self._health_count,
-
-            "analysis_count":
-                self._analysis_count,
-
-            "error_count":
-                self._error_count,
-
-            "latency":
-                self._latency,
-
-            "created_at":
-                self._created_at.isoformat(),
-
-            "updated_at":
-                self._updated_at.isoformat(),
-
+            "health_count": self._health_count,
+            "analysis_count": self._analysis_count,
+            "error_count": self._error_count,
+            "latency": self._latency,
+            "history": copy.deepcopy(
+                self._history
+            ),
+            "last_result": copy.deepcopy(
+                self._last_result
+            ),
+            "algorithms": algorithms,
         }
 
     @classmethod
     def from_dict(
         cls,
-        data: dict,
-    ):
-        """
-        Create an analyzer from a dictionary.
-        """
-
-        analyzer = cls(
-
-            name=data.get(
-                "name",
-                "MetricHealthAnalyzer",
+        data: Mapping[str, Any],
+    ) -> "MetricHealthAnalyzer":
+        restored = cls(
+            name=str(
+                data.get(
+                    "name",
+                    "MetricHealthAnalyzer",
+                )
             ),
-
-            description=data.get(
-                "description",
-                "",
+            description=str(
+                data.get(
+                    "description",
+                    "",
+                )
             ),
-
-        )
-
-        analyzer._enabled = data.get(
-            "enabled",
-            True,
-        )
-
-        analyzer._frozen = data.get(
-            "frozen",
-            False,
-        )
-
-        analyzer._closed = data.get(
-            "closed",
-            False,
-        )
-
-        analyzer._config.update(
-
-            data.get(
+            config=data.get(
                 "config",
                 {},
+            ),
+        )
+
+        # Deserialization deliberately creates a NEW identity.
+        restored.enabled = bool(
+            data.get(
+                "enabled",
+                True,
             )
-
         )
 
-        analyzer._health_count = data.get(
-            "health_count",
-            0,
+        restored.frozen = bool(
+            data.get(
+                "frozen",
+                False,
+            )
         )
 
-        analyzer._analysis_count = data.get(
-            "analysis_count",
-            0,
+        restored.closed = bool(
+            data.get(
+                "closed",
+                False,
+            )
         )
 
-        analyzer._error_count = data.get(
-            "error_count",
-            0,
+        restored._health_count = int(
+            data.get(
+                "health_count",
+                0,
+            )
         )
 
-        analyzer._latency = data.get(
-            "latency",
-            0.0,
+        restored._analysis_count = int(
+            data.get(
+                "analysis_count",
+                0,
+            )
         )
 
-        return analyzer
+        restored._error_count = int(
+            data.get(
+                "error_count",
+                0,
+            )
+        )
 
-    def to_json(
-        self,
-        **kwargs,
-    ) -> str:
-        """
-        Serialize analyzer to JSON.
-        """
+        restored._latency = float(
+            data.get(
+                "latency",
+                0.0,
+            )
+        )
 
+        restored._history = copy.deepcopy(
+            data.get(
+                "history",
+                [],
+            )
+        )
+
+        restored._last_result = copy.deepcopy(
+            data.get(
+                "last_result"
+            )
+        )
+
+        serialized_algorithms = data.get(
+            "algorithms",
+            {},
+        )
+
+        for name, entry in serialized_algorithms.items():
+            if name in restored._algorithms:
+                restored._algorithms[name][
+                    "enabled"
+                ] = bool(
+                    entry.get(
+                        "enabled",
+                        True,
+                    )
+                )
+
+        restored._touch()
+
+        return restored
+
+    def to_json(self) -> str:
         return json.dumps(
-
             self.to_dict(),
-
-            **kwargs,
-
+            sort_keys=True,
+            default=str,
         )
 
     @classmethod
     def from_json(
         cls,
         data: str,
-    ):
-        """
-        Create an analyzer from JSON.
-        """
-
+    ) -> "MetricHealthAnalyzer":
         return cls.from_dict(
-
             json.loads(data)
-
         )
 
-    def serialize(
-        self,
-        **kwargs,
-    ) -> str:
-        """
-        Alias of to_json().
-        """
-
-        return self.to_json(
-            **kwargs
-        )
+    def serialize(self) -> str:
+        return self.to_json()
 
     @classmethod
     def deserialize(
         cls,
         data: str,
-    ):
+    ) -> "MetricHealthAnalyzer":
+        return cls.from_json(data)
+
+    # ----------------------------------------------------------------------
+    # Diagnostics
+    # ----------------------------------------------------------------------
+
+    def health(self) -> dict[str, Any]:
         """
-        Alias of from_json().
+        Return a stable diagnostic snapshot.
+
+        The result is cached so:
+
+            analyzer.status() == analyzer.health()
+
+        remains deterministic even though uptime is time-dependent.
         """
+        if self._health_cache is None:
+            if self.closed:
+                state = "closed"
+                healthy = False
+            elif self.frozen:
+                state = "frozen"
+                healthy = False
+            elif self.disabled:
+                state = "disabled"
+                healthy = False
+            elif self.running:
+                state = "running"
+                healthy = True
+            else:
+                state = "idle"
+                healthy = True
 
-        return cls.from_json(
-            data
-        )
-    # ======================================================
-    # Part 9. Events & Hooks
-    # ======================================================
+            self._health_cache = {
+                "id": self.id,
+                "name": self.name,
+                "version": self.version,
+                "state": state,
+                "healthy": healthy,
+                "enabled": self.enabled,
+                "disabled": self.disabled,
+                "frozen": self.frozen,
+                "closed": self.closed,
+                "running": self.running,
+                "active": self.active,
+                "errors": self._error_count,
+                "health_count": self._health_count,
+                "analysis_count": self._analysis_count,
+                "uptime": self.uptime,
+            }
 
-    def before_analyze(
-        self,
-        metrics,
-        method: str,
-        **kwargs,
-    ):
-        """
-        Hook executed before health analysis.
-        """
-
-        self.emit(
-
-            "before_analyze",
-
-            metrics=metrics,
-
-            method=method,
-
-            kwargs=kwargs,
-
-        )
-
-        return self
-
-    def after_analyze(
-        self,
-        result,
-        method: str,
-    ):
-        """
-        Hook executed after health analysis.
-        """
-
-        self.emit(
-
-            "after_analyze",
-
-            result=result,
-
-            method=method,
-
-        )
-
-        return self
-
-    def before_algorithm(
-        self,
-        name: str,
-    ):
-        """
-        Hook executed before algorithm execution.
-        """
-
-        self.emit(
-
-            "before_algorithm",
-
-            algorithm=name,
-
+        return copy.deepcopy(
+            self._health_cache
         )
 
-        return self
+    def status(self) -> dict[str, Any]:
+        return self.health()
 
-    def after_algorithm(
-        self,
-        name: str,
-        result=None,
-    ):
-        """
-        Hook executed after algorithm execution.
-        """
+    def summary(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "health_count": self._health_count,
+            "analysis_count": self._analysis_count,
+            "error_count": self._error_count,
+            "latency": self._latency,
+            "uptime": self.uptime,
+            "algorithms": self.algorithm_names(),
+            "active": self.active,
+        }
 
-        self.emit(
+    def report(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary(),
+            "configuration": self.config(),
+            "history": copy.deepcopy(
+                self._history
+            ),
+            "last_result": copy.deepcopy(
+                self._last_result
+            ),
+            "statistics": {
+                "health_count": self._health_count,
+                "analysis_count": self._analysis_count,
+                "error_count": self._error_count,
+                "latency": self._latency,
+            },
+        }
 
-            "after_algorithm",
-
-            algorithm=name,
-
-            result=result,
-
-        )
-
-        return self
+    # ----------------------------------------------------------------------
+    # Events / hooks
+    # ----------------------------------------------------------------------
 
     def add_hook(
         self,
         event: str,
-        callback: Callable,
-    ):
-        """
-        Register an event hook.
-        """
-
+        callback: Callable[..., Any],
+    ) -> "MetricHealthAnalyzer":
         if not callable(callback):
-
             raise TypeError(
-                "callback must be callable."
+                "callback must be callable"
             )
 
-        with self._lock:
-
-            self._hooks.setdefault(
-
-                event,
-
-                []
-
-            ).append(
-
-                callback
-
-            )
-
-        return self
-
-    def remove_hook(
-        self,
-        event: str,
-        callback: Callable | None = None,
-    ):
-        """
-        Remove one hook or all hooks for an event.
-        """
-
-        with self._lock:
-
-            if event not in self._hooks:
-
-                return self
-
-            if callback is None:
-
-                self._hooks.pop(
-
-                    event,
-
-                    None,
-
-                )
-
-                return self
-
-            try:
-
-                self._hooks[event].remove(
-                    callback
-                )
-
-            except ValueError:
-
-                pass
-
-            if not self._hooks[event]:
-
-                self._hooks.pop(
-
-                    event,
-
-                    None,
-
-                )
-
-        return self
-
-    def emit(
-        self,
-        event: str,
-        **payload,
-    ):
-        """
-        Emit an event.
-        """
-
-        record = {
-
-            "timestamp":
-                datetime.utcnow(),
-
-            "event":
-                event,
-
-            "payload":
-                payload,
-
-        }
-
-        self._events.append(
-            record
-        )
-
-        for callback in self._hooks.get(
+        self._hooks.setdefault(
             event,
             [],
-        ):
-
-            callback(
-
-                self,
-
-                **payload,
-
-            )
+        ).append(callback)
 
         return self
 
     def subscribe(
         self,
         event: str,
-        callback: Callable,
-    ):
-        """
-        Alias of add_hook().
-        """
-
+        callback: Callable[..., Any],
+    ) -> "MetricHealthAnalyzer":
         return self.add_hook(
-
             event,
-
             callback,
-
         )
-    # ======================================================
-    # Part 10. Python Protocols
-    # ======================================================
 
-    def __repr__(
+    def remove_hook(
         self,
-    ) -> str:
-        """
-        Developer representation.
-        """
+        event: str,
+        callback: Callable[..., Any] | None = None,
+    ) -> "MetricHealthAnalyzer":
+        callbacks = self._hooks.get(event)
 
+        if not callbacks:
+            return self
+
+        if callback is None:
+            callbacks.clear()
+        else:
+            self._hooks[event] = [
+                item
+                for item in callbacks
+                if item is not callback
+            ]
+
+        return self
+
+    def emit(
+        self,
+        event: str,
+        **payload: Any,
+    ) -> "MetricHealthAnalyzer":
+        record = {
+            "event": event,
+            "payload": copy.deepcopy(
+                payload
+            ),
+            "timestamp": time.time(),
+        }
+
+        self._events.append(record)
+
+        callbacks = list(
+            self._hooks.get(
+                event,
+                [],
+            )
+        )
+
+        for callback in callbacks:
+            try:
+                callback(
+                    self,
+                    **payload,
+                )
+            except Exception:
+                # Hook failures are intentionally isolated from runtime
+                # analysis. Observability hooks must never break execution.
+                continue
+
+        return self
+
+    # ----------------------------------------------------------------------
+    # Python protocols
+    # ----------------------------------------------------------------------
+
+    def __repr__(self) -> str:
         return (
-
             f"{self.__class__.__name__}("
-
-            f"name={self._name!r}, "
-
-            f"enabled={self._enabled}, "
-
-            f"algorithms={len(self._algorithms)}, "
-
-            f"analyses={self._analysis_count}, "
-
-            f"healthy={self._health_count}"
-
+            f"name={self.name!r}, "
+            f"enabled={self.enabled!r}, "
+            f"algorithms={self.algorithm_count}, "
+            f"analyses={self.analysis_count}, "
+            f"healthy={self.health_count}"
             f")"
-
         )
 
-    def __str__(
-        self,
-    ) -> str:
-        """
-        Human-readable representation.
-        """
-
+    def __str__(self) -> str:
         return (
-
-            f"{self._name} "
-
-            f"(algorithms={len(self._algorithms)}, "
-
-            f"analyses={self._analysis_count}, "
-
-            f"healthy={self._health_count})"
-
+            f"{self.name}("
+            f"algorithms={self.algorithm_count}, "
+            f"analyses={self.analysis_count}, "
+            f"healthy={self.health_count}"
+            f")"
         )
 
-    def __len__(
-        self,
-    ) -> int:
-        """
-        Number of registered algorithms.
-        """
+    def __len__(self) -> int:
+        return self.algorithm_count
 
-        return len(
-            self._algorithms
-        )
-
-    def __iter__(
-        self,
-    ):
-        """
-        Iterate over registered algorithms.
-        """
-
+    def __iter__(self):
         return iter(
-            self._algorithms.items()
+            self.algorithms().items()
         )
 
     def __contains__(
         self,
-        name: str,
+        name: object,
     ) -> bool:
-        """
-        Check whether an algorithm exists.
-        """
-
-        return (
-
-            name
-
-            in
-
-            self._algorithms
-
-        )
+        return name in self._algorithms
 
     def __call__(
         self,
-        metrics,
-        method: str = "overall",
-        **kwargs,
-    ):
-        """
-        Callable interface.
-
-        Equivalent to analyze().
-        """
-
+        metrics: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         return self.analyze(
-
             metrics,
-
-            method=method,
-
             **kwargs,
-
         )
-
-    def __copy__(
-        self,
-    ):
-        """
-        Shallow copy.
-        """
-
-        return self.clone()
-
-    def __deepcopy__(
-        self,
-        memo,
-    ):
-        """
-        Deep copy.
-        """
-
-        clone = self.clone()
-
-        memo[id(self)] = clone
-
-        return clone                                                                
