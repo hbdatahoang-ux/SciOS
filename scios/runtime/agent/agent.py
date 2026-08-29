@@ -4,23 +4,50 @@ SciOS Runtime Agent
 
 High-level autonomous agent orchestration layer.
 
+Architecture
+------------
+
+                    +----------------+
+                    |      Agent     |
+                    +--------+-------+
+                             |
+          +------------------+------------------+
+          |                  |                  |
+          v                  v                  v
+      AgentState          Memory            Planner
+                                                |
+                                                v
+                                           ToolRouter
+                                                |
+                                                v
+                                           ToolResult
+
+The runtime Agent is an orchestration boundary.
+
+Its responsibilities are limited to:
+
+- lifecycle state
+- planning delegation
+- memory delegation
+- tool routing
+- result normalization
+- execution diagnostics
+
+Injected dependencies are preserved by object identity.
+
 Python 3.11+
 """
 
 from __future__ import annotations
 
-
 from typing import Any
 
-
-from .state import AgentState
 from .memory import Memory
 from .planner import Planner
+from .state import AgentState
 from .tool_router import ToolRouter
 
-
 from scios.runtime.tools.result import ToolResult
-
 
 
 __all__ = [
@@ -28,178 +55,261 @@ __all__ = [
 ]
 
 
-
 class Agent:
     """
     SciOS Runtime Agent.
 
-    Pipeline:
+    Stable response contract
+    ------------------------
 
-        Task
-         |
-        Planner
-         |
-        ToolRouter
-         |
-        Result
-         |
-        AgentResponse
+    ``run()`` returns:
+
+        {
+            "agent": str,
+            "task": str,
+            "plan": Any,
+            "result": Any,
+            "status": "completed" | "failed",
+        }
+
+    Dependency-injection contract
+    -----------------------------
+
+    Explicitly supplied dependencies are preserved by identity:
+
+        Agent(memory=x).memory is x
+        Agent(planner=x).planner is x
+        Agent(router=x).router is x
+        Agent(state=x).state is x
     """
 
-
+    # ======================================================
+    # Construction
+    # ======================================================
 
     def __init__(
         self,
-        *,
         name: str = "default-agent",
-        planner: Planner | None = None,
-        memory: Memory | None = None,
-        router: ToolRouter | None = None,
+        *,
         state: AgentState | None = None,
+        memory: Memory | None = None,
+        planner: Planner | None = None,
+        router: ToolRouter | None = None,
     ) -> None:
 
+        if not isinstance(
+            name,
+            str,
+        ):
+            raise TypeError(
+                "name must be a string"
+            )
 
-        self.name = name
+        if not name:
+            raise ValueError(
+                "name must not be empty"
+            )
 
+        # --------------------------------------------------
+        # Identity-preserving dependency injection
+        # --------------------------------------------------
 
-        self._planner = (
-            planner
-            or Planner()
-        )
-
-
-        self._memory = (
-            memory
-            or Memory()
-        )
-
-
-        self._router = (
-            router
-            or ToolRouter()
-        )
-
+        self._name = name
 
         self._state = (
             state
-            or AgentState()
+            if state is not None
+            else AgentState()
         )
 
+        self._memory = (
+            memory
+            if memory is not None
+            else Memory()
+        )
+
+        self._planner = (
+            planner
+            if planner is not None
+            else Planner()
+        )
+
+        self._router = (
+            router
+            if router is not None
+            else ToolRouter()
+        )
+
+        # --------------------------------------------------
+        # Diagnostics
+        # --------------------------------------------------
 
         self._runs = 0
+
         self._success = 0
+
         self._failed = 0
-
-
 
     # ======================================================
     # Properties
     # ======================================================
 
+    @property
+    def name(
+        self,
+    ) -> str:
+
+        return self._name
 
     @property
-    def state(self) -> AgentState:
+    def state(
+        self,
+    ) -> AgentState:
+
         return self._state
 
-
-
     @property
-    def memory(self) -> Memory:
+    def memory(
+        self,
+    ) -> Memory:
+
         return self._memory
 
-
-
     @property
-    def planner(self) -> Planner:
+    def planner(
+        self,
+    ) -> Planner:
+
         return self._planner
 
-
-
     @property
-    def router(self) -> ToolRouter:
+    def router(
+        self,
+    ) -> ToolRouter:
+
         return self._router
 
-
-
     @property
-    def tool_router(self) -> ToolRouter:
+    def tool_router(
+        self,
+    ) -> ToolRouter:
+
         return self._router
 
-
-
     @property
-    def runs(self) -> int:
+    def runs(
+        self,
+    ) -> int:
+
         return self._runs
 
+    @property
+    def success(
+        self,
+    ) -> int:
+
+        return self._success
+
+    @property
+    def failed(
+        self,
+    ) -> int:
+
+        return self._failed
 
 
     # ======================================================
     # Planning
     # ======================================================
 
-
     def plan(
         self,
         task: str,
     ) -> Any:
+        """
+        Delegate planning to the injected Planner.
+
+        Planner contract
+        ----------------
+
+        The canonical Planner entry point is:
+
+            create_plan(goal)
+
+        The injected Planner instance is called directly so that
+        dependency injection, subclass overrides, recording doubles,
+        and planner failures are all preserved.
+
+        Planner exceptions intentionally propagate to ``run()``,
+        where they are converted into the Agent failure contract.
+        """
+
+        if not isinstance(
+            task,
+            str,
+        ):
+            raise TypeError(
+                "task must be a string"
+            )
 
         return self._planner.create_plan(
             task
         )
 
 
-
     # ======================================================
     # Memory
     # ======================================================
-
 
     def remember(
         self,
         key: str,
         value: Any,
     ) -> None:
+        """
+        Delegate storage to the injected Memory instance.
+        """
 
         self._memory.store(
             key,
             value,
         )
 
-
-
     def recall(
         self,
         key: str,
+        default: Any = None,
     ) -> Any:
+        """
+        Delegate retrieval to the injected Memory instance.
+        """
 
         return self._memory.get(
-            key
+            key,
+            default,
         )
-
-
 
     # ======================================================
     # Tool
     # ======================================================
-
 
     def execute_tool(
         self,
         name: str,
         **kwargs: Any,
     ) -> ToolResult:
+        """
+        Delegate tool execution to the injected ToolRouter.
+        """
 
         return self._router.route(
             name,
             **kwargs,
         )
 
-
-
     # ======================================================
     # Main Runtime
     # ======================================================
-
 
     def run(
         self,
@@ -209,53 +319,58 @@ class Agent:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
-        Execute agent task.
+        Execute an agent task.
 
-        Stable contract:
+        Planner failures and tool failures are represented by
+        the stable failed-result contract.
 
-        {
-            agent,
-            task,
-            plan,
-            result,
-            status
-        }
+        Unexpected exceptions do not escape the Agent runtime
+        boundary.
         """
 
+        if not isinstance(
+            task,
+            str,
+        ):
+            raise TypeError(
+                "task must be a string"
+            )
 
         self._runs += 1
 
-
-        self.remember(
-            "last_task",
-            task,
-        )
-
-
-        plan = None
-
+        plan: Any = None
 
         try:
 
-            #
-            # lifecycle
-            #
+            # ------------------------------------------------
+            # Lifecycle: running
+            # ------------------------------------------------
+
             self._start_state(
                 task
             )
 
+            # ------------------------------------------------
+            # Memory
+            # ------------------------------------------------
 
-            #
-            # planning
-            #
+            self.remember(
+                "last_task",
+                task,
+            )
+
+            # ------------------------------------------------
+            # Planning
+            # ------------------------------------------------
+
             plan = self.plan(
                 task
             )
 
+            # ------------------------------------------------
+            # Execution
+            # ------------------------------------------------
 
-            #
-            # execution
-            #
             if tool is not None:
 
                 result = self.execute_tool(
@@ -269,14 +384,13 @@ class Agent:
                     plan
                 )
 
+            # ------------------------------------------------
+            # Result classification
+            # ------------------------------------------------
 
-            #
-            # success normalization
-            #
             success = self._is_success(
                 result
             )
-
 
             if success:
 
@@ -294,88 +408,68 @@ class Agent:
                     result
                 )
 
-
+            # ------------------------------------------------
+            # Stable response
+            # ------------------------------------------------
 
             return {
-
-                "agent":
-                    self.name,
-
-
-                "task":
-                    task,
-
-
-                "plan":
-                    plan,
-
-
-                "result":
-                    self._normalize_result(
-                        result
-                    ),
-
-
-                "status":
-                    (
-                        "completed"
-                        if success
-                        else "failed"
-                    ),
-
+                "agent": self.name,
+                "task": task,
+                "plan": plan,
+                "result": self._normalize_result(
+                    result
+                ),
+                "status": (
+                    "completed"
+                    if success
+                    else "failed"
+                ),
             }
-
-
 
         except Exception as exc:
 
+            # ------------------------------------------------
+            # Runtime failure boundary
+            # ------------------------------------------------
 
             self._failed += 1
-
 
             self._fail_state(
                 exc
             )
 
-
             return {
-
-                "agent":
-                    self.name,
-
-                "task":
-                    task,
-
-                "plan":
-                    plan,
-
-                "result":
-                    None,
-
-                "status":
-                    "failed",
-
-                "error":
-                    str(exc),
-
+                "agent": self.name,
+                "task": task,
+                "plan": plan,
+                "result": None,
+                "status": "failed",
+                "error": str(exc),
             }
 
-
-
     # ======================================================
-    # Execution helpers
+    # Plan Execution
     # ======================================================
-
 
     def _execute_plan(
         self,
         plan: Any,
     ) -> Any:
+        """
+        Execute a planner-produced plan.
 
+        Tool plan:
 
-        #
-        # Tool plan
-        #
+            {
+                "tool": "echo",
+                "args": {
+                    "text": "hello"
+                }
+            }
+
+        Other planner output is returned as-is.
+        """
+
         if isinstance(
             plan,
             dict,
@@ -385,12 +479,21 @@ class Agent:
                 "tool"
             )
 
-
             args = plan.get(
                 "args",
                 {},
             )
 
+            if args is None:
+                args = {}
+
+            if not isinstance(
+                args,
+                dict,
+            ):
+                raise TypeError(
+                    "plan args must be a dict"
+                )
 
             if tool:
 
@@ -399,20 +502,24 @@ class Agent:
                     **args,
                 )
 
-
-
-        #
-        # Pure reasoning result
-        #
         return plan
 
-
+    # ======================================================
+    # Result Classification
+    # ======================================================
 
     def _is_success(
         self,
         result: Any,
     ) -> bool:
+        """
+        Determine execution success.
 
+        ToolResult controls tool success explicitly.
+
+        Non-ToolResult planner output is considered a successful
+        reasoning result.
+        """
 
         if isinstance(
             result,
@@ -423,193 +530,153 @@ class Agent:
                 result.success
             )
 
-
-        #
-        # Normal planner output
-        #
         return True
 
-
+    # ======================================================
+    # Result Normalization
+    # ======================================================
 
     def _normalize_result(
         self,
         result: Any,
     ) -> Any:
-
+        """
+        Normalize ToolResult into a dictionary when possible.
+        """
 
         if isinstance(
             result,
             ToolResult,
         ):
 
-            if hasattr(
+            to_dict = getattr(
                 result,
                 "to_dict",
+                None,
+            )
+
+            if callable(
+                to_dict
             ):
 
-                return result.to_dict()
-
+                return to_dict()
 
         return result
 
-
-
     # ======================================================
-    # State compatibility
+    # State Lifecycle
     # ======================================================
-
 
     def _start_state(
         self,
         task: str,
     ) -> None:
 
-
-        if hasattr(
-            self._state,
-            "start",
-        ):
-
-            try:
-                self._state.start(
-                    task
-                )
-            except TypeError:
-                self._state.start()
-
-
+        self._state.start(
+            task
+        )
 
     def _complete_state(
         self,
         result: Any,
     ) -> None:
 
-
-        if hasattr(
-            self._state,
-            "complete",
-        ):
-
-            try:
-                self._state.complete(
-                    result
-                )
-            except TypeError:
-                self._state.complete()
-
-
+        self._state.complete(
+            result
+        )
 
     def _fail_state(
         self,
         error: Any,
     ) -> None:
 
-
-        if hasattr(
-            self._state,
-            "fail",
-        ):
-
-            self._state.fail(
-                error
-            )
-
-
+        self._state.fail(
+            error
+        )
 
     # ======================================================
     # Lifecycle
     # ======================================================
 
-
     def reset(
         self,
     ) -> None:
+        """
+        Reset lifecycle state.
 
+        Diagnostic counters are historical and therefore
+        intentionally preserved.
+        """
 
-        if hasattr(
-            self._state,
-            "reset",
-        ):
-
-            self._state.reset()
-
-
+        self._state.reset()
 
     def shutdown(
         self,
     ) -> None:
+        """
+        Shutdown tool registrations.
 
+        The injected router remains the same object.
+        """
 
-        if hasattr(
+        registry = getattr(
             self._router,
             "registry",
+            None,
+        )
+
+        clear = getattr(
+            registry,
+            "clear",
+            None,
+        )
+
+        if callable(
+            clear
         ):
 
-            self._router.registry.clear()
-
-
+            clear()
 
     # ======================================================
     # Diagnostics
     # ======================================================
 
-
     def status(
         self,
     ) -> dict[str, Any]:
+        """
+        Return runtime diagnostics.
+        """
 
         return {
-
-            "name":
-                self.name,
-
-            "runs":
-                self._runs,
-
-            "success":
-                self._success,
-
-            "failed":
-                self._failed,
-
-            "state":
-                self._state.to_dict(),
-
-            "memory":
-                self._memory.status(),
-
-            "tools":
-                self._router.status(),
-
+            "name": self.name,
+            "runs": self._runs,
+            "success": self._success,
+            "failed": self._failed,
+            "state": self._state.to_dict(),
+            "memory": self._memory.status(),
+            "tools": self._router.status(),
         }
-
-
 
     # ======================================================
     # Serialization
     # ======================================================
 
-
     def to_dict(
         self,
     ) -> dict[str, Any]:
+        """
+        Return serializable agent representation.
+        """
 
         return {
-
-            "name":
-                self.name,
-
-            "status":
-                self.status(),
-
+            "name": self.name,
+            "status": self.status(),
         }
-
-
 
     # ======================================================
     # Protocol
     # ======================================================
-
 
     def __call__(
         self,
@@ -622,7 +689,9 @@ class Agent:
             **kwargs,
         )
 
-
+    # ======================================================
+    # Representation
+    # ======================================================
 
     def __repr__(
         self,
