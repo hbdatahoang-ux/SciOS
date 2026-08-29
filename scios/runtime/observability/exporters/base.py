@@ -927,7 +927,86 @@ class Exporter:
 # Part 7. Public API
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# Backward Compatibility
+# ------------------------------------------------------------------------------
+
+BaseExporter = Exporter
+
+
+# ------------------------------------------------------------------------------
+# Legacy Compatibility API
+# ------------------------------------------------------------------------------
+
+class ExportStatus(str, Enum):
+    """
+    Legacy exporter status.
+
+    Kept for backward compatibility with the pre-v0.1 exporter API.
+    """
+
+    SUCCESS = "success"
+    ERROR = "error"
+    FAILED = "failed"
+    DISABLED = "disabled"
+    PENDING = "pending"
+
+
+class ExportCapability(str, Enum):
+    """
+    Legacy exporter capability flags.
+
+    Kept for backward compatibility with concrete exporters.
+    """
+
+    SERIALIZATION = "serialization"
+    BATCHING = "batching"
+    STREAMING = "streaming"
+
+
+class ExportMode(str, Enum):
+    """
+    Legacy exporter operating mode.
+
+    Kept for backward compatibility with concrete exporters.
+    """
+
+    SYNC = "sync"
+    ASYNC = "async"
+    BATCH = "batch"
+    STREAM = "stream"
+
+
+@dataclass
+class ExportRecord:
+    """
+    Legacy export record compatibility object.
+    """
+
+    name: str
+    value: Any = None
+    labels: dict[str, Any] = field(default_factory=dict)
+    timestamp: Optional[float] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    options: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "value": self.value,
+            "labels": dict(self.labels),
+            "timestamp": self.timestamp,
+            "metadata": dict(self.metadata),
+            "options": dict(self.options),
+        }
+
+
+# ------------------------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------------------------
+
 __all__ = [
+    # Current API
     "ExportData",
     "ExportError",
     "ExportFormat",
@@ -935,4 +1014,11 @@ __all__ = [
     "ExportPayload",
     "ExportResult",
     "Exporter",
+
+    # Legacy compatibility API
+    "BaseExporter",
+    "ExportRecord",
+    "ExportStatus",
+    "ExportCapability",
+    "ExportMode",
 ]

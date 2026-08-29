@@ -1,8 +1,12 @@
 """
-SciOS Runtime Pipeline Integration Tests
-========================================
+SciOS Runtime Pipeline Contract Tests
+======================================
 
-Integration tests for the runtime execution pipeline.
+Canonical contract tests for:
+
+    scios.runtime.pipeline.Pipeline
+
+Python 3.11+
 """
 
 from __future__ import annotations
@@ -11,7 +15,6 @@ import pytest
 
 from scios.runtime import (
     ExecutionContext,
-    ExecutionEngine,
     Pipeline,
     Stage,
 )
@@ -21,171 +24,479 @@ from scios.runtime import (
 # Test Stages
 # ==========================================================
 
-class PlannerStage(Stage):
 
-    def execute(self, context: ExecutionContext) -> None:
-        context.log("planner")
+class FirstStage(Stage):
+
+    def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+
+        context.log("first")
         context.set_artifact(
-            "plan",
-            [
-                "collect",
-                "analyze",
-                "report",
-            ],
-        )
-
-
-class ExecutorStage(Stage):
-
-    def execute(self, context: ExecutionContext) -> None:
-        plan = context.get_artifact("plan")
-
-        assert plan is not None
-
-        context.log("executor")
-
-        context.set_artifact(
-            "execution",
+            "first",
             True,
         )
 
 
-class ReflectionStage(Stage):
+class SecondStage(Stage):
 
-    def execute(self, context: ExecutionContext) -> None:
+    def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
 
-        context.log("reflection")
+        context.log("second")
 
-        context.set_result(
-            {
-                "status": "success",
-                "task": context.task,
-            }
+        context.set_artifact(
+            "second",
+            True,
         )
 
 
+class FailingStage(Stage):
+
+    def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+
+        raise ValueError("boom")
+
+
+class OutputStage(Stage):
+
+    def __init__(
+        self,
+        output,
+    ) -> None:
+
+        self.output = output
+
+    def execute(
+        self,
+        context: ExecutionContext,
+    ):
+
+        return self.output
+
+
 # ==========================================================
-# Fixture
+# Construction
 # ==========================================================
 
-@pytest.fixture
-def engine() -> ExecutionEngine:
+
+def test_default_pipeline():
 
     pipeline = Pipeline()
 
-    pipeline.add_stage(
-        PlannerStage()
+    assert len(pipeline) == 0
+    assert pipeline.stage_count == 0
+    assert pipeline.stages == ()
+
+
+def test_pipeline_from_stages():
+
+    first = FirstStage()
+    second = SecondStage()
+
+    pipeline = Pipeline(
+        [
+            first,
+            second,
+        ]
     )
 
-    pipeline.add_stage(
-        ExecutorStage()
-    )
-
-    pipeline.add_stage(
-        ReflectionStage()
-    )
-
-    return ExecutionEngine(
-        pipeline=pipeline,
+    assert pipeline.stage_count == 2
+    assert pipeline.stages == (
+        first,
+        second,
     )
 
 
 # ==========================================================
-# Pipeline
+# Stage Management
 # ==========================================================
 
-def test_pipeline_execution(
-    engine: ExecutionEngine,
-) -> None:
 
-    ctx = engine.run(
-        "battery analysis"
+def test_add_stage():
+
+    pipeline = Pipeline()
+    stage = FirstStage()
+
+    returned = pipeline.add_stage(stage)
+
+    assert returned is None
+    assert stage in pipeline
+    assert pipeline.stage_count == 1
+
+
+def test_duplicate_stage_is_ignored():
+
+    pipeline = Pipeline()
+    stage = FirstStage()
+
+    pipeline.add_stage(stage)
+    pipeline.add_stage(stage)
+
+    assert pipeline.stage_count == 1
+
+
+def test_remove_stage():
+
+    stage = FirstStage()
+
+    pipeline = Pipeline(
+        [stage]
     )
 
-    assert ctx.status == "completed"
+    pipeline.remove_stage(stage)
 
-    assert ctx.result["status"] == "success"
-
-    assert ctx.get_artifact(
-        "plan"
-    ) is not None
-
-    assert ctx.get_artifact(
-        "execution"
-    ) is True
+    assert stage not in pipeline
+    assert pipeline.stage_count == 0
 
 
-def test_pipeline_stage_order(
-    engine: ExecutionEngine,
-) -> None:
+def test_remove_missing_stage_is_safe():
 
-    ctx = engine.run(
-        "pipeline ordering"
+    pipeline = Pipeline()
+
+    pipeline.remove_stage(
+        FirstStage()
     )
 
-    assert ctx.logs == [
-        "Task received: pipeline ordering",
-        "Pipeline started",
-        "Executing stage: PlannerStage",
-        "planner",
-        "Executing stage: ExecutorStage",
-        "executor",
-        "Executing stage: ReflectionStage",
-        "reflection",
-        "Pipeline completed",
+    assert pipeline.stage_count == 0
+
+
+def test_clear():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
+
+    pipeline.clear()
+
+    assert pipeline.stage_count == 0
+    assert pipeline.stages == ()
+
+
+def test_stages_are_read_only_view():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+        ]
+    )
+
+    stages = pipeline.stages
+
+    assert isinstance(stages, tuple)
+
+    with pytest.raises(AttributeError):
+        stages.append(
+            SecondStage()
+        )
+
+
+# ==========================================================
+# Execution
+# ==========================================================
+
+
+def test_execute_returns_same_context():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    returned = pipeline.execute(
+        context
+    )
+
+    assert returned is context
+
+
+def test_run_is_execute_alias():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    returned = pipeline.run(
+        context
+    )
+
+    assert returned is context
+
+
+def test_stages_execute_in_order():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    pipeline.execute(
+        context
+    )
+
+    assert context.logs == [
+        "Executing stage: FirstStage",
+        "first",
+        "Executing stage: SecondStage",
+        "second",
     ]
 
 
-def test_pipeline_events(
-    engine: ExecutionEngine,
-) -> None:
+def test_stage_artifacts_survive_pipeline():
 
-    ctx = engine.run(
-        "events"
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
     )
 
-    assert "PlannerStage.started" in ctx.events
-    assert "PlannerStage.completed" in ctx.events
+    context = ExecutionContext(
+        "demo"
+    )
 
-    assert "ExecutorStage.started" in ctx.events
-    assert "ExecutorStage.completed" in ctx.events
+    pipeline.execute(
+        context
+    )
 
-    assert "ReflectionStage.started" in ctx.events
-    assert "ReflectionStage.completed" in ctx.events
+    assert context.get_artifact(
+        "first"
+    ) is True
+
+    assert context.get_artifact(
+        "second"
+    ) is True
+
+
+# ==========================================================
+# Events
+# ==========================================================
+
+
+def test_stage_lifecycle_events():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    pipeline.execute(
+        context
+    )
+
+    assert context.events == [
+        "FirstStage.started",
+        "FirstStage.completed",
+        "SecondStage.started",
+        "SecondStage.completed",
+    ]
+
+
+def test_failed_stage_emits_failed_event():
+
+    pipeline = Pipeline(
+        [
+            FailingStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    context.start()
+
+    # Context.start() emits the execution-level lifecycle event.
+    # This test focuses exclusively on Pipeline stage events.
+    context.events.clear()
+
+    with pytest.raises(
+        ValueError,
+        match="boom",
+    ):
+        pipeline.execute(
+            context
+        )
+
+    assert context.events == [
+        "FailingStage.started",
+        "FailingStage.failed",
+    ]
+
+    # Pipeline propagates the exception to ExecutionEngine.
+    # ExecutionContext lifecycle failure is owned by the Engine,
+    # therefore Pipeline must not transition the context to failed.
+    assert context.failed is False
+    assert context.error is None
+
+
+# ==========================================================
+# Output Capture
+# ==========================================================
 
 
 @pytest.mark.parametrize(
-    "task",
+    "output",
     [
-        "simulation",
-        "optimization",
-        "battery",
-        "protein",
-        "climate",
+        None,
+        "hello",
+        {"answer": 42},
+        123,
+        ["a", "b"],
     ],
 )
-def test_pipeline_multiple_tasks(
-    engine: ExecutionEngine,
-    task: str,
-) -> None:
+def test_stage_output_is_accepted(
+    output,
+):
 
-    ctx = engine.run(task)
+    pipeline = Pipeline(
+        [
+            OutputStage(output),
+        ]
+    )
 
-    assert ctx.status == "completed"
+    context = ExecutionContext(
+        "demo"
+    )
 
-    assert ctx.result["task"] == task
+    pipeline.execute(
+        context
+    )
+
+    if isinstance(output, dict):
+
+        assert context.metadata[
+            "answer"
+        ] == 42
+
+    elif isinstance(output, str):
+
+        assert output in context.logs
+
+    elif output is not None:
+
+        assert str(output) in context.logs
 
 
-def test_pipeline_stress(
-    engine: ExecutionEngine,
-) -> None:
+# ==========================================================
+# Validation
+# ==========================================================
 
-    for i in range(100):
 
-        ctx = engine.run(
-            f"task-{i}"
+def test_execute_requires_context():
+
+    pipeline = Pipeline()
+
+    with pytest.raises(
+        ValueError,
+        match="ExecutionContext is required",
+    ):
+
+        pipeline.execute(
+            None
         )
 
-        assert ctx.status == "completed"
 
-        assert ctx.result["status"] == "success"
+# ==========================================================
+# Diagnostics
+# ==========================================================
+
+
+def test_summary():
+
+    first = FirstStage()
+    second = SecondStage()
+
+    pipeline = Pipeline(
+        [
+            first,
+            second,
+        ]
+    )
+
+    summary = pipeline.summary()
+
+    assert summary == {
+        "stage_count": 2,
+        "stages": [
+            "FirstStage",
+            "SecondStage",
+        ],
+    }
+
+
+def test_iteration():
+
+    first = FirstStage()
+    second = SecondStage()
+
+    pipeline = Pipeline(
+        [
+            first,
+            second,
+        ]
+    )
+
+    assert list(pipeline) == [
+        first,
+        second,
+    ]
+
+
+def test_contains():
+
+    stage = FirstStage()
+
+    pipeline = Pipeline(
+        [stage]
+    )
+
+    assert stage in pipeline
+    assert SecondStage() not in pipeline
+
+
+def test_repr():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
+
+    text = repr(pipeline)
+
+    assert "Pipeline" in text
+    assert "stages=2" in text
