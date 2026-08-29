@@ -12,6 +12,8 @@ Design Goals
 - Shared across all SciOS subsystems
 - Strong typing
 - IDE and static-analysis friendly
+- Runtime-checkable structural protocols
+- Stable public API
 """
 
 from __future__ import annotations
@@ -24,12 +26,14 @@ from typing import Any
 from typing import Literal
 from typing import Protocol
 from typing import TypeAlias
+from typing import runtime_checkable
 
 from .json_types import (
     JSONArray,
     JSONObject,
     JSONValue,
 )
+
 
 __all__ = [
     # JSON
@@ -72,17 +76,19 @@ __all__ = [
     "Shutdownable",
 ]
 
-# ==========================================================
+
+# ============================================================================
 # Generic Types
-# ==========================================================
+# ============================================================================
 
 ConfigDict: TypeAlias = dict[str, Any]
 
 Metadata: TypeAlias = dict[str, Any]
 
-# ==========================================================
+
+# ============================================================================
 # Runtime Types
-# ==========================================================
+# ============================================================================
 
 TaskID: TypeAlias = str
 
@@ -90,25 +96,28 @@ Task: TypeAlias = str | Mapping[str, Any]
 
 TaskResult: TypeAlias = MutableMapping[str, Any]
 
-# ==========================================================
+
+# ============================================================================
 # Vector / Embedding Types
-# ==========================================================
+# ============================================================================
 
 Embedding: TypeAlias = Sequence[float]
 
 Embeddings: TypeAlias = Sequence[Embedding]
 
-# ==========================================================
+
+# ============================================================================
 # Event Types
-# ==========================================================
+# ============================================================================
 
 EventName: TypeAlias = str
 
 Event: TypeAlias = Mapping[str, Any]
 
-# ==========================================================
+
+# ============================================================================
 # Kernel State
-# ==========================================================
+# ============================================================================
 
 KernelState: TypeAlias = Literal[
     "created",
@@ -119,9 +128,10 @@ KernelState: TypeAlias = Literal[
     "failed",
 ]
 
-# ==========================================================
+
+# ============================================================================
 # Runtime State
-# ==========================================================
+# ============================================================================
 
 RuntimeState: TypeAlias = Literal[
     "created",
@@ -131,9 +141,10 @@ RuntimeState: TypeAlias = Literal[
     "failed",
 ]
 
-# ==========================================================
+
+# ============================================================================
 # Pipeline State
-# ==========================================================
+# ============================================================================
 
 PipelineState: TypeAlias = Literal[
     "created",
@@ -142,9 +153,10 @@ PipelineState: TypeAlias = Literal[
     "failed",
 ]
 
-# ==========================================================
+
+# ============================================================================
 # Agent State
-# ==========================================================
+# ============================================================================
 
 AgentState: TypeAlias = Literal[
     "idle",
@@ -156,19 +168,26 @@ AgentState: TypeAlias = Literal[
     "failed",
 ]
 
-# ==========================================================
+
+# ============================================================================
 # Callback
-# ==========================================================
+# ============================================================================
 
 Callback: TypeAlias = Callable[..., Any]
 
-# ==========================================================
-# Protocols
-# ==========================================================
 
+# ============================================================================
+# Protocols
+# ============================================================================
+
+
+@runtime_checkable
 class Executable(Protocol):
     """
     Common execution interface.
+
+    Any object implementing ``execute(*args, **kwargs)`` satisfies
+    this protocol structurally.
     """
 
     def execute(
@@ -179,15 +198,20 @@ class Executable(Protocol):
         ...
 
 
+@runtime_checkable
 class Serializable(Protocol):
     """
-   Common serialization interface.
+    Common serialization interface.
+
+    Implementations must expose a ``to_dict()`` method returning
+    a SciOS JSON object.
     """
 
     def to_dict(self) -> JSONObject:
         ...
 
 
+@runtime_checkable
 class Identifiable(Protocol):
     """
     Object exposing a globally unique identifier.
@@ -198,6 +222,7 @@ class Identifiable(Protocol):
         ...
 
 
+@runtime_checkable
 class Named(Protocol):
     """
     Object exposing a human-readable name.
@@ -208,6 +233,7 @@ class Named(Protocol):
         ...
 
 
+@runtime_checkable
 class Initializable(Protocol):
     """
     Lifecycle initialization interface.
@@ -217,6 +243,7 @@ class Initializable(Protocol):
         ...
 
 
+@runtime_checkable
 class Shutdownable(Protocol):
     """
     Lifecycle shutdown interface.

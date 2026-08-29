@@ -1,31 +1,35 @@
-"""
+﻿"""
 SciOS Global Constants
 ======================
 
-Global constants shared across the Scientific Cognitive Operating System.
+Canonical constants shared across the Scientific Cognitive
+Operating System (SciOS).
 
-This module contains immutable definitions used by every subsystem.
+Design goals
+------------
+- Python 3.11+
+- Zero runtime dependencies
+- Stable public values
+- Centralized subsystem constants
+- Backward-compatible primitive values
+- Suitable for runtime and static analysis
 
-Modules
--------
-- System
-- Runtime
-- Kernel
-- Agents
-- Memory
-- Vector Store
-- QTC
-- Events
-- Logging
+This module intentionally contains constants only.  Runtime state,
+configuration objects, and behavior belong to their respective
+modules.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-__all__ = [
 
-    # Version
+# ============================================================================
+# Public API
+# ============================================================================
+
+__all__ = [
+    # System
     "SCIOS_NAME",
     "SCIOS_VERSION",
     "SCIOS_ORGANIZATION",
@@ -42,7 +46,7 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "DEFAULT_SCHEDULER",
 
-    # Kernel
+    # Kernel states
     "KERNEL_STATE_CREATED",
     "KERNEL_STATE_BOOTING",
     "KERNEL_STATE_RUNNING",
@@ -50,24 +54,23 @@ __all__ = [
     "KERNEL_STATE_STOPPED",
     "KERNEL_STATE_FAILED",
 
-    # Agent
+    # Agent states
     "AGENT_IDLE",
     "AGENT_RUNNING",
     "AGENT_WAITING",
     "AGENT_FINISHED",
     "AGENT_FAILED",
 
-    # Memory
+    # Memory types
     "MEMORY_WORKING",
     "MEMORY_EPISODIC",
     "MEMORY_SEMANTIC",
     "MEMORY_LONGTERM",
 
-    # Vector Store
+    # Vector store
     "VECTOR_BACKEND_FLAT",
     "VECTOR_BACKEND_HNSW",
     "VECTOR_BACKEND_FAISS",
-
     "SIMILARITY_COSINE",
     "SIMILARITY_L2",
     "SIMILARITY_INNER_PRODUCT",
@@ -92,139 +95,139 @@ __all__ = [
 ]
 
 
-# ==========================================================
+# ============================================================================
 # System
-# ==========================================================
+# ============================================================================
 
-SCIOS_NAME = "SciOS"
+SCIOS_NAME: str = "SciOS"
 
-SCIOS_VERSION = "0.1.3"
+SCIOS_VERSION: str = "0.1.3"
 
-SCIOS_ORGANIZATION = "SciOS Project"
+SCIOS_ORGANIZATION: str = "SciOS Project"
 
 
-# ==========================================================
+# ============================================================================
 # Directories
-# ==========================================================
+# ============================================================================
 
-ROOT_DIRECTORY = Path(".")
+ROOT_DIRECTORY: Path = Path(".")
 
-LOG_DIRECTORY = Path("logs")
+LOG_DIRECTORY: Path = Path("logs")
 
-CACHE_DIRECTORY = Path("cache")
+CACHE_DIRECTORY: Path = Path("cache")
 
-DATA_DIRECTORY = Path("data")
+DATA_DIRECTORY: Path = Path("data")
 
-MODEL_DIRECTORY = Path("models")
+MODEL_DIRECTORY: Path = Path("models")
 
 
-# ==========================================================
+# ============================================================================
 # Runtime
-# ==========================================================
+# ============================================================================
 
-DEFAULT_WORKERS = 4
+DEFAULT_WORKERS: int = 4
 
-DEFAULT_TIMEOUT = 300.0
+DEFAULT_TIMEOUT: float = 300.0
 
-DEFAULT_SCHEDULER = "fifo"
+DEFAULT_SCHEDULER: str = "fifo"
 
 
-# ==========================================================
+# ============================================================================
 # Kernel States
-# ==========================================================
+# ============================================================================
 
-KERNEL_STATE_CREATED = "created"
+KERNEL_STATE_CREATED: str = "created"
 
-KERNEL_STATE_BOOTING = "booting"
+KERNEL_STATE_BOOTING: str = "booting"
 
-KERNEL_STATE_RUNNING = "running"
+KERNEL_STATE_RUNNING: str = "running"
 
-KERNEL_STATE_STOPPING = "stopping"
+KERNEL_STATE_STOPPING: str = "stopping"
 
-KERNEL_STATE_STOPPED = "stopped"
+KERNEL_STATE_STOPPED: str = "stopped"
 
-KERNEL_STATE_FAILED = "failed"
+KERNEL_STATE_FAILED: str = "failed"
 
 
-# ==========================================================
+# ============================================================================
 # Agent States
-# ==========================================================
+# ============================================================================
 
-AGENT_IDLE = "idle"
+AGENT_IDLE: str = "idle"
 
-AGENT_RUNNING = "running"
+AGENT_RUNNING: str = "running"
 
-AGENT_WAITING = "waiting"
+AGENT_WAITING: str = "waiting"
 
-AGENT_FINISHED = "finished"
+AGENT_FINISHED: str = "finished"
 
-AGENT_FAILED = "failed"
+AGENT_FAILED: str = "failed"
 
 
-# ==========================================================
+# ============================================================================
 # Memory Types
-# ==========================================================
+# ============================================================================
 
-MEMORY_WORKING = "working"
+MEMORY_WORKING: str = "working"
 
-MEMORY_EPISODIC = "episodic"
+MEMORY_EPISODIC: str = "episodic"
 
-MEMORY_SEMANTIC = "semantic"
+MEMORY_SEMANTIC: str = "semantic"
 
-MEMORY_LONGTERM = "longterm"
+MEMORY_LONGTERM: str = "longterm"
 
 
-# ==========================================================
+# ============================================================================
 # Vector Store
-# ==========================================================
+# ============================================================================
 
-VECTOR_BACKEND_FLAT = "flat"
+VECTOR_BACKEND_FLAT: str = "flat"
 
-VECTOR_BACKEND_HNSW = "hnsw"
+VECTOR_BACKEND_HNSW: str = "hnsw"
 
-VECTOR_BACKEND_FAISS = "faiss"
+VECTOR_BACKEND_FAISS: str = "faiss"
 
-SIMILARITY_COSINE = "cosine"
+SIMILARITY_COSINE: str = "cosine"
 
-SIMILARITY_L2 = "l2"
+SIMILARITY_L2: str = "l2"
 
-SIMILARITY_INNER_PRODUCT = "inner_product"
+SIMILARITY_INNER_PRODUCT: str = "inner_product"
 
 
-# ==========================================================
+# ============================================================================
 # QTC
-# ==========================================================
+# ============================================================================
 
-QTC_BACKEND_NATIVE = "native"
+QTC_BACKEND_NATIVE: str = "native"
 
-QTC_BACKEND_SYMBOLIC = "symbolic"
+QTC_BACKEND_SYMBOLIC: str = "symbolic"
 
 
-# ==========================================================
+# ============================================================================
 # Events
-# ==========================================================
+# ============================================================================
 
-EVENT_BOOT = "kernel.boot"
+EVENT_BOOT: str = "kernel.boot"
 
-EVENT_SHUTDOWN = "kernel.shutdown"
+EVENT_SHUTDOWN: str = "kernel.shutdown"
 
-EVENT_TASK_STARTED = "runtime.task.started"
+EVENT_TASK_STARTED: str = "runtime.task.started"
 
-EVENT_TASK_COMPLETED = "runtime.task.completed"
+EVENT_TASK_COMPLETED: str = "runtime.task.completed"
 
-EVENT_TASK_FAILED = "runtime.task.failed"
+EVENT_TASK_FAILED: str = "runtime.task.failed"
 
 
-# ==========================================================
+# ============================================================================
 # Logging
-# ==========================================================
+# ============================================================================
 
-LOG_DEBUG = "DEBUG"
+LOG_DEBUG: str = "DEBUG"
 
-LOG_INFO = "INFO"
+LOG_INFO: str = "INFO"
 
-LOG_WARNING = "WARNING"
+LOG_WARNING: str = "WARNING"
 
-LOG_ERROR = "ERROR"
+LOG_ERROR: str = "ERROR"
 
-LOG_CRITICAL = "CRITICAL"
+LOG_CRITICAL: str = "CRITICAL"
