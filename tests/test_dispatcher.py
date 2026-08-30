@@ -3,6 +3,12 @@ SciOS Dispatcher Tests
 ======================
 
 Unit tests for the Kernel Dispatcher.
+
+The dispatcher coordinates task submission and execution through a
+scheduler and execution engine. These tests validate the Kernel
+Dispatcher contract independently from the Runtime Scheduler.
+
+Python 3.11+
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from scios.runtime import ExecutionContext
 # Test Doubles
 # ==========================================================
 
+
 class DummyScheduler:
     """
     Minimal scheduler used for testing.
@@ -33,6 +40,7 @@ class DummyScheduler:
     def next(self) -> Any | None:
         if not self._queue:
             return None
+
         return self._queue.pop(0)
 
     def __len__(self) -> int:
@@ -42,6 +50,10 @@ class DummyScheduler:
 class DummyExecutionEngine:
     """
     Minimal execution engine used for testing.
+
+    The engine returns an ExecutionContext. The context's canonical
+    result is an ExecutionResult, while result_value exposes the
+    actual execution payload.
     """
 
     def __init__(self) -> None:
@@ -51,6 +63,7 @@ class DummyExecutionEngine:
         self.calls.append(task)
 
         ctx = ExecutionContext(task)
+
         ctx.status = "completed"
         ctx.set_result(task)
 
@@ -60,6 +73,7 @@ class DummyExecutionEngine:
 # ==========================================================
 # Fixtures
 # ==========================================================
+
 
 @pytest.fixture
 def scheduler() -> DummyScheduler:
@@ -76,6 +90,7 @@ def dispatcher(
     scheduler: DummyScheduler,
     engine: DummyExecutionEngine,
 ) -> Dispatcher:
+
     return Dispatcher(
         scheduler=scheduler,
         engine=engine,
@@ -85,6 +100,7 @@ def dispatcher(
 # ==========================================================
 # Construction
 # ==========================================================
+
 
 def test_dispatcher_creation(
     dispatcher: Dispatcher,
@@ -97,6 +113,7 @@ def test_dispatcher_creation(
 # Direct Dispatch
 # ==========================================================
 
+
 def test_dispatch(
     dispatcher: Dispatcher,
     engine: DummyExecutionEngine,
@@ -105,7 +122,9 @@ def test_dispatch(
     ctx = dispatcher.dispatch("hello")
 
     assert ctx.status == "completed"
-    assert ctx.result == "hello"
+
+    # ExecutionContext.result is the canonical ExecutionResult.
+    assert ctx.result_value == "hello"
 
     assert engine.calls == [
         "hello",
@@ -115,6 +134,7 @@ def test_dispatch(
 # ==========================================================
 # Scheduler Dispatch
 # ==========================================================
+
 
 def test_dispatch_next(
     dispatcher: Dispatcher,
@@ -127,8 +147,7 @@ def test_dispatch_next(
     ctx = dispatcher.dispatch_next()
 
     assert ctx is not None
-
-    assert ctx.result == "task-1"
+    assert ctx.result_value == "task-1"
 
     assert engine.calls == [
         "task-1",
@@ -138,6 +157,7 @@ def test_dispatch_next(
 # ==========================================================
 # Empty Queue
 # ==========================================================
+
 
 def test_dispatch_next_empty_queue(
     dispatcher: Dispatcher,
@@ -149,6 +169,7 @@ def test_dispatch_next_empty_queue(
 # ==========================================================
 # Missing Engine
 # ==========================================================
+
 
 def test_dispatch_without_engine(
     scheduler: DummyScheduler,
@@ -180,6 +201,7 @@ def test_dispatch_next_without_engine(
 # Multiple Tasks
 # ==========================================================
 
+
 def test_dispatch_multiple_tasks(
     dispatcher: Dispatcher,
     scheduler: DummyScheduler,
@@ -198,7 +220,7 @@ def test_dispatch_multiple_tasks(
         if ctx is None:
             break
 
-        results.append(ctx.result)
+        results.append(ctx.result_value)
 
     assert results == [
         "task-0",
@@ -214,6 +236,7 @@ def test_dispatch_multiple_tasks(
 # ==========================================================
 # Queue Length
 # ==========================================================
+
 
 def test_dispatcher_length(
     dispatcher: Dispatcher,
