@@ -52,7 +52,6 @@ class ExecutionEngine:
 
 
     DEFAULT_HOOKS = {
-
         "before_submit",
         "execution_started",
         "before_execute",
@@ -60,8 +59,8 @@ class ExecutionEngine:
         "execution_failed",
         "execution_finished",
         "after_execute",
+        "after_success",
         "after_failure",
-
     }
 
 
