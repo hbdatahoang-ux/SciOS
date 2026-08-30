@@ -20,8 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional
 
 from .base import (
-    BaseExporter,
-    ExportCapability,
+    Exporter,
     ExportFormat,
     ExportMode,
 )
@@ -127,7 +126,7 @@ class MetricSample:
 # ==============================================================================
 
 
-class PrometheusExporter(BaseExporter):
+class PrometheusExporter(Exporter):
     """
     Prometheus metrics exporter.
     """
@@ -140,79 +139,77 @@ class PrometheusExporter(BaseExporter):
         options: Optional[PrometheusExportOptions] = None,
     ) -> None:
 
-        super().__init__(
-            name=name,
-            exporter_format=ExportFormat.PROMETHEUS,
-            destination=DEFAULT_ENDPOINT,
-            mode=mode,
-        )
+        # ------------------------------------------------------------------
+        # Part 1. Resolve configuration FIRST
+        # ------------------------------------------------------------------
 
         if options is None:
             options = PrometheusExportOptions()
 
         # ------------------------------------------------------------------
-        # Identity
-        # ------------------------------------------------------------------
-
-        self._name = name
-
-        self._exporter_type = "PrometheusExporter"
-
-        self._version = PROMETHEUS_EXPORTER_VERSION
-
-        # ------------------------------------------------------------------
-        # Configuration
+        # Part 2. Prometheus configuration
+        #
+        # Exporter.__init__() calls self.validate(), so every attribute
+        # accessed by PrometheusExporter.validate() / check_integrity()
+        # MUST exist before calling super().__init__().
         # ------------------------------------------------------------------
 
         self._namespace = options.namespace
-
         self._subsystem = options.subsystem
-
         self._endpoint = options.endpoint
-
         self._pushgateway = options.pushgateway
-
         self._job = options.job
-
         self._instance = options.instance
-
         self._prefix = options.prefix
-
         self._separator = options.separator
-
         self._labels = dict(options.labels)
 
+        # Prometheus-specific operating mode.
+        self._mode = mode
+
         # ------------------------------------------------------------------
-        # Runtime State
+        # Part 3. Prometheus runtime state
         # ------------------------------------------------------------------
 
         self._families: Dict[str, MetricFamily] = {}
-
         self._samples: List[MetricSample] = []
 
         self._metrics_exported = 0
-
         self._samples_exported = 0
-
         self._scrape_count = 0
 
         self._last_export = None
 
         self._lock = threading.RLock()
 
-        self._metadata.update(
-            {
+        # ------------------------------------------------------------------
+        # Part 4. Canonical generic Exporter initialization
+        # ------------------------------------------------------------------
+
+        super().__init__(
+            name=name,
+            format=ExportFormat.PROMETHEUS,
+            options={
                 "namespace": self._namespace,
                 "subsystem": self._subsystem,
                 "endpoint": self._endpoint,
-            }
+                "pushgateway": self._pushgateway,
+                "job": self._job,
+                "instance": self._instance,
+                "prefix": self._prefix,
+                "separator": self._separator,
+                "labels": dict(self._labels),
+            },
         )
 
-        self._capabilities |= (
-            ExportCapability.SERIALIZATION
-            | ExportCapability.BATCHING
-            | ExportCapability.STREAMING
-        )
+        # ------------------------------------------------------------------
+        # Part 5. Prometheus-specific identity
+        # ------------------------------------------------------------------
+
+        self._exporter_type = "PrometheusExporter"
+        self._version = PROMETHEUS_EXPORTER_VERSION
+
+
 # ==============================================================================
 # Part 2. Serialization
 # ==============================================================================
@@ -1040,40 +1037,28 @@ class PrometheusExporter(BaseExporter):
 # Part 8. Validation
 # ==============================================================================
 
-    def validate(
-        self,
-        raise_error: bool = False,
-    ) -> bool:
+    def validate(self) -> None:
         """
-        Validate the Prometheus exporter.
+        Validate the Prometheus exporter configuration.
+
+        The signature intentionally matches Exporter.validate().
         """
 
-        try:
+        super().validate()
 
-            super().validate(raise_error=True)
+        self.validate_endpoint(
+            self._endpoint,
+            raise_error=True,
+        )
 
-            self.validate_endpoint(
-                self._endpoint,
-                raise_error=True,
-            )
+        self.validate_labels(
+            self._labels,
+            raise_error=True,
+        )
 
-            self.validate_labels(
-                self._labels,
-                raise_error=True,
-            )
-
-            self.check_integrity(
-                raise_error=True,
-            )
-
-            return True
-
-        except Exception:
-
-            if raise_error:
-                raise
-
-            return False
+        self.check_integrity(
+            raise_error=True,
+        )
 
     # ------------------------------------------------------------------
 
@@ -1198,14 +1183,18 @@ class PrometheusExporter(BaseExporter):
         raise_error: bool = False,
     ) -> bool:
         """
-        Check internal exporter integrity.
+        Check internal Prometheus exporter integrity.
+
+        This method performs Prometheus-specific integrity checks.
+        The generic Exporter base class does not define
+        ``check_integrity()``, so no ``super().check_integrity()``
+        call is made here.
         """
 
         try:
-
-            super().check_integrity(
-                raise_error=True,
-            )
+            # --------------------------------------------------------------
+            # Prometheus runtime containers
+            # --------------------------------------------------------------
 
             if not isinstance(
                 self._families,
@@ -1223,6 +1212,10 @@ class PrometheusExporter(BaseExporter):
                     "samples must be list"
                 )
 
+            # --------------------------------------------------------------
+            # Export counters
+            # --------------------------------------------------------------
+
             if self._metrics_exported < 0:
                 raise ValueError(
                     "invalid metrics_exported"
@@ -1238,10 +1231,18 @@ class PrometheusExporter(BaseExporter):
                     "invalid scrape_count"
                 )
 
+            # --------------------------------------------------------------
+            # Lock
+            # --------------------------------------------------------------
+
+            if self._lock is None:
+                raise ValueError(
+                    "lock must be initialized"
+                )
+
             return True
 
         except Exception:
-
             if raise_error:
                 raise
 
