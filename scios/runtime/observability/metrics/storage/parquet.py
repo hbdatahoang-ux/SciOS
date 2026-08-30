@@ -14,6 +14,29 @@ The implementation intentionally keeps the in-memory record model simple::
 The Parquet engine is loaded lazily so that constructing the backend does
 not require pandas/pyarrow until an operation actually needs the engine.
 
+Ordering contract
+-----------------
+The storage maintains deterministic insertion order.
+
+For ``put()``:
+    - new keys are appended;
+    - existing keys are replaced in-place.
+
+For ``load()``:
+    - records are restored in the exact order stored in the Parquet file.
+
+For ``append()``:
+    - current in-memory records are written first;
+    - existing persisted records follow;
+    - duplicate keys are resolved according to the storage invariant:
+      the current record wins while its position remains first.
+
+Persistence contract
+--------------------
+``load()`` requires the configured Parquet file to exist.
+
+A missing file is therefore an error rather than an empty-storage condition.
+
 Python 3.11+
 """
 
@@ -55,6 +78,12 @@ class ParquetStorage(MetricStorageBackend):
     - ``delete()`` returns ``self``.
     - ``clear()`` returns ``self``.
     - ``restore()`` returns ``self``.
+
+    Persistence contract
+    --------------------
+    - ``write()`` replaces the target file with current records.
+    - ``load()`` requires the target file to exist.
+    - ``append()`` places current records before persisted records.
     """
 
     # ==========================================================================
@@ -163,6 +192,33 @@ class ParquetStorage(MetricStorageBackend):
             "key": key,
             "value": copy.deepcopy(record["value"]),
         }
+
+    @classmethod
+    def _validate_records(
+        cls,
+        records: Iterable[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Validate a collection of records and enforce unique keys.
+
+        The returned records are independent deep copies.
+        """
+        validated: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for record in records:
+            normalized = cls._validate_record(record)
+            key = normalized["key"]
+
+            if key in seen:
+                raise ValueError(
+                    f"duplicate key in records: {key!r}"
+                )
+
+            seen.add(key)
+            validated.append(normalized)
+
+        return validated
 
     # ==========================================================================
     # Internal record helpers
@@ -341,6 +397,8 @@ class ParquetStorage(MetricStorageBackend):
         """
         self._ensure_active()
 
+        count = len(self._records)
+
         return {
             "backend": "parquet",
             "name": self.name,
@@ -349,8 +407,8 @@ class ParquetStorage(MetricStorageBackend):
             "enabled": self.enabled,
             "closed": self.closed,
             "active": self.active,
-            "count": self.count(),
-            "records": self.count(),
+            "count": count,
+            "records": count,
             "format": "columnar",
             "engine": "pandas + pyarrow",
         }
@@ -384,7 +442,12 @@ class ParquetStorage(MetricStorageBackend):
         """
         Write current records to the configured Parquet file.
 
-        Returns ``self``.
+        Existing file contents are replaced.
+
+        Returns
+        -------
+        ParquetStorage
+            ``self``.
         """
         self._ensure_active()
 
@@ -392,10 +455,15 @@ class ParquetStorage(MetricStorageBackend):
 
         dataframe = self.dataframe()
 
-        dataframe.to_parquet(
-            self._path,
-            index=False,
-        )
+        try:
+            dataframe.to_parquet(
+                self._path,
+                index=False,
+            )
+        except Exception as exc:
+            raise ParquetStorageError(
+                f"failed to write Parquet storage: {self._path}"
+            ) from exc
 
         return self
 
@@ -403,15 +471,27 @@ class ParquetStorage(MetricStorageBackend):
         """
         Load records from the configured Parquet file.
 
-        A missing file is treated as empty storage.
+        The configured file must exist.
 
-        Returns ``self``.
+        A missing file is considered a persistence error and raises
+        ``ParquetStorageError``.
+
+        Returns
+        -------
+        ParquetStorage
+            ``self``.
         """
         self._ensure_active()
 
         if not self._path.exists():
-            self._records.clear()
-            return self
+            raise ParquetStorageError(
+                f"Parquet storage file does not exist: {self._path}"
+            )
+
+        if not self._path.is_file():
+            raise ParquetStorageError(
+                f"Parquet storage path is not a file: {self._path}"
+            )
 
         pd, _ = self._require_engine()
 
@@ -422,12 +502,28 @@ class ParquetStorage(MetricStorageBackend):
                 f"failed to load Parquet storage: {self._path}"
             ) from exc
 
-        records: list[dict[str, Any]] = []
-
-        for row in dataframe.to_dict(orient="records"):
-            records.append(
-                self._validate_record(row)
+        if "key" not in dataframe.columns:
+            raise ParquetStorageError(
+                f"invalid Parquet storage schema: missing 'key': "
+                f"{self._path}"
             )
+
+        if "value" not in dataframe.columns:
+            raise ParquetStorageError(
+                f"invalid Parquet storage schema: missing 'value': "
+                f"{self._path}"
+            )
+
+        try:
+            rows = dataframe[
+                ["key", "value"]
+            ].to_dict(orient="records")
+
+            records = self._validate_records(rows)
+        except (TypeError, ValueError) as exc:
+            raise ParquetStorageError(
+                f"invalid records in Parquet storage: {self._path}"
+            ) from exc
 
         self._records = records
 
@@ -437,29 +533,99 @@ class ParquetStorage(MetricStorageBackend):
         """
         Append current records to an existing Parquet file.
 
+        Ordering contract
+        -----------------
+        Current in-memory records are written first, followed by records
+        already persisted in the file.
+
+        Duplicate keys are resolved in favor of current records. This
+        preserves the unique-key invariant while ensuring current records
+        remain at the front of the resulting sequence.
+
         If the file does not exist, this behaves like ``write()``.
 
-        Returns ``self``.
+        Returns
+        -------
+        ParquetStorage
+            ``self``.
         """
         self._ensure_active()
 
         if not self._path.exists():
             return self.write()
 
+        if not self._path.is_file():
+            raise ParquetStorageError(
+                f"Parquet storage path is not a file: {self._path}"
+            )
+
         pd, _ = self._require_engine()
 
-        existing = pd.read_parquet(self._path)
-        current = self.dataframe()
+        try:
+            existing = pd.read_parquet(self._path)
+        except Exception as exc:
+            raise ParquetStorageError(
+                f"failed to read existing Parquet storage: "
+                f"{self._path}"
+            ) from exc
 
-        combined = pd.concat(
-            [existing, current],
-            ignore_index=True,
+        if "key" not in existing.columns:
+            raise ParquetStorageError(
+                f"invalid existing Parquet schema: missing 'key': "
+                f"{self._path}"
+            )
+
+        if "value" not in existing.columns:
+            raise ParquetStorageError(
+                f"invalid existing Parquet schema: missing 'value': "
+                f"{self._path}"
+            )
+
+        try:
+            existing_rows = existing[
+                ["key", "value"]
+            ].to_dict(orient="records")
+
+            existing_records = self._validate_records(
+                existing_rows
+            )
+        except (TypeError, ValueError) as exc:
+            raise ParquetStorageError(
+                f"invalid records in existing Parquet storage: "
+                f"{self._path}"
+            ) from exc
+
+        current_records = copy.deepcopy(self._records)
+
+        # Current records win over persisted records with the same key.
+        current_keys = {
+            record["key"]
+            for record in current_records
+        }
+
+        merged_records = (
+            current_records
+            + [
+                record
+                for record in existing_records
+                if record["key"] not in current_keys
+            ]
         )
 
-        combined.to_parquet(
-            self._path,
-            index=False,
+        merged = pd.DataFrame(
+            merged_records,
+            columns=["key", "value"],
         )
+
+        try:
+            merged.to_parquet(
+                self._path,
+                index=False,
+            )
+        except Exception as exc:
+            raise ParquetStorageError(
+                f"failed to append Parquet storage: {self._path}"
+            ) from exc
 
         return self
 
@@ -493,24 +659,7 @@ class ParquetStorage(MetricStorageBackend):
                 "snapshot must be an iterable of record mappings"
             )
 
-        records: list[dict[str, Any]] = []
-
-        for record in snapshot:
-            records.append(
-                self._validate_record(record)
-            )
-
-        seen: set[str] = set()
-
-        for record in records:
-            key = record["key"]
-
-            if key in seen:
-                raise ValueError(
-                    f"duplicate key in snapshot: {key!r}"
-                )
-
-            seen.add(key)
+        records = self._validate_records(snapshot)
 
         self._records = records
 

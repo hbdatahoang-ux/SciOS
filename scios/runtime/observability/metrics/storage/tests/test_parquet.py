@@ -15,6 +15,7 @@ import pytest
 
 from scios.runtime.observability.metrics.storage.parquet import (
     ParquetStorage,
+    ParquetStorageError,
 )
 
 
@@ -239,6 +240,7 @@ def test_write_empty_storage(
     restored = ParquetStorage(
         path=str(storage._path),
     )
+
     restored.load()
 
     assert restored.count() == 0
@@ -247,11 +249,80 @@ def test_write_empty_storage(
 def test_load_missing_file(
     storage: ParquetStorage,
 ) -> None:
-    """Loading a missing file raises the underlying file error."""
+    """Loading a missing file raises ParquetStorageError."""
     pytest.importorskip("pandas")
     pytest.importorskip("pyarrow")
 
-    with pytest.raises(Exception):
+    with pytest.raises(
+        ParquetStorageError,
+        match="does not exist",
+    ):
+        storage.load()
+
+
+def test_load_invalid_file(
+    storage: ParquetStorage,
+) -> None:
+    """Loading an invalid Parquet file raises ParquetStorageError."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+
+    storage._path.write_bytes(b"not-a-parquet-file")
+
+    with pytest.raises(
+        ParquetStorageError,
+        match="failed to load Parquet storage",
+    ):
+        storage.load()
+
+
+def test_load_invalid_schema_missing_key(
+    storage: ParquetStorage,
+) -> None:
+    """A Parquet file without the key column is rejected."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+
+    import pandas as pd
+
+    pd.DataFrame(
+        {
+            "value": [42],
+        }
+    ).to_parquet(
+        storage._path,
+        index=False,
+    )
+
+    with pytest.raises(
+        ParquetStorageError,
+        match="missing 'key'",
+    ):
+        storage.load()
+
+
+def test_load_invalid_schema_missing_value(
+    storage: ParquetStorage,
+) -> None:
+    """A Parquet file without the value column is rejected."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+
+    import pandas as pd
+
+    pd.DataFrame(
+        {
+            "key": ["cpu"],
+        }
+    ).to_parquet(
+        storage._path,
+        index=False,
+    )
+
+    with pytest.raises(
+        ParquetStorageError,
+        match="missing 'value'",
+    ):
         storage.load()
 
 
@@ -277,6 +348,7 @@ def test_append_without_existing_file(
     restored = ParquetStorage(
         path=str(storage._path),
     )
+
     restored.load()
 
     assert restored.items() == [
@@ -287,7 +359,9 @@ def test_append_without_existing_file(
 def test_append_existing_file(
     storage: ParquetStorage,
 ) -> None:
-    """append() preserves existing records and appends current records."""
+    """
+    append() places current records before existing persisted records.
+    """
     pytest.importorskip("pandas")
     pytest.importorskip("pyarrow")
 
@@ -301,17 +375,96 @@ def test_append_existing_file(
         },
     ]
 
-    storage.append()
+    result = storage.append()
+
+    assert result is storage
 
     restored = ParquetStorage(
         path=str(storage._path),
     )
+
     restored.load()
 
     assert restored.count() == 2
     assert restored.items() == [
         ("memory", 73),
         ("cpu", 42),
+    ]
+
+
+def test_append_current_records_win_on_duplicate_key(
+    storage: ParquetStorage,
+) -> None:
+    """
+    append() gives current in-memory records precedence over persisted
+    records with the same key.
+    """
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+
+    storage.put("cpu", 42)
+    storage.put("memory", 73)
+    storage.write()
+
+    storage._records = [
+        {
+            "key": "memory",
+            "value": 99,
+        },
+        {
+            "key": "disk",
+            "value": 11,
+        },
+    ]
+
+    storage.append()
+
+    restored = ParquetStorage(
+        path=str(storage._path),
+    )
+
+    restored.load()
+
+    assert restored.items() == [
+        ("memory", 99),
+        ("disk", 11),
+        ("cpu", 42),
+    ]
+
+
+def test_append_preserves_current_order(
+    storage: ParquetStorage,
+) -> None:
+    """append() preserves the insertion order of current records."""
+    pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+
+    storage.put("old", 1)
+    storage.write()
+
+    storage._records = [
+        {
+            "key": "z",
+            "value": 3,
+        },
+        {
+            "key": "a",
+            "value": 2,
+        },
+    ]
+
+    storage.append()
+
+    restored = ParquetStorage(
+        path=str(storage._path),
+    )
+
+    restored.load()
+
+    assert restored.items() == [
+        ("z", 3),
+        ("a", 2),
+        ("old", 1),
     ]
 
 
@@ -418,6 +571,29 @@ def test_snapshot_is_independent(
     assert storage.count() == 1
 
 
+def test_snapshot_nested_value_is_independent(
+    storage: ParquetStorage,
+) -> None:
+    """Snapshot must deep-copy nested values."""
+    value = {
+        "labels": {
+            "host": "node-1",
+        },
+    }
+
+    storage.put("metric", value)
+
+    snapshot = storage.snapshot()
+
+    snapshot[0]["value"]["labels"]["host"] = "node-2"
+
+    assert storage.get("metric") == {
+        "labels": {
+            "host": "node-1",
+        },
+    }
+
+
 # ==============================================================================
 # Statistics
 # ==============================================================================
@@ -472,6 +648,30 @@ def test_iter(
             "value": 73,
         },
     ]
+
+
+def test_iter_is_independent(
+    storage: ParquetStorage,
+) -> None:
+    """Iteration must return independent record copies."""
+    storage.put(
+        "metric",
+        {
+            "labels": {
+                "host": "node-1",
+            },
+        },
+    )
+
+    records = list(storage)
+
+    records[0]["value"]["labels"]["host"] = "node-2"
+
+    assert storage.get("metric") == {
+        "labels": {
+            "host": "node-1",
+        },
+    }
 
 
 def test_contains(
