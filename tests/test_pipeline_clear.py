@@ -47,4 +47,4 @@ def test_pipeline_clear_stages() -> None:
 
     # __repr__ hiển thị đúng
     assert "CognitivePipeline" in repr(pipeline)
-    assert pipeline.status()["stages"] == []
+    assert pipeline.status()["stage_names"] == []

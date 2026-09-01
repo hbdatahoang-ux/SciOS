@@ -43,4 +43,4 @@ def test_pipeline_add_stage() -> None:
 
     # __repr__ hiển thị đúng
     assert "CognitivePipeline" in repr(pipeline)
-    assert "dummy" in str(pipeline.status()["stages"])
+    assert "dummy" in pipeline.status()["stage_names"]

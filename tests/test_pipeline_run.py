@@ -44,7 +44,7 @@ def test_pipeline_run_single_stage() -> None:
     # Kiểm tra trạng thái pipeline
     status = pipeline.status()
     assert status["state"] == PipelineState.COMPLETED.name
-    assert "dummy" in status["stages"]
+    assert "dummy" in status["stage_names"]
 
 
 def test_pipeline_run_empty() -> None:
@@ -58,11 +58,15 @@ def test_pipeline_run_empty() -> None:
 
     result = pipeline.run(context)
 
-    # Không có stage nào được chạy
-    assert result.state == {}
-    assert result.trace == []
+    # Không có stage nên không có kết quả cuối.
+    assert result is None
 
-    # Trạng thái pipeline vẫn COMPLETED
+    # Context không bị thay đổi.
+    assert context.state == {}
+    assert context.trace == []
+
+    # Trạng thái pipeline vẫn COMPLETED.
     status = pipeline.status()
     assert status["state"] == PipelineState.COMPLETED.name
-    assert status["stages"] == []
+    assert status["stages"] == 0
+    assert status["stage_names"] == []

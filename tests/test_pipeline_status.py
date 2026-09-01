@@ -30,7 +30,7 @@ def test_pipeline_status_initial() -> None:
 
     assert isinstance(status, dict)
     assert status["state"] == PipelineState.CREATED.name
-    assert status["stages"] == []
+    assert status["stage_names"] == []
 
 
 def test_pipeline_status_with_stage() -> None:
@@ -43,6 +43,6 @@ def test_pipeline_status_with_stage() -> None:
 
     status = pipeline.status()
     assert status["state"] == PipelineState.CREATED.name
-    assert "s1" in status["stages"]
-    assert "s2" in status["stages"]
-    assert len(status["stages"]) == 2
+    assert "s1" in status["stage_names"]
+    assert "s2" in status["stage_names"]
+    assert status["stage_count"] == 2
