@@ -17,14 +17,15 @@ from scios.cognitive_core.common.interfaces import (
 )
 from scios.cognitive_core.common.context import CognitiveContext
 from scios.cognitive_core.common.result import CognitiveResult
+
 from scios.cognitive_core.common.errors import (
     CognitiveError,
     PlannerError,
     ReasoningError,
     MemoryError,
     ToolError,
+    PipelineError,
 )
-
 __all__ = [
     "PlannerInterface",
     "MemoryInterface",
@@ -37,4 +38,5 @@ __all__ = [
     "ReasoningError",
     "MemoryError",
     "ToolError",
+    "PipelineError",
 ]

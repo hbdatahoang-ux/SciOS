@@ -2,46 +2,45 @@
 SciOS Cognitive Core - Errors
 =============================
 
-Defines common exception hierarchy for the Cognitive Core.
+Common exception hierarchy for the Cognitive Core.
+
+All domain-specific cognitive exceptions inherit from ``CognitiveError``.
+This provides a single stable base type for callers that need to catch
+Cognitive Core failures generically.
 """
 
+from __future__ import annotations
+
+
 class CognitiveError(Exception):
-    """
-    Base class for all cognitive errors.
-    """
-    pass
+    """Base exception for all Cognitive Core errors."""
 
 
 class PlannerError(CognitiveError):
-    """
-    Raised when planning fails.
-    """
-    pass
+    """Raised when planning or plan generation fails."""
 
 
 class ReasoningError(CognitiveError):
-    """
-    Raised when reasoning/inference fails.
-    """
-    pass
+    """Raised when reasoning or inference fails."""
 
 
 class MemoryError(CognitiveError):
-    """
-    Raised when memory operations fail.
-    """
-    pass
+    """Raised when a memory operation fails."""
 
 
 class ToolError(CognitiveError):
-    """
-    Raised when tool invocation fails.
-    """
-    pass
+    """Raised when tool invocation or execution fails."""
 
 
 class PipelineError(CognitiveError):
-    """
-    Raised when pipeline execution fails.
-    """
-    pass
+    """Raised when cognitive pipeline execution fails."""
+
+
+__all__ = [
+    "CognitiveError",
+    "PlannerError",
+    "ReasoningError",
+    "MemoryError",
+    "ToolError",
+    "PipelineError",
+]
