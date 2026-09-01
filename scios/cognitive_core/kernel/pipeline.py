@@ -1,4 +1,4 @@
-"""
+﻿"""
 SciOS Cognitive Pipeline
 ========================
 
@@ -11,49 +11,40 @@ Responsibilities
 - Apply middleware
 - Emit kernel events
 - Manage lifecycle state
+- Provide diagnostics and serialization
 
 Python 3.11+
 """
 
 from __future__ import annotations
 
-
-from typing import (
-    Iterator,
-    Any,
-)
-
+from typing import Any, Iterator
 
 from scios.shared import EventBus
 
-
 from .context import CognitiveContext
-from .stage import CognitiveStage
 from .dispatcher import StageDispatcher
-from .middleware import MiddlewareManager
 from .events import KernelEventType
+from .middleware import MiddlewareManager
+from .stage import CognitiveStage
 from .state import PipelineState
-
 
 
 __all__ = [
     "CognitivePipeline",
+    "Pipeline",
 ]
-
 
 
 class CognitivePipeline:
     """
-    CognitivePipeline.
+    Ordered execution pipeline for cognitive stages.
 
-    Core execution engine of SciOS CognitiveKernel.
+    Stages are uniquely identified by name.
+
+    Adding a stage with an existing name replaces the
+    previous stage while preserving its position.
     """
-
-
-
-    # =====================================================
-    # Construction
-    # =====================================================
 
     def __init__(
         self,
@@ -62,381 +53,392 @@ class CognitivePipeline:
         middleware: MiddlewareManager | None = None,
         event_bus: EventBus | None = None,
     ) -> None:
-
-
         self._stages: list[CognitiveStage] = []
-
 
         self.dispatcher = (
             dispatcher
-            or StageDispatcher()
+            if dispatcher is not None
+            else StageDispatcher()
         )
-
 
         self.middleware = (
             middleware
-            or MiddlewareManager()
+            if middleware is not None
+            else MiddlewareManager()
         )
-
-
-        # EventBus is mandatory in Kernel layer
 
         self.event_bus = (
             event_bus
-            or EventBus()
+            if event_bus is not None
+            else EventBus()
         )
 
+        self._state = PipelineState.CREATED
 
-        self._state = (
-            PipelineState.CREATED
-        )
-
-
-
-    # =====================================================
+    # =========================================================
     # Properties
-    # =====================================================
+    # =========================================================
 
     @property
-    def state(
-        self,
-    ) -> PipelineState:
-
+    def state(self) -> PipelineState:
+        """Return the current pipeline state."""
         return self._state
 
-
     @property
-    def stages(
-        self,
-    ) -> tuple[CognitiveStage, ...]:
+    def stages(self) -> tuple[CognitiveStage, ...]:
+        """Return registered stages in execution order."""
+        return tuple(self._stages)
 
-        return tuple(
-            self._stages
-        )
-
-
-
-    # =====================================================
+    # =========================================================
     # Stage Management
-    # =====================================================
+    # =========================================================
+
+    def add(
+        self,
+        stage: CognitiveStage,
+    ) -> CognitivePipeline:
+        """
+        Register a stage.
+
+        If another stage has the same name, it is replaced.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+
+        Notes
+        -----
+        Returning ``self`` provides a fluent API:
+
+        ``pipeline.add(first).add(second)``
+        """
+        if not isinstance(stage, CognitiveStage):
+            raise TypeError(
+                "stage must be an instance of CognitiveStage"
+            )
+
+        for index, existing in enumerate(self._stages):
+            if existing.name == stage.name:
+                self._stages[index] = stage
+                return self
+
+        self._stages.append(stage)
+
+        return self
 
     def add_stage(
         self,
         stage: CognitiveStage,
-    ) -> None:
+    ) -> CognitivePipeline:
+        """Compatibility alias for :meth:`add`."""
+        return self.add(stage)
 
-
-        if not isinstance(
-            stage,
-            CognitiveStage,
-        ):
-
-            raise TypeError(
-                "stage must be CognitiveStage"
-            )
-
-
-        self._stages.append(
-            stage
-        )
-
-
-
-    def remove_stage(
+    def get(
         self,
         name: str,
-    ) -> None:
+    ) -> CognitiveStage | None:
+        """Return the first stage matching ``name``."""
+        for stage in self._stages:
+            if stage.name == name:
+                return stage
 
-
-        self._stages = [
-            stage
-            for stage in self._stages
-            if stage.name != name
-        ]
-
-
+        return None
 
     def get_stage(
         self,
         name: str,
     ) -> CognitiveStage | None:
+        """Compatibility alias for :meth:`get`."""
+        return self.get(name)
 
-
-        for stage in self._stages:
-
-            if stage.name == name:
-
-                return stage
-
-
-        return None
-
-
-
-    def clear(
+    def remove(
         self,
-    ) -> None:
+        name: str,
+    ) -> CognitivePipeline:
+        """
+        Remove a stage by name.
 
+        The operation is idempotent. If the stage does not exist,
+        the pipeline remains unchanged.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+        """
+        for index, stage in enumerate(self._stages):
+            if stage.name == name:
+                self._stages.pop(index)
+                break
+
+        return self
+
+    def remove_stage(
+        self,
+        name: str,
+    ) -> CognitivePipeline:
+        """Compatibility alias for :meth:`remove`."""
+        return self.remove(name)
+
+    def clear(self) -> CognitivePipeline:
+        """
+        Remove all registered stages.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+        """
         self._stages.clear()
 
+        return self
 
+    # =========================================================
+    # Lifecycle
+    # =========================================================
 
-    # =====================================================
-    # Event Helper
-    # =====================================================
+    def initialize(self) -> CognitivePipeline:
+        """
+        Initialize every registered stage.
+
+        Stage execution count is preserved.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+        """
+        for stage in self._stages:
+            stage.initialize()
+
+        self._state = PipelineState.INITIALIZED
+
+        return self
+
+    def reset(self) -> CognitivePipeline:
+        """
+        Reset pipeline runtime state.
+
+        Registered stages remain in the pipeline.
+
+        Execution counters are preserved according to the
+        stage contract.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+        """
+        self._state = PipelineState.CREATED
+
+        self.dispatcher.reset()
+        self.middleware.reset()
+
+        for stage in self._stages:
+            stage.reset()
+
+        return self
+
+    def stop(self) -> CognitivePipeline:
+        """
+        Move the pipeline to cancelled state.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+        """
+        self._state = PipelineState.CANCELLED
+
+        return self
+
+    def pause(self) -> CognitivePipeline:
+        """
+        Move the pipeline to paused state.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+        """
+        self._state = PipelineState.PAUSED
+
+        return self
+
+    def resume(self) -> CognitivePipeline:
+        """
+        Resume the pipeline.
+
+        Returns
+        -------
+        CognitivePipeline
+            This pipeline instance.
+        """
+        self._state = PipelineState.RUNNING
+
+        return self
+
+    # =========================================================
+    # Events
+    # =========================================================
 
     def _publish(
         self,
-        event,
+        event: KernelEventType | str,
         payload: dict[str, Any],
     ) -> None:
+        """
+        Publish an event without allowing event-bus failures
+        to interrupt pipeline execution.
 
+        ``EventBus.publish`` accepts keyword payload:
 
+        ``publish(event, **payload)``
+        """
         if self.event_bus is None:
-
             return
 
-
         try:
+            event_name = (
+                event.value
+                if isinstance(event, KernelEventType)
+                else event
+            )
 
             self.event_bus.publish(
-                event,
-                payload,
+                event_name,
+                **payload,
             )
 
         except Exception:
-
-            # Observability must not
-            # break execution
-
+            # Observability/event delivery must never break
+            # cognitive execution.
             pass
 
-
-
-    # =====================================================
+    # =========================================================
     # Execution
-    # =====================================================
+    # =========================================================
 
     def run(
         self,
         context: CognitiveContext,
-    ) -> CognitiveContext:
+    ) -> Any:
         """
-        Execute cognitive pipeline.
+        Execute all stages in registration order.
+
+        The result of the final stage is returned.
         """
+        if not isinstance(context, CognitiveContext):
+            raise TypeError(
+                "context must be an instance of CognitiveContext"
+            )
 
-
-        self._state = (
-            PipelineState.RUNNING
-        )
-
+        self._state = PipelineState.RUNNING
 
         self._publish(
             KernelEventType.PIPELINE_STARTED,
             {
-                "count":
-                    len(self._stages)
+                "count": len(self._stages),
             },
         )
 
-
         try:
-
-
-            self.dispatcher.dispatch(
+            result = self.dispatcher.dispatch(
                 context=context,
                 stages=self._stages,
                 middleware=self.middleware,
                 event_bus=self.event_bus,
             )
 
-
-            self._state = (
-                PipelineState.COMPLETED
-            )
-
-
-            self._publish(
-                KernelEventType.PIPELINE_COMPLETED,
-                {
-                    "success":
-                        True
-                },
-            )
-
-
-            return context
-
-
-
         except Exception as exc:
-
-
-            self._state = (
-                PipelineState.FAILED
-            )
-
+            self._state = PipelineState.FAILED
 
             self._publish(
                 KernelEventType.PIPELINE_FAILED,
                 {
-                    "error":
-                        str(exc)
+                    "error": str(exc),
                 },
             )
 
-
             raise
 
+        self._state = PipelineState.COMPLETED
 
-
-    # =====================================================
-    # Lifecycle
-    # =====================================================
-
-    def stop(
-        self,
-    ) -> None:
-
-        self._state = (
-            PipelineState.CANCELLED
+        self._publish(
+            KernelEventType.PIPELINE_COMPLETED,
+            {
+                "success": True,
+            },
         )
 
+        return result
 
-
-    def pause(
-        self,
-    ) -> None:
-
-        self._state = (
-            PipelineState.PAUSED
-        )
-
-
-
-    def resume(
-        self,
-    ) -> None:
-
-        self._state = (
-            PipelineState.RUNNING
-        )
-
-
-
-    def reset(
-        self,
-    ) -> None:
-        """
-        Reset execution state.
-
-        Keep stages and EventBus.
-        """
-
-        self._state = (
-            PipelineState.CREATED
-        )
-
-
-        self.dispatcher.reset()
-
-
-        self.middleware.reset()
-
-
-
-        for stage in self._stages:
-
-            stage.reset()
-
-
-
-    # =====================================================
+    # =========================================================
     # Diagnostics
-    # =====================================================
+    # =========================================================
 
-    def status(
-        self,
-    ) -> dict[str, Any]:
+    def status(self) -> dict[str, Any]:
+        """
+        Return a diagnostic snapshot.
 
+        Contract
+        --------
+        ``stages``
+            Number of registered stages.
 
+        ``stage_names``
+            Names of registered stages in execution order.
+        """
         return {
-
-            "state":
-                self._state.name,
-
-            "stages":
-            [
+            "state": self._state.name,
+            "stages": len(self._stages),
+            "stage_names": [
                 stage.name
                 for stage in self._stages
             ],
-
-            "stage_count":
-                len(self._stages),
-
-            "dispatcher":
-                self.dispatcher.status(),
-
+            "stage_count": len(self._stages),
+            "dispatcher": self.dispatcher.status(),
         }
 
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize pipeline diagnostics.
 
+        Includes stage names and serialized stage state.
+        """
+        return {
+            "state": self._state.name,
+            "stages": [
+                stage.to_dict()
+                for stage in self._stages
+            ],
+            "stage_names": [
+                stage.name
+                for stage in self._stages
+            ],
+            "stage_count": len(self._stages),
+            "dispatcher": self.dispatcher.status(),
+        }
 
-    def to_dict(
-        self,
-    ) -> dict[str, Any]:
-
-        return self.status()
-
-
-
-    # =====================================================
+    # =========================================================
     # Python Protocols
-    # =====================================================
+    # =========================================================
 
-    def __len__(
-        self,
-    ) -> int:
+    def __len__(self) -> int:
+        return len(self._stages)
 
-        return len(
-            self._stages
-        )
+    def __iter__(self) -> Iterator[CognitiveStage]:
+        return iter(self._stages)
 
+    def __contains__(self, name: str) -> bool:
+        return self.get(name) is not None
 
-
-    def __iter__(
-        self,
-    ) -> Iterator[CognitiveStage]:
-
-        return iter(
-            self._stages
-        )
-
-
-
-    def __contains__(
-        self,
-        name: str,
-    ) -> bool:
-
-        return any(
-            stage.name == name
-            for stage in self._stages
-        )
-
-
-
-    def __repr__(
-        self,
-    ) -> str:
-        """
-        Developer-friendly representation.
-        """
-
+    def __repr__(self) -> str:
         stage_names = [
             stage.name
             for stage in self._stages
         ]
-
 
         return (
             "<CognitivePipeline "
@@ -444,3 +446,10 @@ class CognitivePipeline:
             f"stages={len(self._stages)} "
             f"names={stage_names}>"
         )
+
+
+# =============================================================
+# Backward Compatibility
+# =============================================================
+
+Pipeline = CognitivePipeline

@@ -1,24 +1,27 @@
-"""
+﻿"""
 SciOS Cognitive Stage Dispatcher
 ================================
 
 Dispatcher layer for CognitivePipeline.
 
-Responsibilities:
-- Execute single stage
-- Execute multiple stages
-- Middleware support
-- Event integration
+Responsibilities
+-----------------
+- Execute a single cognitive stage.
+- Execute multiple cognitive stages.
+- Support middleware hooks.
+- Support event bus integration.
+- Track successful executions.
+- Preserve stage failure state.
 
 Python 3.11+
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Any
-
+from typing import Any, Iterable
 
 from .stage import CognitiveStage
+from .events import KernelEventType
 
 
 __all__ = [
@@ -26,91 +29,117 @@ __all__ = [
 ]
 
 
-
 class StageDispatcher:
     """
     Central dispatcher for cognitive stages.
+
+    Supported APIs
+    --------------
+
+    Single stage::
+
+        dispatcher.dispatch(stage, context)
+
+    Single stage with middleware/event bus::
+
+        dispatcher.dispatch(
+            stage,
+            context,
+            middleware=middleware,
+            event_bus=event_bus,
+        )
+
+    Multiple stages::
+
+        dispatcher.dispatch(
+            context=context,
+            stages=stages,
+            middleware=middleware,
+            event_bus=event_bus,
+        )
     """
 
-
-    def __init__(
-        self,
-    ) -> None:
-
-        self.executed = 0
-
-
+    def __init__(self) -> None:
+        self.executed: int = 0
 
     # ======================================================
-    # Single Stage Dispatch
+    # Public Dispatch API
     # ======================================================
 
     def dispatch(
         self,
-        *args,
-        **kwargs,
-    ):
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
         """
-        Universal dispatch API.
+        Dispatch one or more cognitive stages.
 
-        Supported:
+        Two calling conventions are supported.
 
-        1.
-        dispatch(stage, context)
+        Single-stage mode
+        ------------------
+        ``dispatch(stage, context, ...)``
 
-        2.
-        dispatch(
-            context=context,
-            stages=[...],
-            middleware=None,
-            event_bus=None,
-        )
+        Pipeline mode
+        --------------
+        ``dispatch(context=..., stages=[...], ...)``
+
+        Returns
+        -------
+        Any
+            Result of the last executed stage.
+
+        Raises
+        ------
+        TypeError
+            If the dispatch arguments are invalid.
         """
-
 
         # --------------------------------------------------
-        # Single stage mode
+        # Single-stage mode
         # --------------------------------------------------
 
         if len(args) == 2:
-
             stage, context = args
+
+            middleware = kwargs.get("middleware")
+            event_bus = kwargs.get("event_bus")
 
             return self._dispatch_stage(
                 stage,
                 context,
+                middleware=middleware,
+                event_bus=event_bus,
             )
 
+        # --------------------------------------------------
+        # Reject unsupported positional arguments
+        # --------------------------------------------------
 
+        if args:
+            raise TypeError(
+                "dispatch() expects either "
+                "(stage, context) or keyword-based "
+                "(context=..., stages=...)"
+            )
 
         # --------------------------------------------------
         # Pipeline mode
         # --------------------------------------------------
 
-        context = kwargs.get(
-            "context"
-        )
+        context = kwargs.get("context")
 
-        stages = kwargs.get(
+        stages: Iterable[CognitiveStage] = kwargs.get(
             "stages",
-            []
+            (),
         )
 
-        middleware = kwargs.get(
-            "middleware"
-        )
+        middleware = kwargs.get("middleware")
+        event_bus = kwargs.get("event_bus")
 
-        event_bus = kwargs.get(
-            "event_bus"
-        )
-
-
-        result = None
-
+        result: Any = None
 
         for stage in stages:
-
-
             result = self._dispatch_stage(
                 stage,
                 context,
@@ -118,10 +147,7 @@ class StageDispatcher:
                 event_bus=event_bus,
             )
 
-
         return result
-
-
 
     # ======================================================
     # Internal Stage Execution
@@ -130,126 +156,154 @@ class StageDispatcher:
     def _dispatch_stage(
         self,
         stage: CognitiveStage,
-        context,
+        context: Any,
         *,
-        middleware=None,
-        event_bus=None,
-    ):
+        middleware: Any = None,
+        event_bus: Any = None,
+    ) -> Any:
         """
-        Execute one cognitive stage.
-        """
+        Execute exactly one cognitive stage.
 
+        Execution order
+        ---------------
+
+        1. middleware.before_stage
+        2. stage_started event
+        3. stage execution
+        4. stage_completed event
+        5. middleware.after_stage
+
+        On failure:
+
+        - stage.status becomes ``failed``
+        - stage.message contains the exception message
+        - exception is re-raised
+        - execution counter is not incremented
+        """
 
         try:
+            # ------------------------------------------------
+            # Middleware: before
+            # ------------------------------------------------
 
-
-            # middleware before
-
-            if middleware:
-
-                middleware.before_stage(
-                    stage,
-                    context,
+            if middleware is not None:
+                before_stage = getattr(
+                    middleware,
+                    "before_stage",
+                    None,
                 )
 
+                if before_stage is not None:
+                    before_stage(
+                        stage,
+                        context,
+                    )
 
-            if event_bus:
+            # ------------------------------------------------
+            # Event: started
+            # ------------------------------------------------
 
-                event_bus.publish(
-                    "stage.started",
-                    {
-                        "stage": stage.name
-                    }
+            if event_bus is not None:
+                publish = getattr(
+                    event_bus,
+                    "publish",
+                    None,
                 )
 
+                if publish is not None:
+                    publish(
+                        KernelEventType.STAGE_STARTED.value,
+                        stage=stage.name,
+                    )
 
+            # ------------------------------------------------
+            # Stage execution
+            # ------------------------------------------------
 
             stage.status = "running"
 
-
-            result = stage.run(
-                context
-            )
-
+            result = stage.run(context)
 
             stage.status = "completed"
 
-
+            # Successful execution only.
             self.executed += 1
 
+            # ------------------------------------------------
+            # Event: completed
+            # ------------------------------------------------
 
-
-            if event_bus:
-
-                event_bus.publish(
-                    "stage.completed",
-                    {
-                        "stage": stage.name
-                    }
+            if event_bus is not None:
+                publish = getattr(
+                    event_bus,
+                    "publish",
+                    None,
                 )
 
+                if publish is not None:
+                    publish(
+                        KernelEventType.STAGE_COMPLETED.value,
+                        stage=stage.name,
+                    )
 
+            # ------------------------------------------------
+            # Middleware: after
+            # ------------------------------------------------
 
-            # middleware after
-
-            if middleware:
-
-                middleware.after_stage(
-                    stage,
-                    context,
+            if middleware is not None:
+                after_stage = getattr(
+                    middleware,
+                    "after_stage",
+                    None,
                 )
 
+                if after_stage is not None:
+                    after_stage(
+                        stage,
+                        context,
+                    )
 
             return result
 
-
-
         except Exception as exc:
-
+            # ------------------------------------------------
+            # Failure state
+            # ------------------------------------------------
 
             stage.status = "failed"
-
-            stage.message = str(
-                exc
-            )
-
+            stage.message = str(exc)
 
             raise
-
-
 
     # ======================================================
     # Diagnostics
     # ======================================================
 
-    def status(
-        self,
-    ) -> dict:
-
+    def status(self) -> dict[str, int]:
+        """
+        Return dispatcher runtime statistics.
+        """
 
         return {
-
-            "executed":
-                self.executed,
-
+            "executed": self.executed,
         }
 
+    # ======================================================
+    # Lifecycle
+    # ======================================================
 
-
-    def reset(
-        self,
-    ) -> None:
-
+    def reset(self) -> None:
+        """
+        Reset dispatcher execution statistics.
+        """
 
         self.executed = 0
 
+    # ======================================================
+    # Python Protocols
+    # ======================================================
 
-
-    def __repr__(
-        self,
-    ) -> str:
-
-
+    def __repr__(self) -> str:
         return (
             "StageDispatcher("
             f"executed={self.executed}"
