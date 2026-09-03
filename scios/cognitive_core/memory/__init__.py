@@ -1,29 +1,43 @@
-# scios/cognitive_core/memory/__init__.py
-
-from .base import AbstractMemory
-from .semantic import SemanticMemory
-from .episodic import EpisodicMemory
-from .working import WorkingMemory
-from .memory_manager import MemoryManager
-from .record import MemoryRecord
-from .retrieval import (
-    RetrievalStrategy,
-    KeywordRetrieval,
-    TemporalRetrieval,
-    SemanticRetrieval
+﻿from .core import (
+    MemoryContent,
+    MemoryId,
+    MemoryKind,
+    MemoryMetadata,
+    MemoryQuery,
+    MemoryRecord,
+    MemoryStore,
+    MemoryTimestamp,
 )
-from .serializer import MemorySerializer
+from .manager import MemoryManager
+from .retrieval import (
+    KeywordRetrieval,
+    RetrievalStrategy,
+    SemanticRetrieval,
+    TemporalRetrieval,
+)
+from .serialization import MemorySerializer
+from .stores import (
+    EpisodicMemory,
+    SemanticMemory,
+    WorkingMemory,
+)
 
 __all__ = [
-    "AbstractMemory",
-    "SemanticMemory",
-    "EpisodicMemory",
-    "WorkingMemory",
-    "MemoryManager",
+    "MemoryStore",
     "MemoryRecord",
+    "MemoryId",
+    "MemoryContent",
+    "MemoryMetadata",
+    "MemoryTimestamp",
+    "MemoryQuery",
+    "MemoryKind",
+    "WorkingMemory",
+    "EpisodicMemory",
+    "SemanticMemory",
     "RetrievalStrategy",
     "KeywordRetrieval",
     "TemporalRetrieval",
     "SemanticRetrieval",
+    "MemoryManager",
     "MemorySerializer",
 ]
