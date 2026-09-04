@@ -3,8 +3,7 @@ SciOS Agent Runtime Benchmarks
 
 Run:
 
-pytest benchmarks/benchmark_agents.py \
-    --benchmark-only
+pytest benchmarks/benchmark_agents.py --benchmark-only
 """
 
 from __future__ import annotations
@@ -16,10 +15,10 @@ from scios.agents.base import BaseAgent
 
 class DummyAgent(BaseAgent):
     """
-    Lightweight benchmark agent.
+    Lightweight concrete agent for benchmarks.
     """
 
-    def execute(self, task):
+    def run(self, task, *args, **kwargs):
         return task
 
 
@@ -32,20 +31,19 @@ def test_agent_creation(benchmark):
     """
     Benchmark agent construction.
     """
-
     benchmark(
-        lambda: DummyAgent(name="benchmark")
+        DummyAgent,
+        name="benchmark",
     )
 
 
 def test_agent_execute(agent, benchmark):
     """
-    Benchmark task execution.
+    Benchmark framework execution wrapper.
     """
-
     benchmark(
         agent.execute,
-        {"task": "demo"}
+        {"task": "demo"},
     )
 
 
@@ -53,7 +51,6 @@ def test_agent_status(agent, benchmark):
     """
     Benchmark status lookup.
     """
-
     benchmark(agent.status)
 
 
@@ -61,17 +58,15 @@ def test_agent_reset(agent, benchmark):
     """
     Benchmark state reset.
     """
-
     benchmark(agent.reset)
 
 
 def test_agent_multiple_execution(agent, benchmark):
     """
-    Benchmark repeated execution.
+    Benchmark repeated framework execution.
     """
 
     def workload():
-
         for i in range(100):
             agent.execute(i)
 

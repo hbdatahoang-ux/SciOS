@@ -1,191 +1,108 @@
-"""
-SciOS Agent Executor
-====================
-
-Coordinates the cognitive execution pipeline.
-
-Responsibilities
-----------------
-- Coordinate cognitive subsystems
-- Execute reasoning pipeline
-- Aggregate execution results
-- Produce a unified response
-"""
-
 from __future__ import annotations
 
 from typing import Any
 
-from scios.agents.memory.semantic import SemanticMemory
-from scios.agents.reasoning import ReasoningEngine
+from scios.cognitive_core.memory import (
+    KeywordRetrieval,
+    MemoryKind,
+    MemoryManager,
+)
+from scios.cognitive_core.reasoning.core import (
+    ReasoningProblem,
+)
+from scios.cognitive_core.reasoning.core.types import ReasoningType
+from scios.cognitive_core.reasoning.engine import ReasoningEngine
 
-__all__ = [
-    "AgentExecutor",
-]
+
+__all__ = ["AgentExecutor"]
 
 
 class AgentExecutor:
-    """
-    Cognitive execution orchestrator.
-
-    The AgentExecutor coordinates the major cognitive
-    subsystems without implementing domain-specific logic.
-    """
-
-    def __init__(self) -> None:
-
-        self.memory = SemanticMemory()
-
-        self.reasoning = ReasoningEngine()
-
-    # ======================================================
-    # Public API
-    # ======================================================
-
-    def execute(
+    def __init__(
         self,
-        task: str,
-    ) -> dict[str, Any]:
-        """
-        Execute a cognitive task.
-        """
+        *,
+        memory: MemoryManager,
+        reasoning: ReasoningEngine,
+    ) -> None:
+        if not isinstance(memory, MemoryManager):
+            raise TypeError("memory must be a MemoryManager")
 
-        # --------------------------------------------------
-        # Planner (placeholder)
-        # --------------------------------------------------
+        if not isinstance(reasoning, ReasoningEngine):
+            raise TypeError("reasoning must be a ReasoningEngine")
 
-        plan = self._plan(task)
+        self.memory = memory
+        self.reasoning = reasoning
+        self._retrieval = KeywordRetrieval()
 
-        # --------------------------------------------------
-        # Memory
-        # --------------------------------------------------
+    def execute(self, task: str) -> dict[str, Any]:
+        problem = ReasoningProblem(
+            query=task,
+            context={},
+            reasoning_type=ReasoningType.DEDUCTIVE,
+        )
 
-        memory = self.memory.retrieve(task)
-
-        # --------------------------------------------------
-        # Reasoning
-        # --------------------------------------------------
-
-        reasoning = self.reasoning.infer(
+        memory = self.memory.retrieve(
+            self._retrieval,
             task,
-            context=memory,
+            MemoryKind.SEMANTIC,
         )
 
-        # --------------------------------------------------
-        # ToolUse (placeholder)
-        # --------------------------------------------------
+        problem.context["memory"] = memory
 
-        tools = self._tool_use(
-            task,
-            reasoning,
-        )
+        reasoning = self.reasoning.execute(problem)
 
-        # --------------------------------------------------
-        # Reflection (placeholder)
-        # --------------------------------------------------
-
-        reflection = self._reflect(
-            reasoning,
-        )
-
-        # --------------------------------------------------
-        # Final response
-        # --------------------------------------------------
+        tools = self._tool_use(task, reasoning)
+        reflection = self._reflect(reasoning)
 
         return {
-
             "task": task,
-
-            "plan": plan,
-
+            "plan": self._plan(task),
             "memory": memory,
-
             "reasoning": reasoning,
-
             "tools": tools,
-
             "reflection": reflection,
-
-            "response": reasoning.get(
-                "hypothesis",
-                f"processed: {task}",
+            "response": (
+                reasoning.conclusion
+                if reasoning.conclusion is not None
+                else f"processed: {task}"
             ),
         }
 
-    # ======================================================
-    # Internal Pipeline
-    # ======================================================
-
-    def _plan(
-        self,
-        task: str,
-    ) -> dict[str, Any]:
-
+    def _plan(self, task: str) -> dict[str, Any]:
         return {
-
             "steps": [
-
                 "retrieve_memory",
-
                 "reason",
-
                 "respond",
-
             ]
         }
 
     def _tool_use(
         self,
         task: str,
-        reasoning: dict[str, Any],
+        reasoning: Any,
     ) -> list[Any]:
-
         return []
 
-    def _reflect(
-        self,
-        reasoning: dict[str, Any],
-    ) -> dict[str, Any]:
-
+    def _reflect(self, reasoning: Any) -> dict[str, Any]:
         return {
-
-            "accepted": True,
-
-            "confidence": 1.0,
+            "accepted": reasoning.accepted,
+            "confidence": 1.0 if reasoning.accepted else 0.0,
         }
 
-    # ======================================================
-    # Status
-    # ======================================================
-
     def status(self) -> dict[str, Any]:
-
         return {
-
             "memory": self.memory.__class__.__name__,
-
             "reasoning": self.reasoning.__class__.__name__,
-
             "planner": "placeholder",
-
             "tooluse": "placeholder",
-
             "reflection": "placeholder",
         }
 
-    # ======================================================
-    # Python Protocol
-    # ======================================================
-
-    def __call__(
-        self,
-        task: str,
-    ) -> dict[str, Any]:
-
+    def __call__(self, task: str) -> dict[str, Any]:
         return self.execute(task)
 
     def __repr__(self) -> str:
-
         return (
             "AgentExecutor("
             f"memory={self.memory.__class__.__name__}, "

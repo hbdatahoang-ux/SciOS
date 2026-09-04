@@ -1,103 +1,107 @@
-"""
-SciOS Memory Benchmarks
+﻿from __future__ import annotations
 
-Run:
-
-pytest benchmarks/benchmark_memory.py \
-    --benchmark-only
-"""
-
-from __future__ import annotations
-
-import pytest
-
-from scios.memory.working import WorkingMemory
+from scios.cognitive_core.memory import (
+    EpisodicMemory,
+    KeywordRetrieval,
+    MemoryKind,
+    MemoryManager,
+    MemoryRecord,
+    SemanticMemory,
+    WorkingMemory,
+)
 
 
-@pytest.fixture
-def memory():
-    return WorkingMemory()
-
-
-def test_memory_creation(benchmark):
-    """
-    Benchmark memory construction.
-    """
-    benchmark(WorkingMemory)
-
-
-def test_memory_store(memory, benchmark):
-    """
-    Benchmark store().
-    """
-    benchmark(
-        memory.store,
-        "key",
-        "value",
+def _manager() -> MemoryManager:
+    return MemoryManager(
+        working=WorkingMemory(),
+        episodic=EpisodicMemory(),
+        semantic=SemanticMemory(),
     )
 
 
-def test_memory_retrieve(memory, benchmark):
-    """
-    Benchmark retrieve().
-    """
-    memory.store("key", "value")
+def _record(content: str = "benchmark memory record") -> MemoryRecord:
+    return MemoryRecord(content=content)
+
+
+def test_benchmark_working_store(benchmark) -> None:
+    store = WorkingMemory()
+    record = _record()
+
+    benchmark(store.store, record)
+
+
+def test_benchmark_working_get(benchmark) -> None:
+    store = WorkingMemory()
+    record = _record()
+    stored = store.store(record)
+
+    benchmark(store.get, stored.id)
+
+
+def test_benchmark_working_delete(benchmark) -> None:
+    store = WorkingMemory()
+
+    def operation() -> None:
+        record = store.store(_record())
+        store.delete(record.id)
+
+    benchmark(operation)
+
+
+def test_benchmark_manager_store(benchmark) -> None:
+    manager = _manager()
+    record = _record()
 
     benchmark(
-        memory.retrieve,
-        "key",
+        manager.store,
+        record,
+        MemoryKind.WORKING,
     )
 
 
-def test_memory_update(memory, benchmark):
-    """
-    Benchmark update().
-    """
-    memory.store("key", "old")
-
-    def workload():
-        memory.store("key", "new")
-
-    benchmark(workload)
-
-
-def test_memory_delete(memory, benchmark):
-    """
-    Benchmark delete().
-    """
-    memory.store("key", "value")
+def test_benchmark_manager_get(benchmark) -> None:
+    manager = _manager()
+    record = manager.store(
+        _record(),
+        MemoryKind.SEMANTIC,
+    )
 
     benchmark(
-        memory.delete,
-        "key",
+        manager.get,
+        record.id,
+        MemoryKind.SEMANTIC,
     )
 
 
-def test_memory_clear(memory, benchmark):
-    """
-    Benchmark clear().
-    """
-    for i in range(1000):
-        memory.store(f"k{i}", i)
+def test_benchmark_manager_retrieve(benchmark) -> None:
+    manager = _manager()
 
-    benchmark(memory.clear)
+    for index in range(10):
+        manager.store(
+            _record(f"benchmark memory record {index}"),
+            MemoryKind.SEMANTIC,
+        )
 
+    strategy = KeywordRetrieval()
+    query = "benchmark"
 
-def test_memory_bulk_insert(memory, benchmark):
-    """
-    Benchmark bulk insertion.
-    """
-
-    def workload():
-
-        for i in range(1000):
-            memory.store(f"key-{i}", i)
-
-    benchmark(workload)
+    benchmark(
+        manager.retrieve,
+        strategy,
+        query,
+        MemoryKind.SEMANTIC,
+    )
 
 
-def test_memory_status(memory, benchmark):
-    """
-    Benchmark status().
-    """
-    benchmark(memory.status)
+def test_benchmark_keyword_retrieval(benchmark) -> None:
+    records = tuple(
+        _record(f"benchmark memory record {index}")
+        for index in range(20)
+    )
+    strategy = KeywordRetrieval()
+
+    benchmark(
+        strategy.retrieve,
+        records,
+        "benchmark",
+    )
