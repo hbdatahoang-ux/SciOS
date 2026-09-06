@@ -12,7 +12,7 @@ def test_strategy_initialization():
     assert "priority" in strategy.description
 
 def test_strategy_apply_on_plan():
-    strategy = PlanningStrategy(name="Simple", description="Execute tasks in order")
+    strategy = PlanningStrategy(name="Simple", description="Plan tasks in order")
     tasks = [Task(description=f"Task {i}") for i in range(3)]
     plan = Plan(goal=Goal("Test goal"), tasks=tasks)
 
@@ -36,3 +36,23 @@ def test_strategy_apply_modifies_metadata():
 def test_strategy_repr():
     strategy = PlanningStrategy(name="TestStrategy", description="For testing repr")
     assert "TestStrategy" in repr(strategy)
+def test_strategy_apply_creates_independent_task_graph():
+    strategy = PlanningStrategy(
+        name="Isolated",
+        description="Independent graph",
+    )
+    tasks = [
+        Task(description="T1"),
+        Task(description="T2"),
+    ]
+    plan = Plan(
+        goal=Goal("Isolation goal"),
+        tasks=tasks,
+    )
+
+    new_plan = strategy.apply(plan)
+
+    assert new_plan.task_graph is not plan.task_graph
+    assert list(new_plan.task_graph.tasks) == list(plan.task_graph.tasks)
+    assert new_plan.task_graph.get_task("task-0") is plan.task_graph.get_task("task-0")
+    assert new_plan.task_graph.get_task("task-1") is plan.task_graph.get_task("task-1")

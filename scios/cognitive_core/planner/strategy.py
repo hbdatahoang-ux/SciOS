@@ -59,7 +59,6 @@ class PlanningStrategy:
         new_plan = Plan(
             goal=plan.goal,
             tasks=list(plan.tasks),
-            task_graph=plan.task_graph,
             constraints=plan.constraints,
         )
 
@@ -76,7 +75,7 @@ class PlanningStrategy:
         goal: Goal,
     ) -> list[Task]:
         """
-        Decompose a goal into executable tasks.
+        Decompose a goal into planning tasks.
 
         Creates one task for each success criterion.
         If the goal has no criteria, creates one default task.
@@ -107,7 +106,7 @@ class PlanningStrategy:
 
             task = Task(
                 description=(
-                    f"Execute plan for {goal.description}"
+                    f"Plan execution for {goal.description}"
                 )
             )
 
