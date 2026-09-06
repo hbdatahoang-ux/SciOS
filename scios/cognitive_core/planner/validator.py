@@ -343,7 +343,10 @@ class PlanValidator:
         plan: Plan,
     ) -> None:
         """
-        Validate task list.
+        Validate task structure.
+
+        Planning validation is structural only. Task execution
+        lifecycle state is intentionally outside the Planner contract.
         """
 
         tasks = list(
@@ -379,36 +382,24 @@ class PlanValidator:
                     "Task description is empty.",
                 )
 
-            completed = False
+            dependencies = getattr(
+                task,
+                "dependencies",
+                [],
+            )
 
-            if hasattr(task, "completed"):
+            if dependencies is None:
+                continue
 
-                completed = bool(task.completed)
-
-            elif hasattr(task, "is_completed"):
-
-                value = task.is_completed
-
-                completed = (
-                    value()
-                    if callable(value)
-                    else bool(value)
-                )
-
-            elif hasattr(task, "status"):
-
-                completed = (
-                    str(task.status).lower()
-                    == "completed"
-                )
-
-            if not completed:
+            if not isinstance(
+                dependencies,
+                (list, tuple, set),
+            ):
 
                 self._report.add_error(
-                    "TASK_INCOMPLETE",
+                    "TASK_DEPENDENCIES_INVALID",
                     description or "Unnamed task",
                 )
-
 
     def validate_constraints(
         self,
@@ -652,4 +643,4 @@ class PlanValidator:
             f"(valid={self._report.valid}, "
             f"errors={self._report.error_count}, "
             f"warnings={self._report.warning_count})"
-        )                    
+        )

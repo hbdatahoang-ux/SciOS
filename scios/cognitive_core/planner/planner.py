@@ -1,20 +1,21 @@
 """
-SciOS Planner
-=============
+SciOS Cognitive Core Planner
+============================
 
-High-level planner orchestrator.
+Canonical planning orchestrator for the Cognitive Core.
+
+The Planner constructs Plans.
+It does not execute them.
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Iterable
 
 from .goal import Goal
 from .plan import Plan
+from .strategy import PlanningStrategy
 from .task import Task
-from .planner_execution import PlannerExecution
-from .monitor import ProgressMonitor
-from .recovery import FailureRecovery
 
 
 __all__ = [
@@ -22,58 +23,31 @@ __all__ = [
 ]
 
 
-class PlannerState:
-    """
-    Planner lifecycle state.
-    """
-
-    INITIALIZED = "initialized"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-    def __init__(self) -> None:
-        self._state = self.INITIALIZED
-
-    def set_state(self, state: str) -> None:
-        self._state = state
-
-    def get_state(self) -> str:
-        return self._state
-
-    def is_terminal(self) -> bool:
-        return self._state in (
-            self.COMPLETED,
-            self.FAILED,
-        )
-
-    def reset(self) -> None:
-        self._state = self.INITIALIZED
-
-
 class Planner:
     """
-    Planner orchestrator.
+    Canonical Cognitive Core Planner.
+
+    Responsibility:
+        Goal -> Task decomposition -> Plan construction
+
+    Non-responsibility:
+        Plan execution, monitoring, retry, recovery, or runtime
+        tool invocation.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        strategy: PlanningStrategy | None = None,
+    ) -> None:
+        if strategy is not None and not isinstance(
+            strategy,
+            PlanningStrategy,
+        ):
+            raise TypeError(
+                "strategy must be an instance of PlanningStrategy"
+            )
 
-        self.state = PlannerState()
-
-        self.execution = PlannerExecution()
-
-        self.monitor = ProgressMonitor()
-
-        self.recovery = FailureRecovery()
-
-        self.current_plan: Plan | None = None
-
-        self.history: list[Plan] = []
-
-
-    # ======================================================
-    # Plan Construction
-    # ======================================================
+        self.strategy = strategy or PlanningStrategy()
 
     def create_plan(
         self,
@@ -81,155 +55,58 @@ class Planner:
         tasks: Iterable[str | Task] | None = None,
     ) -> Plan:
         """
-        Create a plan.
+        Construct a Plan for the supplied Goal.
 
-        Strings are automatically converted into Task objects.
+        If explicit tasks are supplied, they are normalized and used
+        directly.
+
+        If no tasks are supplied, the configured PlanningStrategy
+        decomposes the Goal into tasks.
+
+        This method only constructs a plan. It never executes tasks.
         """
 
-        normalized: list[Task] = []
+        if not isinstance(goal, Goal):
+            raise TypeError(
+                "goal must be an instance of Goal"
+            )
 
-        if tasks:
+        if tasks is None:
+            normalized = self.strategy.decompose_goal(goal)
+        else:
+            normalized: list[Task] = []
+
             for item in tasks:
                 if isinstance(item, Task):
                     normalized.append(item)
-                else:
+                elif isinstance(item, str):
                     normalized.append(
-                        Task(description=str(item))
+                        Task(description=item)
+                    )
+                else:
+                    raise TypeError(
+                        "tasks must contain only str or Task instances"
                     )
 
-        plan = Plan(
+        return Plan(
             goal=goal,
             tasks=normalized,
         )
 
-        self.current_plan = plan
-
-        self.history.append(plan)
-
-        return plan
-
-
-    # ======================================================
-    # Execution
-    # ======================================================
-
-    def run(
-        self,
-        plan: Plan | None = None,
-    ) -> dict[str, Any]:
-
-        plan = plan or self.current_plan
-
-        if plan is None:
-            raise ValueError("No plan available.")
-
-        self.state.set_state(
-            PlannerState.RUNNING
-        )
-
-        try:
-
-            result = self.execution.run(
-                plan.goal,
-                plan.tasks,
-            )
-
-            if result["valid"]:
-
-                for task in plan.tasks:
-                    task.mark_completed()
-
-                plan.metadata["status"] = "completed"
-
-                self.state.set_state(
-                    PlannerState.COMPLETED
-                )
-
-            else:
-
-                plan.metadata["status"] = "failed"
-
-                self.state.set_state(
-                    PlannerState.FAILED
-                )
-
-            return result
-
-        except Exception as exc:
-
-            self.recovery.handle_failure(
-                plan,
-                exc,
-            )
-
-            self.state.set_state(
-                PlannerState.FAILED
-            )
-
-            return {
-                "valid": False,
-                "errors": [str(exc)],
-            }
-
-
-    # Backward-compatible alias
-    execute = run
-
-
-    # ======================================================
-    # Status
-    # ======================================================
-
-    def status(self) -> dict[str, Any]:
-
-        if self.current_plan is None:
-
-            return {
-                "state": self.state.get_state(),
-                "goal": None,
-                "tasks": [],
-            }
-
-        return {
-            "state": self.state.get_state(),
-            "goal": self.current_plan.goal.description,
-            "tasks": [
-                task.description
-                for task in self.current_plan.tasks
-            ],
-            "progress": self.monitor.status(
-                self.current_plan
-            ),
-        }
-
-
-    # ======================================================
-    # Utilities
-    # ======================================================
-
     def reset(self) -> None:
+        """
+        Reset planner-local configuration.
 
-        self.current_plan = None
+        The canonical Planner is intentionally stateless with respect
+        to plans and execution. Reset therefore only restores the
+        default strategy when a custom strategy was supplied.
+        """
 
-        self.history.clear()
-
-        self.state.reset()
-
-        self.execution = PlannerExecution()
-
-
-    def last_plan(self) -> Plan | None:
-
-        if not self.history:
-            return None
-
-        return self.history[-1]
-
+        self.strategy = PlanningStrategy()
 
     def __repr__(self) -> str:
-
         return (
-            f"{self.__class__.__name__}"
-            f"(state={self.state.get_state()}, "
-            f"plans={len(self.history)})"
+            f"{self.__class__.__name__}("
+            f"strategy={self.strategy.name!r}"
+            ")"
         )
