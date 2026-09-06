@@ -1,16 +1,26 @@
-"""
+﻿"""
 SciOS Planner Task
 ==================
 
-Core task abstraction for SciOS cognitive planner.
+Core task abstraction for the SciOS cognitive planner.
+
+A Task represents a single unit of planned work.
 
 Responsibilities
 ----------------
-- Represent atomic execution unit.
-- Manage constraints.
-- Manage dependencies.
-- Track lifecycle state.
-- Support serialization.
+- Represent a planning task.
+- Manage planning constraints.
+- Manage task dependencies.
+- Store planning metadata.
+- Support structural serialization.
+
+Non-responsibilities
+--------------------
+- Runtime execution.
+- Execution lifecycle.
+- Runtime status tracking.
+- Success/failure tracking.
+- Retry or recovery.
 """
 
 from __future__ import annotations
@@ -25,18 +35,13 @@ __all__ = [
 
 class Task:
     """
-    A single executable planning task.
+    A single cognitive planning task.
+
+    Task is a planning-domain object only.
+
+    Execution state belongs to the Runtime layer and must not be
+    represented by this object.
     """
-
-    # ======================================================
-    # Lifecycle states
-    # ======================================================
-
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
 
     # ======================================================
     # Initialization
@@ -49,26 +54,33 @@ class Task:
         dependencies: list[str] | None = None,
         task_id: str | None = None,
     ) -> None:
+        if not isinstance(description, str):
+            raise TypeError("description must be a string")
+
+        if constraints is not None and not isinstance(constraints, dict):
+            raise TypeError("constraints must be a dictionary")
+
+        if dependencies is not None and not isinstance(dependencies, list):
+            raise TypeError("dependencies must be a list")
+
+        if task_id is not None and not isinstance(task_id, str):
+            raise TypeError("task_id must be a string or None")
 
         self.id = task_id
 
         self.description = description
 
         self.constraints: dict[str, Any] = (
-            constraints.copy()
-            if constraints
+            dict(constraints)
+            if constraints is not None
             else {}
         )
 
         self.dependencies: list[str] = (
             list(dependencies)
-            if dependencies
+            if dependencies is not None
             else []
         )
-
-        self.completed: bool = False
-
-        self.status: str = self.PENDING
 
         self.metadata: dict[str, Any] = {}
 
@@ -83,15 +95,11 @@ class Task:
         value: Any,
     ) -> None:
         """
-        Add or update constraint.
-
-        Example
-        -------
-        task.add_constraint(
-            "priority",
-            5,
-        )
+        Add or update a planning constraint.
         """
+
+        if not isinstance(key, str):
+            raise TypeError("constraint key must be a string")
 
         self.constraints[key] = value
 
@@ -102,7 +110,7 @@ class Task:
         default: Any = None,
     ) -> Any:
         """
-        Retrieve constraint value.
+        Retrieve a planning constraint.
         """
 
         return self.constraints.get(
@@ -116,7 +124,7 @@ class Task:
         key: str,
     ) -> bool:
         """
-        Check constraint existence.
+        Check whether a planning constraint exists.
         """
 
         return key in self.constraints
@@ -127,7 +135,7 @@ class Task:
         key: str,
     ) -> None:
         """
-        Remove constraint.
+        Remove a planning constraint if present.
         """
 
         self.constraints.pop(
@@ -145,101 +153,44 @@ class Task:
         task_id: str,
     ) -> None:
         """
-        Add dependency task id.
+        Add a dependency by task identifier.
+
+        Dependency existence is validated by TaskGraph, not Task.
         """
 
-        if task_id not in self.dependencies:
+        if not isinstance(task_id, str):
+            raise TypeError("task_id must be a string")
 
-            self.dependencies.append(
-                task_id
+        if task_id == self.id:
+            raise ValueError(
+                "task cannot depend on itself"
             )
+
+        if task_id not in self.dependencies:
+            self.dependencies.append(task_id)
 
 
     def remove_dependency(
         self,
         task_id: str,
     ) -> None:
+        """
+        Remove a dependency if present.
+        """
 
         if task_id in self.dependencies:
-
-            self.dependencies.remove(
-                task_id
-            )
+            self.dependencies.remove(task_id)
 
 
     def has_dependency(
         self,
         task_id: str,
     ) -> bool:
+        """
+        Check whether this task depends on another task.
+        """
 
         return task_id in self.dependencies
-
-
-    # ======================================================
-    # Lifecycle Management
-    # ======================================================
-
-    def start(self) -> None:
-        """
-        Start execution.
-        """
-
-        self.status = self.RUNNING
-
-
-    def mark_completed(self) -> None:
-        """
-        Mark task completed.
-        """
-
-        self.completed = True
-
-        self.status = self.COMPLETED
-
-
-    def mark_failed(
-        self,
-        error: Exception | str,
-    ) -> None:
-        """
-        Mark task failed.
-        """
-
-        self.completed = False
-
-        self.status = self.FAILED
-
-        self.metadata["error"] = str(error)
-
-
-    def reset(self) -> None:
-        """
-        Reset task lifecycle.
-        """
-
-        self.completed = False
-
-        self.status = self.PENDING
-
-        self.metadata.clear()
-
-
-    def is_completed(self) -> bool:
-        """
-        Check completed state.
-        """
-
-        return self.completed
-
-
-    def is_running(self) -> bool:
-
-        return self.status == self.RUNNING
-
-
-    def is_failed(self) -> bool:
-
-        return self.status == self.FAILED
 
 
     # ======================================================
@@ -251,6 +202,12 @@ class Task:
         key: str,
         value: Any,
     ) -> None:
+        """
+        Store planning metadata.
+        """
+
+        if not isinstance(key, str):
+            raise TypeError("metadata key must be a string")
 
         self.metadata[key] = value
 
@@ -260,6 +217,9 @@ class Task:
         key: str,
         default: Any = None,
     ) -> Any:
+        """
+        Retrieve planning metadata.
+        """
 
         return self.metadata.get(
             key,
@@ -273,23 +233,17 @@ class Task:
 
     def to_dict(self) -> dict[str, Any]:
         """
-        Convert task into dictionary.
+        Serialize the structural planning representation.
+
+        Runtime execution state is intentionally excluded.
         """
 
         return {
             "id": self.id,
             "description": self.description,
-            "constraints": dict(
-                self.constraints
-            ),
-            "dependencies": list(
-                self.dependencies
-            ),
-            "completed": self.completed,
-            "status": self.status,
-            "metadata": dict(
-                self.metadata
-            ),
+            "constraints": dict(self.constraints),
+            "dependencies": list(self.dependencies),
+            "metadata": dict(self.metadata),
         }
 
 
@@ -299,8 +253,11 @@ class Task:
         data: dict[str, Any],
     ) -> "Task":
         """
-        Restore task from dictionary.
+        Restore a Task from its structural representation.
         """
+
+        if not isinstance(data, dict):
+            raise TypeError("data must be a dictionary")
 
         task = cls(
             description=data.get(
@@ -320,16 +277,6 @@ class Task:
             ),
         )
 
-        task.completed = data.get(
-            "completed",
-            False,
-        )
-
-        task.status = data.get(
-            "status",
-            cls.PENDING,
-        )
-
         task.metadata = dict(
             data.get(
                 "metadata",
@@ -345,10 +292,8 @@ class Task:
     # ======================================================
 
     def __repr__(self) -> str:
-
         return (
             f"<Task "
             f"id={self.id!r} "
-            f"description='{self.description}' "
-            f"status={self.status}>"
+            f"description={self.description!r}>"
         )

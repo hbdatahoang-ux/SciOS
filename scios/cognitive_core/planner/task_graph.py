@@ -1,15 +1,25 @@
-"""
+﻿"""
 SciOS Task Graph
 ================
 
-Directed Acyclic Graph (DAG) representation for planning tasks.
+Directed Acyclic Graph (DAG) representation for cognitive planning tasks.
 
 Responsibilities
 ----------------
-- Store tasks
-- Manage dependencies
-- Topological sorting
-- Cycle detection
+- Register planning tasks.
+- Manage task dependencies.
+- Preserve graph consistency.
+- Provide dependency queries.
+- Provide topological ordering.
+- Detect dependency cycles.
+
+Invariants
+----------
+- Every graph node is a registered Task.
+- Every dependency references a registered Task.
+- Self-dependencies are forbidden.
+- Unknown dependencies are rejected.
+- The graph contains no phantom nodes.
 """
 
 from __future__ import annotations
@@ -23,6 +33,9 @@ from .task import Task
 class TaskGraph:
     """
     Directed Acyclic Graph of planning tasks.
+
+    TaskGraph is a structural planning component. It does not
+    execute tasks or track runtime lifecycle state.
     """
 
     def __init__(self) -> None:
@@ -40,15 +53,39 @@ class TaskGraph:
         task: Task,
     ) -> None:
         """
-        Add a task to graph.
+        Register a task in the graph.
         """
 
-        self.tasks[task_id] = task
-        self.edges.setdefault(
-            task_id,
-            [],
-        )
+        if not isinstance(task_id, str):
+            raise TypeError(
+                "task_id must be a string"
+            )
 
+        if not isinstance(task, Task):
+            raise TypeError(
+                "task must be an instance of Task"
+            )
+
+        if task_id in self.tasks:
+            raise ValueError(
+                f"Task '{task_id}' is already registered."
+            )
+
+        if task.id is not None and task.id != task_id:
+            raise ValueError(
+                "task_id does not match task.id"
+            )
+
+        if task.id is None:
+            task.id = task_id
+
+        self.tasks[task_id] = task
+        self.edges[task_id] = []
+
+
+    # ======================================================
+    # Dependency Management
+    # ======================================================
 
     def add_dependency(
         self,
@@ -56,26 +93,46 @@ class TaskGraph:
         depends_on: str,
     ) -> None:
         """
-        task_id depends on depends_on.
+        Add a dependency edge.
+
+        ``task_id`` depends on ``depends_on``.
+
+        Both tasks must already be registered in the graph.
         """
 
-        self.edges.setdefault(
-            task_id,
-            [],
-        )
+        if not isinstance(task_id, str):
+            raise TypeError(
+                "task_id must be a string"
+            )
 
-        self.edges.setdefault(
-            depends_on,
-            [],
-        )
+        if not isinstance(depends_on, str):
+            raise TypeError(
+                "depends_on must be a string"
+            )
+
+        if task_id not in self.tasks:
+            raise ValueError(
+                f"Unknown task: '{task_id}'"
+            )
+
+        if depends_on not in self.tasks:
+            raise ValueError(
+                f"Unknown dependency: '{depends_on}'"
+            )
+
+        if task_id == depends_on:
+            raise ValueError(
+                f"Task '{task_id}' cannot depend on itself."
+            )
 
         if depends_on not in self.edges[task_id]:
-            self.edges[task_id].append(depends_on)
-
-        if task_id in self.tasks:
-            self.tasks[task_id].add_dependency(
+            self.edges[task_id].append(
                 depends_on
             )
+
+        self.tasks[task_id].add_dependency(
+            depends_on
+        )
 
 
     # ======================================================
@@ -87,7 +144,7 @@ class TaskGraph:
         task_id: str,
     ) -> Task | None:
         """
-        Return task by id.
+        Return a registered task by identifier.
         """
 
         return self.tasks.get(task_id)
@@ -98,7 +155,10 @@ class TaskGraph:
         task_id: str,
     ) -> List[str]:
         """
-        Return dependencies.
+        Return registered dependencies for a task.
+
+        Unknown task identifiers return an empty list for
+        compatibility with the existing query API.
         """
 
         return list(
@@ -113,11 +173,17 @@ class TaskGraph:
         self,
         task_id: str,
     ) -> bool:
+        """
+        Check whether a task is registered.
+        """
 
         return task_id in self.tasks
 
 
     def clear(self) -> None:
+        """
+        Remove all tasks and dependency edges.
+        """
 
         self.tasks.clear()
         self.edges.clear()
@@ -130,9 +196,10 @@ class TaskGraph:
     @property
     def graph(self) -> Dict[str, dict]:
         """
-        Legacy graph view.
+        Compatibility graph view.
 
-        Example:
+        Example
+        -------
 
         {
             "task1": {
@@ -162,67 +229,65 @@ class TaskGraph:
 
     def topological_sort(self) -> List[str]:
         """
-        Return dependency order.
+        Return tasks in dependency order.
+
+        Dependencies are emitted before the tasks that depend
+        on them.
+
+        Raises
+        ------
+        ValueError
+            If the graph contains a dependency cycle.
         """
 
         indegree = {
-            node: 0
-            for node in self.edges
+            task_id: len(
+                self.edges.get(
+                    task_id,
+                    [],
+                )
+            )
+            for task_id in self.tasks
         }
 
-        for node, deps in self.edges.items():
-            indegree[node] = len(deps)
+        reverse: Dict[str, List[str]] = {
+            task_id: []
+            for task_id in self.tasks
+        }
 
-            for dep in deps:
-                indegree.setdefault(
-                    dep,
-                    0,
+        for task_id, dependencies in self.edges.items():
+            for dependency in dependencies:
+                if dependency not in self.tasks:
+                    raise ValueError(
+                        f"Unknown dependency: '{dependency}'"
+                    )
+
+                reverse[dependency].append(
+                    task_id
                 )
 
-
         queue = deque(
-            node
-            for node, degree in indegree.items()
+            task_id
+            for task_id, degree in indegree.items()
             if degree == 0
         )
 
-
-        reverse: Dict[str, List[str]] = {}
-
-        for node, deps in self.edges.items():
-            for dep in deps:
-                reverse.setdefault(
-                    dep,
-                    [],
-                ).append(node)
-
-
-        order = []
-
+        order: List[str] = []
 
         while queue:
-
             node = queue.popleft()
-
             order.append(node)
 
+            for dependent in reverse[node]:
+                indegree[dependent] -= 1
 
-            for nxt in reverse.get(
-                node,
-                [],
-            ):
+                if indegree[dependent] == 0:
+                    queue.append(dependent)
 
-                indegree[nxt] -= 1
-
-                if indegree[nxt] == 0:
-                    queue.append(nxt)
-
-
-        if len(order) != len(indegree):
+        if len(order) != len(self.tasks):
             raise ValueError(
                 "TaskGraph contains a dependency cycle."
             )
-
 
         return order
 
@@ -232,7 +297,6 @@ class TaskGraph:
     # ======================================================
 
     def __len__(self) -> int:
-
         return len(self.tasks)
 
 
@@ -240,12 +304,10 @@ class TaskGraph:
         self,
         task_id: str,
     ) -> bool:
-
         return task_id in self.tasks
 
 
     def __repr__(self) -> str:
-
         return (
             f"{self.__class__.__name__}"
             f"(tasks={len(self.tasks)}, "
