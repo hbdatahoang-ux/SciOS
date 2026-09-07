@@ -1,11 +1,12 @@
 ﻿"""
-SciOS Cognitive Core Planning Objective
-========================================
+SciOS Cognitive Core - Planning Objective
+=========================================
 
 Structural sub-goal representation for cognitive planning.
 
-An Objective groups planning tasks under a sub-goal. It contains no
-execution lifecycle or execution state.
+An Objective groups planning tasks under a sub-goal. It is purely a
+planning-domain object and contains no execution lifecycle or runtime
+state.
 """
 
 from __future__ import annotations
@@ -14,18 +15,20 @@ from typing import Any
 
 from .task import Task
 
-
-__all__ = [
-    "Objective",
-]
+__all__ = ["Objective"]
 
 
 class Objective:
     """
-    Structural sub-goal used during cognitive planning.
+    A structural sub-goal used during cognitive planning.
 
-    An Objective groups Tasks that contribute to a sub-goal. It is a
-    planning-domain object and does not track execution state.
+    An Objective:
+        - describes a sub-goal,
+        - optionally references its parent Goal,
+        - carries planning constraints,
+        - groups planning Tasks.
+
+    It does not execute tasks and does not contain runtime state.
     """
 
     def __init__(
@@ -34,7 +37,6 @@ class Objective:
         parent_goal: str | None = None,
         constraints: dict[str, Any] | None = None,
     ) -> None:
-
         if not isinstance(description, str):
             raise TypeError("description must be a string")
 
@@ -46,12 +48,15 @@ class Objective:
 
         self.description = description
         self.parent_goal = parent_goal
-        self.constraints = dict(constraints) if constraints else {}
+        self.constraints: dict[str, Any] = (
+            dict(constraints) if constraints is not None else {}
+        )
         self.tasks: list[Task] = []
 
     def add_task(self, task: Task) -> None:
-        """Add a planning task to this objective."""
-
+        """
+        Add a planning Task to this Objective.
+        """
         if not isinstance(task, Task):
             raise TypeError("task must be an instance of Task")
 
