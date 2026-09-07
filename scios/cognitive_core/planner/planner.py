@@ -4,13 +4,25 @@ SciOS Cognitive Core Planner
 
 Canonical planning orchestrator for the Cognitive Core.
 
-The Planner constructs Plans.
-It does not execute them.
+Contract:
+
+    Goal -> Task decomposition -> Plan
+
+The Planner constructs cognitive Plans only.
+
+It does NOT:
+    - execute tasks
+    - schedule execution
+    - invoke tools
+    - monitor runtime state
+    - retry execution
+    - recover failed execution
+    - create ExecutionGraph objects
 """
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from .goal import Goal
 from .plan import Plan
@@ -27,12 +39,14 @@ class Planner:
     """
     Canonical Cognitive Core Planner.
 
-    Responsibility:
-        Goal -> Task decomposition -> Plan construction
+    Responsibility
+    --------------
+    Decompose a Goal into Tasks and construct a canonical Plan.
 
-    Non-responsibility:
-        Plan execution, monitoring, retry, recovery, or runtime
-        tool invocation.
+    Non-responsibility
+    ------------------
+    Runtime execution, scheduling, monitoring, retry, recovery,
+    tool invocation, or execution-graph construction.
     """
 
     def __init__(
@@ -47,7 +61,14 @@ class Planner:
                 "strategy must be an instance of PlanningStrategy"
             )
 
-        self.strategy = strategy or PlanningStrategy()
+        if strategy is None:
+            strategy = PlanningStrategy()
+
+        self.strategy = strategy
+
+    # ==========================================================
+    # Planning
+    # ==========================================================
 
     def create_plan(
         self,
@@ -55,15 +76,36 @@ class Planner:
         tasks: Iterable[str | Task] | None = None,
     ) -> Plan:
         """
-        Construct a Plan for the supplied Goal.
+        Construct a canonical Plan for ``goal``.
 
-        If explicit tasks are supplied, they are normalized and used
-        directly.
+        Parameters
+        ----------
+        goal:
+            Cognitive planning Goal.
 
-        If no tasks are supplied, the configured PlanningStrategy
-        decomposes the Goal into tasks.
+        tasks:
+            Optional explicit task definitions.
 
-        This method only constructs a plan. It never executes tasks.
+            Each item may be:
+                - ``str`` -> converted to ``Task(description=...)``
+                - ``Task`` -> preserved
+
+            When omitted, ``self.strategy`` decomposes the Goal.
+
+        Returns
+        -------
+        Plan
+            Canonical cognitive planning representation.
+
+        Raises
+        ------
+        TypeError
+            If ``goal`` is not a Goal or an explicit task has an
+            unsupported type.
+
+        Notes
+        -----
+        This method only constructs a Plan. It never executes it.
         """
 
         if not isinstance(goal, Goal):
@@ -71,38 +113,76 @@ class Planner:
                 "goal must be an instance of Goal"
             )
 
-        if tasks is None:
-            normalized = self.strategy.decompose_goal(goal)
-        else:
-            normalized: list[Task] = []
+        normalized_tasks = self._normalize_tasks(
+            tasks
+        )
 
-            for item in tasks:
-                if isinstance(item, Task):
-                    normalized.append(item)
-                elif isinstance(item, str):
-                    normalized.append(
-                        Task(description=item)
-                    )
-                else:
-                    raise TypeError(
-                        "tasks must contain only str or Task instances"
-                    )
+        if normalized_tasks is None:
+            normalized_tasks = list(
+                self.strategy.decompose_goal(goal)
+            )
 
         return Plan(
             goal=goal,
-            tasks=normalized,
+            tasks=normalized_tasks,
         )
+
+    # ==========================================================
+    # Task normalization
+    # ==========================================================
+
+    @staticmethod
+    def _normalize_tasks(
+        tasks: Iterable[str | Task] | None,
+    ) -> list[Task] | None:
+        """
+        Normalize explicit task definitions.
+
+        ``None`` means that the configured PlanningStrategy should
+        perform goal decomposition.
+        """
+
+        if tasks is None:
+            return None
+
+        normalized: list[Task] = []
+
+        for item in tasks:
+            if isinstance(item, Task):
+                normalized.append(item)
+
+            elif isinstance(item, str):
+                normalized.append(
+                    Task(
+                        description=item
+                    )
+                )
+
+            else:
+                raise TypeError(
+                    "tasks must contain only str or Task instances"
+                )
+
+        return normalized
+
+    # ==========================================================
+    # Lifecycle
+    # ==========================================================
 
     def reset(self) -> None:
         """
-        Reset planner-local configuration.
+        Restore the default PlanningStrategy.
 
-        The canonical Planner is intentionally stateless with respect
-        to plans and execution. Reset therefore only restores the
-        default strategy when a custom strategy was supplied.
+        Planner state does not contain Plans or runtime execution
+        state. Reset only restores planner-local strategy
+        configuration.
         """
 
         self.strategy = PlanningStrategy()
+
+    # ==========================================================
+    # Representation
+    # ==========================================================
 
     def __repr__(self) -> str:
         return (

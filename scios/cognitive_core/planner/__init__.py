@@ -8,8 +8,11 @@ from .strategy import PlanningStrategy
 from .policy import PlanningPolicy
 from .planner import Planner
 from .validator import PlanValidator
+from .serializer import PlanSerializer
+
 
 PLANNER_CONTRACT_VERSION = "1.0"
+
 
 __all__ = [
     "Goal",
@@ -23,5 +26,6 @@ __all__ = [
     "PlanningPolicy",
     "Planner",
     "PlanValidator",
+    "PlanSerializer",
     "PLANNER_CONTRACT_VERSION",
 ]
