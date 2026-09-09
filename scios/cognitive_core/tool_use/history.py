@@ -1,77 +1,140 @@
-# scios/cognitive_core/tool_use/history.py
+﻿# scios/cognitive_core/tool_use/history.py
 
 """
-SciOS Tool History
-==================
+SciOS Cognitive Core Tool History
+=================================
 
-Lưu giữ nhật ký các lần gọi tool:
-- Request
-- Response
-- Thời gian
-- Trạng thái
+Semantic history of tool-use interactions.
+
+ToolHistory records:
+- ToolRequest: cognitive intent
+- ToolResponse: cognitive interpretation
+- timestamp: interaction time
+
+ToolHistory MUST NOT own or execute runtime tools.
+Execution outcomes are outside the responsibility of this semantic history.
 """
+
+from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any
+
+from .request import ToolRequest
+from .response import ToolResponse
+
+__all__ = (
+    "ToolHistoryEntry",
+    "ToolHistory",
+)
 
 
 class ToolHistoryEntry:
     """
-    Một entry trong ToolHistory: lưu request, response, timestamp.
+    A single semantic tool-use interaction.
+
+    The entry keeps the original ToolRequest and ToolResponse objects
+    rather than duplicating their fields as raw dictionaries.
     """
 
-    def __init__(self, tool: str, request: Dict[str, Any], response: Dict[str, Any]) -> None:
-        self.tool = tool
+    def __init__(
+        self,
+        request: ToolRequest,
+        response: ToolResponse,
+        *,
+        timestamp: float | None = None,
+    ) -> None:
+        if not isinstance(request, ToolRequest):
+            raise TypeError("request must be a ToolRequest")
+
+        if not isinstance(response, ToolResponse):
+            raise TypeError("response must be a ToolResponse")
+
         self.request = request
         self.response = response
-        self.timestamp = time.time()
+        self.timestamp = time.time() if timestamp is None else float(timestamp)
 
-    def to_dict(self) -> Dict[str, Any]:
+    @property
+    def tool(self) -> str:
+        """Return the semantic tool name from the request."""
+        return self.request.tool
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the history entry to a plain dictionary."""
         return {
-            "tool": self.tool,
-            "request": self.request,
-            "response": self.response,
+            "tool": self.request.tool,
+            "request": self.request.to_dict(),
+            "response": self.response.to_dict(),
             "timestamp": self.timestamp,
         }
 
     def __repr__(self) -> str:
-        status = self.response.get("status", "unknown")
-        return f"<ToolHistoryEntry tool={self.tool} status={status} at={self.timestamp}>"
-
+        return (
+            f"<ToolHistoryEntry "
+            f"tool={self.request.tool!r} "
+            f"status={self.response.status!r} "
+            f"at={self.timestamp}>"
+        )
 
 
 class ToolHistory:
     """
-    ToolHistory quản lý danh sách các entry.
+    In-memory history of semantic tool-use interactions.
+
+    ToolHistory is a Cognitive Core artifact. It does not execute tools,
+    resolve executable Tool instances, enforce runtime policy, or collect
+    runtime execution metrics.
     """
 
     def __init__(self) -> None:
-        self.entries: List[ToolHistoryEntry] = []
+        self.entries: list[ToolHistoryEntry] = []
 
-    def log(self, tool: str, request: Dict[str, Any], response: Dict[str, Any]) -> None:
+    def log(
+        self,
+        request: ToolRequest,
+        response: ToolResponse,
+        *,
+        timestamp: float | None = None,
+    ) -> ToolHistoryEntry:
         """
-        Ghi lại một lần gọi tool.
+        Record a semantic tool-use interaction.
+
+        Returns the newly created history entry.
         """
-        entry = ToolHistoryEntry(tool, request, response)
+        entry = ToolHistoryEntry(
+            request,
+            response,
+            timestamp=timestamp,
+        )
         self.entries.append(entry)
+        return entry
 
-    def list(self) -> List[Dict[str, Any]]:
-        """
-        Liệt kê toàn bộ lịch sử dưới dạng dict.
-        """
+    def list(self) -> list[dict[str, Any]]:
+        """Return the complete history as dictionaries."""
         return [entry.to_dict() for entry in self.entries]
 
-    def filter_by_tool(self, tool: str) -> List[Dict[str, Any]]:
-        """
-        Lọc lịch sử theo tên tool.
-        """
-        return [entry.to_dict() for entry in self.entries if entry.tool == tool]
+    def filter_by_tool(self, tool: str) -> list[dict[str, Any]]:
+        """Return history entries associated with the given tool name."""
+        if not isinstance(tool, str):
+            return []
+
+        tool = tool.strip()
+
+        if not tool:
+            return []
+
+        return [
+            entry.to_dict()
+            for entry in self.entries
+            if entry.tool == tool
+        ]
 
     def clear(self) -> None:
-        """
-        Xóa toàn bộ lịch sử.
-        """
+        """Remove all history entries."""
         self.entries.clear()
+
+    def __len__(self) -> int:
+        return len(self.entries)
 
     def __repr__(self) -> str:
         return f"<ToolHistory entries={len(self.entries)}>"

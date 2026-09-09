@@ -1,46 +1,85 @@
-# scios/cognitive_core/tool_use/validator.py
-
 """
-SciOS Tool Validator
-====================
+SciOS Cognitive Tool Validator.
 
-Kiểm tra request trước khi gọi tool:
-- Đảm bảo có đủ field cần thiết
-- Đúng kiểu dữ liệu
-- Không chứa nội dung nguy hiểm
+Validates semantic tool-use requests before they cross into runtime
+execution infrastructure.
 """
 
-from typing import Dict, Any
+from collections.abc import Mapping
+from typing import Any
+
+from .request import ToolRequest
 
 
 class ToolValidator:
     """
-    ToolValidator kiểm tra request có hợp lệ không.
+    Validate canonical Cognitive ToolUse requests.
+
+    Accepted inputs:
+    - ToolRequest
+    - Mapping[str, Any]
+
+    This validator is semantic only. It does not resolve or execute tools,
+    enforce runtime authorization, or provide sandboxing.
     """
 
     def __init__(self) -> None:
         pass
 
-    def validate(self, request: Dict[str, Any]) -> bool:
+    def validate(
+        self,
+        request: ToolRequest | Mapping[str, Any],
+    ) -> bool:
         """
-        Kiểm tra request:
-        - Phải có key 'tool'
-        - Phải có 'action' hoặc 'operation'
-        - Không chứa ký tự nguy hiểm (ví dụ: __import__, os.system)
+        Validate a semantic tool request.
+
+        Legacy `operation` is accepted only for mapping inputs.
+        Canonical `action` takes precedence when both are present.
         """
-        if not isinstance(request, dict):
+        if isinstance(request, ToolRequest):
+            tool_name = request.tool
+            action = request.action
+            params = request.params
+            metadata = request.metadata
+            payload = request.to_dict()
+
+        elif isinstance(request, Mapping):
+            tool_name = request.get("tool")
+            action = request.get("action")
+
+            if not action:
+                action = request.get("operation")
+
+            params = request.get("params", {})
+            metadata = request.get("metadata", {})
+            payload = dict(request)
+
+        else:
             return False
 
-        tool_name = request.get("tool")
-        action = request.get("action") or request.get("operation")
-
-        if not tool_name or not action:
+        if not isinstance(tool_name, str) or not tool_name.strip():
             return False
 
-        # Kiểm tra nội dung nguy hiểm
-        expr = str(request)
-        forbidden = ["__import__", "os.system", "subprocess", "eval", "exec"]
-        if any(f in expr for f in forbidden):
+        if not isinstance(action, str) or not action.strip():
+            return False
+
+        if not isinstance(params, dict):
+            return False
+
+        if not isinstance(metadata, dict):
+            return False
+
+        expr = str(payload)
+
+        forbidden = [
+            "__import__",
+            "os.system",
+            "subprocess",
+            "eval",
+            "exec",
+        ]
+
+        if any(item in expr for item in forbidden):
             return False
 
         return True

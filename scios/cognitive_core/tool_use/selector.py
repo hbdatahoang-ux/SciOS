@@ -2,190 +2,116 @@
 SciOS Cognitive Core Tool Selector
 ==================================
 
-Selects the appropriate Tool for a request.
+Selects a semantic tool capability for a cognitive ToolRequest.
 
-Design
-------
-ToolSelector is registry-aware:
+Architectural boundary
+----------------------
 
-    selector = ToolSelector(registry)
-    tool = selector.select(request)
+    Cognitive reasoning
+          |
+          v
+    ToolSelector
+          |
+          v
+    semantic tool identity
+          |
+          v
+    ToolRequest
+          |
+          |  explicit boundary
+          v
+    Runtime ToolRouter
 
-Selection flow:
-
-    request
-       |
-       v
-    tool name
-       |
-       v
-    ToolRegistry.get()
-       |
-       +---- not found ----> None
-       |
-       v
-    Tool.validate(request)
-       |
-       +---- invalid ------> None
-       |
-       v
-      Tool
-
-The implementation also preserves compatibility with the older
-candidate-based API:
-
-    selector.select(candidates, request)
-
-Python 3.11+
+ToolSelector MUST NOT:
+    - own a ToolRegistry
+    - resolve executable Tool instances
+    - execute tools
+    - invoke Tool.validate()
+    - own ToolExecutor / ToolSandbox / ToolPolicy
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, overload
+from collections.abc import Iterable, Mapping
+from typing import Any
 
-from scios.cognitive_core.tool_use.base import Tool
-from scios.cognitive_core.tool_use.registry import ToolRegistry
+from .request import ToolRequest
 
 
-__all__ = [
-    "ToolSelector",
-]
+__all__ = ["ToolSelector"]
 
 
 class ToolSelector:
     """
-    Select a Tool for a request.
+    Select a semantic tool identity for a cognitive tool request.
 
-    Primary API
-    -----------
-    selector = ToolSelector(registry)
-    tool = selector.select(request)
+    The selector operates entirely in the Cognitive layer.
 
-    The selector:
-
-    1. extracts the requested tool name from ``request["tool"]``;
-    2. resolves the tool through ``ToolRegistry``;
-    3. validates the request using ``tool.validate(request)``;
-    4. returns the tool when valid;
-    5. returns ``None`` when the request cannot be satisfied.
-
-    Compatibility API
-    ------------------
-    The legacy form
-
-        selector.select(candidates, request)
-
-    is also supported. This keeps older callers functional while the
-    registry-based API becomes the canonical interface.
+    It does not resolve executable runtime Tool objects and does not
+    perform runtime authorization, execution, sandboxing, or policy
+    enforcement.
     """
 
     def __init__(
         self,
-        registry: ToolRegistry,
+        capabilities: Iterable[str] | Mapping[str, Any] | None = None,
     ) -> None:
         """
-        Create a ToolSelector bound to a ToolRegistry.
+        Create a semantic tool selector.
 
         Parameters
         ----------
-        registry:
-            Registry used to resolve tools by name.
+        capabilities:
+            Optional collection or mapping of known semantic tool names.
 
-        Raises
-        ------
-        TypeError
-            If ``registry`` is not a ToolRegistry instance.
+        Notes
+        -----
+        The values are cognitive capability identifiers only. They are
+        not executable Tool instances and must not be backed by a
+        Runtime ToolRegistry.
         """
 
-        if not isinstance(registry, ToolRegistry):
-            raise TypeError(
-                "registry must be an instance of ToolRegistry"
-            )
-
-        self.registry = registry
+        if capabilities is None:
+            self._capabilities: dict[str, Any] = {}
+        elif isinstance(capabilities, Mapping):
+            self._capabilities = {
+                str(name): value
+                for name, value in capabilities.items()
+            }
+        else:
+            self._capabilities = {
+                str(name): None
+                for name in capabilities
+            }
 
     # ==========================================================
-    # Primary Selection API
+    # Selection
     # ==========================================================
 
-    @overload
     def select(
         self,
-        request: Dict[str, Any],
-    ) -> Optional[Tool]:
-        ...
-
-    @overload
-    def select(
-        self,
-        candidates: Iterable[Tool],
-        request: Dict[str, Any],
-    ) -> Optional[Tool]:
-        ...
-
-    def select(
-        self,
-        first: Dict[str, Any] | Iterable[Tool],
-        second: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Tool]:
+        request: ToolRequest | Mapping[str, Any],
+    ) -> str | None:
         """
-        Select a tool.
-
-        Canonical form
-        --------------
-        ``select(request)``
-
-        Compatibility form
-        -------------------
-        ``select(candidates, request)``
+        Select the semantic tool identified by ``request``.
 
         Returns
         -------
-        Optional[Tool]
-            The selected and validated tool, or ``None``.
+        str | None
+            The selected semantic tool name, or ``None`` when the
+            request cannot be selected.
+
+        No executable runtime object is returned.
         """
 
-        # ------------------------------------------------------
-        # Canonical registry-based API
-        # ------------------------------------------------------
+        if isinstance(request, ToolRequest):
+            tool_name = request.tool
 
-        if second is None:
+        elif isinstance(request, Mapping):
+            tool_name = request.get("tool")
 
-            request = first
-
-            if not isinstance(request, dict):
-                return None
-
-            return self._select_from_registry(request)
-
-        # ------------------------------------------------------
-        # Legacy candidate-based API
-        # ------------------------------------------------------
-
-        candidates = first
-        request = second
-
-        if not isinstance(request, dict):
+        else:
             return None
-
-        return self._select_from_candidates(
-            candidates,
-            request,
-        )
-
-    # ==========================================================
-    # Registry Selection
-    # ==========================================================
-
-    def _select_from_registry(
-        self,
-        request: Dict[str, Any],
-    ) -> Optional[Tool]:
-        """
-        Resolve and validate a tool through the registry.
-        """
-
-        tool_name = request.get("tool")
 
         if not isinstance(tool_name, str):
             return None
@@ -195,146 +121,79 @@ class ToolSelector:
         if not tool_name:
             return None
 
-        tool = self.registry.get(tool_name)
-
-        if tool is None:
+        if self._capabilities and tool_name not in self._capabilities:
             return None
 
-        if not self._validate(tool, request):
-            return None
-
-        return tool
+        return tool_name
 
     # ==========================================================
-    # Candidate Selection
+    # Capability inspection
     # ==========================================================
 
-    def _select_from_candidates(
-        self,
-        candidates: Iterable[Tool],
-        request: Dict[str, Any],
-    ) -> Optional[Tool]:
+    def available_tools(self) -> tuple[str, ...]:
         """
-        Select a tool from an explicit candidate collection.
+        Return known semantic tool capability names.
 
-        This method exists for backward compatibility with the
-        original ToolSelector contract.
+        These are identifiers only, not executable Tool instances.
         """
 
-        if candidates is None:
-            return None
+        return tuple(self._capabilities.keys())
 
-        try:
-            candidate_list: List[Tool] = list(candidates)
-        except TypeError:
-            return None
-
-        if not candidate_list:
-            return None
-
-        requested_name = request.get("tool")
-
-        # If a tool name is supplied, prefer an exact name match.
-        if isinstance(requested_name, str):
-            requested_name = requested_name.strip()
-
-            if requested_name:
-                for tool in candidate_list:
-
-                    if getattr(
-                        tool,
-                        "name",
-                        None,
-                    ) != requested_name:
-                        continue
-
-                    if self._validate(
-                        tool,
-                        request,
-                    ):
-                        return tool
-
-                return None
-
-        # Without a requested tool name, select the first valid
-        # candidate.
-        for tool in candidate_list:
-
-            if self._validate(
-                tool,
-                request,
-            ):
-                return tool
-
-        return None
-
-    # ==========================================================
-    # Validation
-    # ==========================================================
-
-    @staticmethod
-    def _validate(
-        tool: Tool,
-        request: Dict[str, Any],
-    ) -> bool:
+    def has(self, name: str) -> bool:
         """
-        Validate a request against a Tool.
-
-        Validation failures are treated as selection failures and
-        therefore return ``False`` rather than propagating ordinary
-        validation exceptions.
-        """
-
-        if not isinstance(tool, Tool):
-            return False
-
-        try:
-            return bool(
-                tool.validate(request)
-            )
-
-        except Exception:
-            return False
-
-    # ==========================================================
-    # Introspection
-    # ==========================================================
-
-    def available_tools(self) -> Dict[str, str]:
-        """
-        Return registered tools and their descriptions.
-        """
-
-        return self.registry.list_tools()
-
-    def get(
-        self,
-        name: str,
-    ) -> Optional[Tool]:
-        """
-        Resolve a tool directly from the registry.
+        Return whether a semantic tool capability is known.
         """
 
         if not isinstance(name, str):
-            return None
+            return False
 
         name = name.strip()
 
         if not name:
-            return None
+            return False
 
-        return self.registry.get(name)
+        if not self._capabilities:
+            return True
+
+        return name in self._capabilities
+
+    # ==========================================================
+    # Request construction
+    # ==========================================================
+
+    def request(
+        self,
+        tool: str,
+        action: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ToolRequest:
+        """
+        Construct a canonical Cognitive ToolRequest.
+
+        This method creates intent only. It does not execute anything.
+        """
+
+        return ToolRequest(
+            tool=tool,
+            action=action,
+            params=dict(params or {}),
+            metadata=dict(metadata or {}),
+        )
 
     # ==========================================================
     # Protocol
     # ==========================================================
 
-    def __repr__(self) -> str:
-        """
-        Return a concise selector representation.
-        """
+    def __contains__(self, name: object) -> bool:
+        if not isinstance(name, str):
+            return False
 
+        return self.has(name)
+
+    def __repr__(self) -> str:
         return (
             f"<ToolSelector "
-            f"registry={self.registry!r}>"
+            f"capabilities={len(self._capabilities)}>"
         )

@@ -1,79 +1,27 @@
 """
-SciOS Tool Use Package
-======================
+SciOS Cognitive Core Tool Use
+=============================
 
-Public API for the SciOS Tool Use subsystem.
+Semantic tool-use primitives for the Cognitive Core.
 
-This package provides:
+This package represents tool-use intent, selection, validation,
+interpretation, and interaction history.
 
-- Tool lifecycle management
-- Tool execution state
-- Request / Response models
-- Metrics & Monitoring
-- Recovery
-- Sandbox execution
-
-The symbols exported here form the stable public API.
+Executable tools and runtime execution infrastructure belong to
+``scios.runtime.tools`` and are intentionally not re-exported here.
 """
 
-from __future__ import annotations
-
-__version__ = "0.1.0"
-
-# ---------------------------------------------------------------------
-# Core Models
-# ---------------------------------------------------------------------
-
+from .history import ToolHistory
 from .request import ToolRequest
 from .response import ToolResponse
+from .selector import ToolSelector
+from .validator import ToolValidator
 
-# ---------------------------------------------------------------------
-# Runtime Components
-# ---------------------------------------------------------------------
-
-from .history import ToolHistory
-from .metrics import Metrics
-from .monitor import Monitor
-from .recovery import Recovery
-
-# ---------------------------------------------------------------------
-# Adapters
-# ---------------------------------------------------------------------
-
-from .adapters import (
-    RequestAdapter,
-    ResponseAdapter,
-)
-
-# ---------------------------------------------------------------------
-# Tool Stage
-# ---------------------------------------------------------------------
-
-from .stage import (
-    ToolUseStage,
-    ToolStage,          # Backward compatibility alias
-)
-
-# ---------------------------------------------------------------------
-# Sandbox
-# ---------------------------------------------------------------------
-
-from .sandbox import ToolSandbox
-
-# ---------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------
 
 __all__ = (
     "ToolRequest",
     "ToolResponse",
+    "ToolSelector",
+    "ToolValidator",
     "ToolHistory",
-    "Metrics",
-    "Monitor",
-    "Recovery",
-    "RequestAdapter",
-    "ResponseAdapter",
-    "ToolUseStage",
-    "ToolStage",
-    "ToolSandbox",
 )

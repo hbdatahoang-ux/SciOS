@@ -1,276 +1,133 @@
-"""
-SciOS Tool Request
-==================
+﻿"""
+SciOS Cognitive ToolUse Request
 
-Standardized tool invocation request.
+Canonical semantic request for Cognitive ToolUse.
 
-Features:
-- Tool name validation
-- Action validation
-- Parameters
-- Metadata
-- Context conversion
-- Serialization
+Contract:
+    tool
+    action
+    params
+    metadata
 
-Python 3.11+
+`action` is the canonical semantic action.
+It is not a Runtime Tool operation identifier.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
-__all__ = [
-    "ToolRequest",
-]
+__all__ = ["ToolRequest"]
 
 
 class ToolRequest:
-    """
-    ToolRequest is the canonical structure
-    for every tool execution request.
-    """
+    """Canonical request for a Cognitive Tool invocation."""
 
     def __init__(
         self,
         tool: str,
         action: str,
-        params: Optional[
-            Dict[str, Any]
-        ] = None,
-        metadata: Optional[
-            Dict[str, Any]
-        ] = None,
+        params: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
+        if not isinstance(tool, str) or not tool.strip():
+            raise ValueError("Tool name cannot be empty")
 
-        # ==================================================
-        # Validation
-        # ==================================================
+        if not isinstance(action, str) or not action.strip():
+            raise ValueError("Tool action cannot be empty")
 
-        if not isinstance(
-            tool,
-            str,
-        ) or not tool.strip():
+        if params is not None and not isinstance(params, dict):
+            raise TypeError("Tool params must be a dictionary")
 
-            raise ValueError(
-                "Tool name cannot be empty"
-            )
-
-
-        if not isinstance(
-            action,
-            str,
-        ) or not action.strip():
-
-            raise ValueError(
-                "Tool action cannot be empty"
-            )
-
+        if metadata is not None and not isinstance(metadata, dict):
+            raise TypeError("Tool metadata must be a dictionary")
 
         self.tool = tool.strip()
-
         self.action = action.strip()
-
-
-        self.params: Dict[str, Any] = (
-            params.copy()
-            if params
-            else {}
-        )
-
-
-        self.metadata: Dict[str, Any] = (
-            metadata.copy()
-            if metadata
-            else {}
-        )
-
-
-    # ======================================================
-    # Properties
-    # ======================================================
+        self.params = dict(params) if params is not None else {}
+        self.metadata = dict(metadata) if metadata is not None else {}
 
     @property
-    def parameters(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Compatibility alias.
-
-        Some pipelines use `parameters`
-        instead of `params`.
-        """
-
+    def parameters(self) -> dict[str, Any]:
+        """Compatibility alias for params."""
         return self.params
 
-
     @parameters.setter
-    def parameters(
-        self,
-        value: Dict[str, Any],
-    ) -> None:
+    def parameters(self, value: dict[str, Any]) -> None:
+        if not isinstance(value, dict):
+            raise TypeError("Tool parameters must be a dictionary")
 
-        self.params = (
-            value.copy()
-            if value
-            else {}
-        )
+        self.params = dict(value)
 
-
-    # ======================================================
-    # Serialization
-    # ======================================================
-
-    def to_dict(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Convert request into dictionary.
-        """
-
+    def to_dict(self) -> dict[str, Any]:
+        """Return canonical dictionary representation."""
         return {
-
-            "tool":
-                self.tool,
-
-            "action":
-                self.action,
-
-            "params":
-                self.params.copy(),
-
-            "metadata":
-                self.metadata.copy(),
-
+            "tool": self.tool,
+            "action": self.action,
+            "params": dict(self.params),
+            "metadata": dict(self.metadata),
         }
 
-
-    # ======================================================
-    # Constructors
-    # ======================================================
-
     @classmethod
-    def from_context(
-        cls,
-        context: Dict[str, Any],
-    ) -> "ToolRequest":
-        """
-        Build ToolRequest from pipeline context.
-        """
+    def from_dict(cls, data: dict[str, Any]) -> ToolRequest:
+        """Create a request from a dictionary."""
+        if not isinstance(data, dict):
+            raise TypeError("Tool request data must be a dictionary")
+
+        params = data.get("params")
+
+        if params is None:
+            params = data.get("parameters", {})
 
         return cls(
-
-            tool=context.get(
-                "tool",
-                "",
-            ),
-
-            action=(
-                context.get(
-                    "action"
-                )
-                or context.get(
-                    "operation",
-                    "",
-                )
-            ),
-
-            params=context.get(
-                "params",
-                {},
-            ),
-
-            metadata=context.get(
-                "metadata",
-                {},
-            ),
-
+            tool=data.get("tool", ""),
+            action=data.get("action", ""),
+            params=params,
+            metadata=data.get("metadata", {}),
         )
-
 
     @classmethod
-    def from_dict(
-        cls,
-        data: Dict[str, Any],
-    ) -> "ToolRequest":
+    def from_context(cls, context: dict[str, Any]) -> ToolRequest:
         """
-        Deserialize from dictionary.
+        Create a request from pipeline context.
+
+        `action` is canonical.
+        `operation` is accepted only as legacy compatibility input.
         """
+        if not isinstance(context, dict):
+            raise TypeError("Tool context must be a dictionary")
+
+        action = context.get("action")
+
+        if not action:
+            action = context.get("operation", "")
 
         return cls(
-
-            tool=data.get(
-                "tool",
-                "",
-            ),
-
-            action=data.get(
-                "action",
-                "",
-            ),
-
-            params=data.get(
-                "params",
-                data.get(
-                    "parameters",
-                    {},
-                ),
-            ),
-
-            metadata=data.get(
-                "metadata",
-                {},
-            ),
-
+            tool=context.get("tool", ""),
+            action=action,
+            params=context.get("params", {}),
+            metadata=context.get("metadata", {}),
         )
 
+    def update_metadata(self, **kwargs: Any) -> None:
+        """Update request metadata."""
+        self.metadata.update(kwargs)
 
-    # ======================================================
-    # Utilities
-    # ======================================================
-
-    def update_metadata(
-        self,
-        **kwargs: Any,
-    ) -> None:
-        """
-        Update request metadata.
-        """
-
-        self.metadata.update(
-            kwargs
-        )
-
-
-    def __repr__(
-        self,
-    ) -> str:
-
+    def __repr__(self) -> str:
         return (
             f"<ToolRequest "
             f"tool={self.tool!r} "
             f"action={self.action!r}>"
         )
 
-
-    def __eq__(
-        self,
-        other: object,
-    ) -> bool:
-
-        if not isinstance(
-            other,
-            ToolRequest,
-        ):
-            return False
-
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ToolRequest):
+            return NotImplemented
 
         return (
             self.tool == other.tool
-            and
-            self.action == other.action
-            and
-            self.params == other.params
-            and
-            self.metadata == other.metadata
+            and self.action == other.action
+            and self.params == other.params
+            and self.metadata == other.metadata
         )
