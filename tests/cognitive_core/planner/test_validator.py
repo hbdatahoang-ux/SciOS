@@ -1,4 +1,4 @@
-"""
+﻿"""
 Contract tests for SciOS Cognitive Core PlanValidator.
 """
 
@@ -406,6 +406,70 @@ class TestPlanValidatorGraph:
             issue["code"] == "CYCLE_DETECTED"
             for issue in result["issues"]
         )
+
+    def test_plan_graph_task_identity_mismatch(self):
+        validator = PlanValidator()
+        plan = make_valid_plan()
+
+        original_task = plan.tasks[0]
+        replacement_task = Task(
+            description=original_task.description,
+            task_id=original_task.id,
+        )
+
+        plan.task_graph.tasks[original_task.id] = replacement_task
+
+        result = validator.validate(plan)
+
+        assert result["valid"] is False
+
+    def test_task_dependencies_graph_edges_mismatch(self):
+        validator = PlanValidator()
+
+        task_a = Task(
+            "A",
+            task_id="task-a",
+        )
+        task_b = Task(
+            "B",
+            task_id="task-b",
+        )
+
+        plan = Plan(
+            goal=Goal("Test"),
+            tasks=[task_a, task_b],
+        )
+
+        task_b.dependencies = ["task-a"]
+        plan.task_graph.edges["task-b"] = []
+
+        result = validator.validate(plan)
+
+        assert result["valid"] is False
+
+    def test_graph_edges_task_dependencies_mismatch(self):
+        validator = PlanValidator()
+
+        task_a = Task(
+            "A",
+            task_id="task-a",
+        )
+        task_b = Task(
+            "B",
+            task_id="task-b",
+        )
+
+        plan = Plan(
+            goal=Goal("Test"),
+            tasks=[task_a, task_b],
+        )
+
+        task_b.dependencies = []
+        plan.task_graph.edges["task-b"] = ["task-a"]
+
+        result = validator.validate(plan)
+
+        assert result["valid"] is False
 
     def test_plan_graph_mismatch(self):
         validator = PlanValidator()

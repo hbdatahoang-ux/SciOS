@@ -2,7 +2,7 @@
 SciOS Plan Compilation Errors
 =============================
 
-Errors raised at the Cognitive Plan -> Execution IR boundary.
+Errors raised at the Cognitive Plan -> ExecutionGraph boundary.
 """
 
 from __future__ import annotations
@@ -18,19 +18,19 @@ __all__ = [
 
 
 class PlanCompilationError(Exception):
-    """Base exception for Plan -> ExecutionGraph compilation."""
+    """Base exception for Cognitive Plan -> ExecutionGraph compilation."""
 
 
 class InvalidPlanError(PlanCompilationError):
-    """Raised when the input Plan is invalid or structurally unusable."""
+    """Raised when a Plan is invalid or structurally unusable."""
 
 
-class MissingTaskDependencyError(PlanCompilationError):
-    """Raised when a Task references a dependency that cannot be compiled."""
+class MissingTaskDependencyError(InvalidPlanError):
+    """Raised when a Task references an unknown or unusable dependency."""
 
 
-class UnsupportedTaskError(PlanCompilationError):
-    """Raised when a Task cannot be lowered to an execution node."""
+class UnsupportedTaskError(InvalidPlanError):
+    """Raised when a planning object cannot be lowered to an ExecutionNode."""
 
 
 class CyclicPlanError(PlanCompilationError):

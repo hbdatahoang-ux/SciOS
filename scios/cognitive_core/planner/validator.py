@@ -419,7 +419,7 @@ class PlanValidator:
             )
             return
 
-        raw_constraints = getattr(constraints, "_constraints", None)
+        raw_constraints = constraints.constraints
 
         if raw_constraints is None:
             return
@@ -461,7 +461,7 @@ class PlanValidator:
             if task.id is not None
         }
 
-        # Kiểm tra mọi task đều có ID hợp lệ
+        # KiÃ¡Â»Æ’m tra mÃ¡Â»Âi task Ã„â€˜Ã¡Â»Âu cÃƒÂ³ ID hÃ¡Â»Â£p lÃ¡Â»â€¡
         for task in valid_tasks:
             if task.id is None:
                 self._error(
@@ -471,7 +471,7 @@ class PlanValidator:
                 )
                 continue
 
-            # Kiểm tra dependency tồn tại
+            # KiÃ¡Â»Æ’m tra dependency tÃ¡Â»â€œn tÃ¡ÂºÂ¡i
             for dependency_id in task.dependencies:
                 if dependency_id not in task_ids:
                     self._error(
@@ -495,7 +495,7 @@ class PlanValidator:
                         metadata={"task_id": task.id},
                     )
 
-        # Kiểm tra graph storage nếu graph có tồn tại
+        # KiÃ¡Â»Æ’m tra graph storage nÃ¡ÂºÂ¿u graph cÃƒÂ³ tÃ¡Â»â€œn tÃ¡ÂºÂ¡i
         graph = plan.task_graph
         if graph is None:
             self._error(
@@ -517,6 +517,45 @@ class PlanValidator:
                     "graph_task_ids": sorted(graph_task_ids),
                 },
             )
+
+        # Validate canonical Task object identity between Plan and TaskGraph
+        for task in valid_tasks:
+            if task.id is None:
+                continue
+
+            graph_task = graph.tasks.get(task.id)
+
+            if graph_task is not task:
+                self._error(
+                    code="GRAPH_TASK_IDENTITY_MISMATCH",
+                    message=(
+                        f"TaskGraph task {task.id!r} "
+                        "is not the same object as Plan task."
+                    ),
+                    location=f"task_graph.tasks[{task.id!r}]",
+                    metadata={"task_id": task.id},
+                )
+        # Validate dependency consistency between Task and TaskGraph
+        for task in valid_tasks:
+            if task.id is None:
+                continue
+
+            graph_dependencies = graph.edges.get(task.id, [])
+
+            if task.dependencies != graph_dependencies:
+                self._error(
+                    code="DEPENDENCY_GRAPH_MISMATCH",
+                    message=(
+                        f"Task {task.id!r} dependencies do not match "
+                        "TaskGraph edges."
+                    ),
+                    location=f"task_graph.edges[{task.id!r}]",
+                    metadata={
+                        "task_id": task.id,
+                        "task_dependencies": list(task.dependencies),
+                        "graph_dependencies": list(graph_dependencies),
+                    },
+                )
 
         self._validate_cycles(valid_tasks)
 

@@ -1,31 +1,3 @@
-"""
-SciOS Cognitive Kernel
-======================
-
-Entrypoint chính của SciOS Cognitive Core.
-
-CognitiveKernel là lớp điều phối cấp cao, ghép các thành phần:
-
-    CognitiveKernel
-        ├── StageRegistry
-        ├── StageDispatcher
-        ├── MiddlewareManager
-        ├── EventBus
-        ├── CognitivePipeline
-        └── KernelState
-
-Responsibilities
-----------------
-- Quản lý lifecycle của Cognitive Kernel
-- Khởi động / shutdown / reset runtime
-- Tạo execution context từ CognitiveRequest
-- Thực thi CognitivePipeline
-- Chuyển context thành CognitiveResponse
-- Cung cấp kernel status và diagnostics
-
-Python 3.11+
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -49,19 +21,6 @@ __all__ = [
 class CognitiveKernel:
     """
     Top-level execution kernel for SciOS Cognitive Core.
-
-    The kernel owns the runtime components and coordinates their
-    lifecycle and execution.
-
-    Parameters
-    ----------
-    config:
-        Optional user-defined kernel configuration.
-
-    Notes
-    -----
-    A kernel starts in a non-booted state. ``run()`` cannot be
-    called until ``boot()`` has completed successfully.
     """
 
     VERSION = "0.1.0"
@@ -70,52 +29,22 @@ class CognitiveKernel:
         self,
         config: Any = None,
     ) -> None:
-        # -----------------------------------------------------
-        # Core components
-        # -----------------------------------------------------
-
         self.registry = StageRegistry()
         self.dispatcher = StageDispatcher()
         self.middleware = MiddlewareManager()
         self.event_bus = EventBus()
 
-        # Pipeline shares the kernel event bus so that events
-        # generated during pipeline execution are observable
-        # through the kernel-level event bus.
         self.pipeline = CognitivePipeline(
+            dispatcher=self.dispatcher,
+            middleware=self.middleware,
             event_bus=self.event_bus,
         )
 
-        # -----------------------------------------------------
-        # Kernel state
-        # -----------------------------------------------------
-
         self.state = KernelState()
-
-        # Preserve caller configuration exactly.
         self.config = config
-
-        # Boot flag is intentionally independent from KernelState.
         self._booted = False
 
-    # =========================================================
-    # Lifecycle
-    # =========================================================
-
     def boot(self) -> bool:
-        """
-        Boot the cognitive kernel.
-
-        Returns
-        -------
-        bool
-            ``True`` when the kernel is booted.
-
-        Notes
-        -----
-        Boot is idempotent at the current contract level.
-        Repeated calls keep the kernel in ``RUNNING`` state.
-        """
         self._booted = True
 
         self.state.set_status(
@@ -126,19 +55,6 @@ class CognitiveKernel:
         return True
 
     def shutdown(self) -> bool:
-        """
-        Shutdown the cognitive kernel.
-
-        Returns
-        -------
-        bool
-            ``True`` after shutdown has been requested.
-
-        Notes
-        -----
-        Shutdown is safe even when the kernel has not previously
-        been booted.
-        """
         self._booted = False
 
         self.state.set_status(
@@ -149,16 +65,6 @@ class CognitiveKernel:
         return True
 
     def reset(self) -> None:
-        """
-        Reset kernel runtime state.
-
-        The pipeline runtime is reset while the kernel itself
-        remains booted.
-
-        Returns
-        -------
-        None
-        """
         self.pipeline.reset()
 
         self.state.set_status(
@@ -166,80 +72,30 @@ class CognitiveKernel:
             "Kernel reset",
         )
 
-    # =========================================================
-    # Execution
-    # =========================================================
-
-    def run(
-        self,
-        request: CognitiveRequest,
-    ) -> CognitiveResponse:
-        """
-        Execute a cognitive request through the pipeline.
-
-        Parameters
-        ----------
-        request:
-            Cognitive request to execute.
-
-        Returns
-        -------
-        CognitiveResponse
-            Response generated from the resulting context.
-
-        Raises
-        ------
-        Exception
-            If the kernel has not been booted.
-        TypeError
-            If ``request`` is not a ``CognitiveRequest``.
-        """
+    def run(self, request: CognitiveRequest) -> CognitiveResponse:
         if not self._booted:
-            raise Exception("Kernel not booted")
+            raise RuntimeError("Kernel not booted")
 
         if not isinstance(request, CognitiveRequest):
             raise TypeError(
                 "request must be an instance of CognitiveRequest"
             )
 
-        # Create execution context.
         context = CognitiveContext(request)
+        self.pipeline.run(context)
 
-        # Execute the complete cognitive pipeline.
-        context = self.pipeline.run(context)
-
-        # Convert execution context into public response.
         return CognitiveResponse.from_context(context)
 
-    # =========================================================
-    # Status
-    # =========================================================
-
     def status(self) -> dict[str, Any]:
-        """
-        Return a diagnostic snapshot of the kernel.
-
-        Returns
-        -------
-        dict[str, Any]
-            Stable kernel-level status information.
-        """
         return {
-            "state": self.state.status.name,
             "booted": self._booted,
             "version": self.VERSION,
+            "state": self.state.status.name,
         }
 
-    # =========================================================
-    # Python Protocols
-    # =========================================================
-
     def __repr__(self) -> str:
-        """
-        Return a concise diagnostic representation.
-        """
         return (
             "<CognitiveKernel "
-            f"state={self.state.status.name} "
-            f"booted={self._booted}>"
+            f"booted={self._booted} "
+            f"state={self.state.status.name}>"
         )

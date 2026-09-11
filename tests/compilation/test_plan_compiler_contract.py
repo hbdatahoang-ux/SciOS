@@ -14,7 +14,12 @@ from scios.execution.node.kind import NodeKind
 from scios.execution.node.status import NodeStatus
 
 from scios.compilation.plan_compiler import PlanCompiler
-from scios.compilation.errors import PlanCompilationError
+from scios.compilation.errors import (
+    CyclicPlanError,
+    InvalidPlanError,
+    MissingTaskDependencyError,
+    PlanCompilationError,
+)
 
 
 def make_goal() -> Goal:
@@ -209,6 +214,60 @@ class TestPlanCompilerContract:
 
         assert edge.source_id == node_a.node_id
         assert edge.target_id == node_b.node_id
+        assert edge.relation == "dependency"
+
+    # ==========================================================
+    # PC-07b
+    # TaskGraph.edges is the canonical dependency source
+    #
+    # TaskGraph owns topology.
+    #
+    # This regression test deliberately makes the Task-level
+    # dependency mirror disagree with TaskGraph.edges.
+    #
+    # The compiler MUST lower dependencies from TaskGraph.edges,
+    # not from Task.dependencies.
+    # ==========================================================
+
+    def test_compiler_uses_task_graph_edges_as_dependency_source(self):
+        task_a = Task(
+            description="Acquire data",
+            task_id="task-a",
+        )
+
+        task_b = Task(
+            description="Analyze data",
+            task_id="task-b",
+        )
+
+        plan = make_plan(
+            task_a,
+            task_b,
+        )
+
+        # TaskGraph owns canonical topology.
+        plan.task_graph.edges["task-b"] = ["task-a"]
+
+        # Deliberately make the Task-level mirror disagree.
+        task_b.dependencies = []
+
+        graph = PlanCompiler().compile(plan)
+
+        node_by_task_id = {
+            node.metadata["source"]["task_id"]: node
+            for node in graph.nodes.values()
+        }
+
+        node_a = node_by_task_id["task-a"]
+        node_b = node_by_task_id["task-b"]
+
+        assert len(graph.edges) == 1
+
+        edge = graph.edges[0]
+
+        assert edge.source_id == node_a.node_id
+        assert edge.target_id == node_b.node_id
+        assert edge.relation == "dependency"
 
     # ==========================================================
     # PC-08
@@ -359,11 +418,11 @@ class TestPlanCompilerContract:
 
         # Compiler must not create a second topology representation
         # through ExecutionNode.parent/children.
-        assert node_a.parent is None
-        assert node_a.children == []
+        assert not hasattr(node_a, "parent")
+        assert not hasattr(node_a, "children")
 
-        assert node_b.parent is None
-        assert node_b.children == []
+        assert not hasattr(node_b, "parent")
+        assert not hasattr(node_b, "children")
 
     # ==========================================================
     # Additional API boundary contract
@@ -377,3 +436,130 @@ class TestPlanCompilerContract:
         assert len(parameters) == 2
         assert parameters[0].name == "self"
         assert parameters[1].name == "plan"
+    # ==========================================================
+    # PC-12
+    # Invalid Plan.tasks entry -> InvalidPlanError
+    # ==========================================================
+
+    def test_invalid_task_entry_fails_explicitly(self):
+        compiler = PlanCompiler()
+
+        plan = make_plan(
+            Task(
+                description="Valid task",
+                task_id="task-a",
+            )
+        )
+
+        plan.tasks.append("not-a-task")
+
+        with pytest.raises(InvalidPlanError):
+            compiler.compile(plan)
+
+    # ==========================================================
+    # PC-13
+    # Missing TaskGraph dependency -> MissingTaskDependencyError
+    # ==========================================================
+
+    def test_missing_task_dependency_fails_explicitly(self):
+        task = Task(
+            description="Analyze data",
+            task_id="task-b",
+        )
+
+        plan = make_plan(task)
+
+        plan.task_graph.edges["task-b"] = ["missing-task"]
+
+        with pytest.raises(MissingTaskDependencyError):
+            PlanCompiler().compile(plan)
+
+    # ==========================================================
+    # PC-14
+    # Self dependency -> CyclicPlanError
+    # ==========================================================
+
+    def test_self_dependency_fails_as_cyclic_plan(self):
+        task = Task(
+            description="Self dependent task",
+            task_id="task-a",
+        )
+
+        plan = make_plan(task)
+
+        plan.task_graph.edges["task-a"] = ["task-a"]
+
+        with pytest.raises(CyclicPlanError):
+            PlanCompiler().compile(plan)
+
+    # ==========================================================
+    # PC-15
+    # Cyclic Plan -> CyclicPlanError
+    # ==========================================================
+
+    def test_cyclic_plan_fails_explicitly(self):
+        task_a = Task(
+            description="Task A",
+            task_id="task-a",
+        )
+
+        task_b = Task(
+            description="Task B",
+            task_id="task-b",
+        )
+
+        plan = make_plan(
+            task_a,
+            task_b,
+        )
+
+        plan.task_graph.edges["task-a"] = ["task-b"]
+        plan.task_graph.edges["task-b"] = ["task-a"]
+
+        with pytest.raises(CyclicPlanError):
+            PlanCompiler().compile(plan)
+
+    # ==========================================================
+    # PC-16
+    # Successful compilation MUST produce a valid ExecutionGraph
+    # ==========================================================
+
+    def test_compiled_execution_graph_is_valid(self):
+        task_a = Task(
+            description="Acquire data",
+            task_id="task-a",
+        )
+
+        task_b = Task(
+            description="Analyze data",
+            task_id="task-b",
+            dependencies=["task-a"],
+        )
+
+        plan = make_plan(
+            task_a,
+            task_b,
+        )
+
+        graph = PlanCompiler().compile(plan)
+
+        graph.validate()
+
+    # ==========================================================
+    # PC-17
+    # Provenance source type -> cognitive_task
+    # ==========================================================
+
+    def test_compiled_node_has_cognitive_task_provenance(self):
+        task = Task(
+            description="Perform task A",
+            task_id="task-a",
+        )
+
+        plan = make_plan(task)
+
+        graph = PlanCompiler().compile(plan)
+
+        node = next(iter(graph.nodes.values()))
+
+        assert node.metadata["source"]["type"] == "cognitive_task"

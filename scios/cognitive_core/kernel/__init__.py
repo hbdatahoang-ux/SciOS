@@ -1,19 +1,11 @@
-"""
-SciOS Cognitive Kernel
-======================
+﻿"""
+SciOS Cognitive Kernel package.
 
-Package `kernel` tập trung các contract chính:
-- CognitiveKernel
-- CognitivePipeline
-- CognitiveContext
-- CognitiveRequest
-- CognitiveResponse
-- StageRegistry, StageDispatcher
-- KernelLifecycle, KernelState
-- Hooks, Middleware, Serializer, Exceptions
+Public API facade for the canonical CognitiveKernel implementation.
 """
 
-from .pipeline import CognitivePipeline
+from .kernel import CognitiveKernel
+from .pipeline import CognitivePipeline, Pipeline
 from .context import CognitiveContext
 from .request import CognitiveRequest
 from .response import CognitiveResponse
@@ -34,35 +26,27 @@ from .exceptions import (
     ContextError,
 )
 
-# -----------------------------------------------------
-# Kernel entrypoint
-# -----------------------------------------------------
-
-class CognitiveKernel:
-    """
-    CognitiveKernel là entrypoint chính.
-    Nó wrap pipeline, dispatcher, registry, lifecycle và config.
-    """
-
-    def __init__(self, config=None) -> None:
-        self.pipeline = CognitivePipeline()
-        self.registry = StageRegistry()
-        self.dispatcher = StageDispatcher(self.registry)
-        self.lifecycle = KernelLifecycle(self)
-        self.state = KernelState()
-        self.hooks = HookManager()
-        self.middleware = MiddlewareManager()
-        self.config = config
-
-    def run(self, request: CognitiveRequest) -> CognitiveResponse:
-        """Chạy pipeline với request và trả về response."""
-        context = CognitiveContext(request)
-        # chạy middleware chain trước khi dispatch
-        self.middleware.run(context, final_handler=lambda ctx: self.dispatcher.dispatch(ctx))
-        return CognitiveResponse.from_context(context)
-
-    def reset(self) -> None:
-        """Reset toàn bộ kernel."""
-        self.pipeline.reset()
-        self.registry.reset()
-        self.state.set_status(KernelStatus.IDLE, "Kernel reset")
+__all__ = [
+    "CognitiveKernel",
+    "CognitivePipeline",
+    "Pipeline",
+    "CognitiveContext",
+    "CognitiveRequest",
+    "CognitiveResponse",
+    "CognitiveStage",
+    "StageRegistry",
+    "StageDispatcher",
+    "KernelLifecycle",
+    "KernelState",
+    "KernelStatus",
+    "KernelEvent",
+    "KernelEventType",
+    "HookManager",
+    "MiddlewareManager",
+    "KernelSerializer",
+    "KernelError",
+    "StageError",
+    "PipelineError",
+    "LifecycleError",
+    "ContextError",
+]

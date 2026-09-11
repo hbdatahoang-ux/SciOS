@@ -17,7 +17,7 @@ Responsibilities
 ----------------
 - Validate the input Plan.
 - Lower each cognitive Task to one ExecutionNode.
-- Lower Task dependencies to ExecutionEdges.
+- Lower TaskGraph dependencies to ExecutionEdges.
 - Preserve cognitive-task provenance.
 - Preserve selected execution-relevant metadata.
 
@@ -80,7 +80,7 @@ class PlanCompiler:
         -------
         ExecutionGraph
             Execution IR containing one node per Task and one edge
-            per Task dependency.
+            per TaskGraph dependency.
 
         Raises
         ------
@@ -102,6 +102,11 @@ class PlanCompiler:
             plan.task_graph.topological_sort()
         except Exception as exc:
             message = str(exc)
+
+            if "unknown dependency" in message.lower():
+                raise MissingTaskDependencyError(
+                    f"Invalid cognitive Plan graph: {message}"
+                ) from exc
 
             if "cycle" in message.lower():
                 raise CyclicPlanError(
@@ -135,46 +140,47 @@ class PlanCompiler:
                 task_to_node_id[task.id] = node.node_id
 
         # ----------------------------------------------------------
-        # Phase 2: dependency -> ExecutionEdge
+        # Phase 2: TaskGraph dependency -> ExecutionEdge
         #
-        # Cognitive representation:
+        # Canonical cognitive topology:
         #
-        #     B.dependencies = ["A"]
+        #     TaskGraph.edges["B"] = ["A"]
         #
         # Execution representation:
         #
         #     A -> B
+        #
+        # TaskGraph owns dependency topology.
+        # Task.dependencies is only a structural mirror.
         # ----------------------------------------------------------
 
-        for task in plan.tasks:
-            if task.id is None:
-                if task.dependencies:
-                    raise MissingTaskDependencyError(
-                        "A Task with no id cannot have dependencies."
-                    )
-                continue
+        for task_id, dependency_ids in plan.task_graph.edges.items():
+            try:
+                target_id = task_to_node_id[task_id]
+            except KeyError as exc:
+                raise MissingTaskDependencyError(
+                    f"TaskGraph contains unknown Task {task_id!r}."
+                ) from exc
 
-            target_id = task_to_node_id[task.id]
-
-            for dependency_id in task.dependencies:
+            for dependency_id in dependency_ids:
                 try:
                     source_id = task_to_node_id[dependency_id]
                 except KeyError as exc:
                     raise MissingTaskDependencyError(
-                        f"Task {task.id!r} depends on unknown "
+                        f"Task {task_id!r} depends on unknown "
                         f"Task {dependency_id!r}."
                     ) from exc
 
                 if source_id == target_id:
                     raise CyclicPlanError(
-                        f"Task {task.id!r} cannot depend on itself."
+                        f"Task {task_id!r} cannot depend on itself."
                     )
 
                 graph.add_edge(
                     ExecutionEdge(
                         source_id=source_id,
                         target_id=target_id,
-                        label="dependency",
+                        relation="dependency",
                     )
                 )
 

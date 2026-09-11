@@ -1,26 +1,32 @@
-from __future__ import annotations
+﻿from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Optional
 from uuid import UUID, uuid4
+from typing import Any
+
 from scios.execution.node.kind import NodeKind
 from scios.execution.node.status import NodeStatus
-from scios.execution.node.lifecycle import is_terminal, is_active, is_pending, can_retry
 
 
 @dataclass
 class ExecutionNode:
     """
-    ExecutionNode = Atomic unit of execution in IR.
+    Canonical execution IR node.
+
+    An ExecutionNode describes an atomic execution unit.
+    It contains semantic and lifecycle information only.
+
+    Runtime execution concerns such as handlers, inputs, workers,
+    executors, contexts, and results do not belong here.
     """
 
     node_id: UUID = field(default_factory=uuid4)
     kind: NodeKind = NodeKind.PRIMITIVE
-    status: NodeStatus = NodeStatus.READY
     name: str = "unnamed"
-    metadata: dict[str, Any] = field(default_factory=dict)
+    status: NodeStatus = NodeStatus.READY
 
-    parent: Optional["ExecutionNode"] = None
-    children: list["ExecutionNode"] = field(default_factory=list)
+    source: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     # =========================================================
     # Lifecycle API
@@ -41,36 +47,27 @@ class ExecutionNode:
     def mark_cancelled(self) -> None:
         self.status = NodeStatus.CANCELLED
 
-    def retry(self) -> None:
-        if can_retry(self.status):
-            self.status = NodeStatus.RETRYING
-
-    # =========================================================
-    # Hierarchy API
-    # =========================================================
-
-    def add_child(self, child: "ExecutionNode") -> None:
-        child.parent = self
-        self.children.append(child)
-
-    def is_root(self) -> bool:
-        return self.parent is None
-
-    def is_leaf(self) -> bool:
-        return len(self.children) == 0
-
     # =========================================================
     # Status checks
     # =========================================================
 
     def is_terminal(self) -> bool:
-        return is_terminal(self.status)
+        return self.status in {
+            NodeStatus.SUCCESS,
+            NodeStatus.FAILED,
+            NodeStatus.SKIPPED,
+            NodeStatus.CANCELLED,
+        }
 
     def is_active(self) -> bool:
-        return is_active(self.status)
+        return self.status == NodeStatus.RUNNING
 
     def is_pending(self) -> bool:
-        return is_pending(self.status)
+        return self.status in {
+            NodeStatus.CREATED,
+            NodeStatus.READY,
+            NodeStatus.WAITING,
+        }
 
     # =========================================================
     # Serialization
@@ -80,8 +77,8 @@ class ExecutionNode:
         return {
             "node_id": str(self.node_id),
             "kind": self.kind.value,
-            "status": self.status.value,
             "name": self.name,
-            "metadata": self.metadata,
-            "children": [c.to_dict() for c in self.children],
+            "status": self.status.value,
+            "source": dict(self.source),
+            "metadata": dict(self.metadata),
         }

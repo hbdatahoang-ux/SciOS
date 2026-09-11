@@ -118,7 +118,7 @@ def test_compile_preserves_dependency_edge():
 
     assert edge.source_id == collect_node.node_id
     assert edge.target_id == analyze_node.node_id
-    assert edge.label == "dependency"
+    assert edge.relation == "dependency"
 
 
 def test_execution_identity_is_distinct_from_task_identity():
@@ -282,3 +282,60 @@ def test_compiler_only_performs_semantic_lowering():
         assert "callable" not in node.metadata
         assert "tool" not in node.metadata
         assert "result" not in node.metadata
+def test_compile_preserves_multiple_dependencies():
+    goal = Goal(description="Multiple dependencies")
+
+    task_a = Task(
+        description="Task A",
+        task_id="A",
+    )
+
+    task_b = Task(
+        description="Task B",
+        task_id="B",
+    )
+
+    task_c = Task(
+        description="Task C",
+        task_id="C",
+        dependencies=["A", "B"],
+    )
+
+    graph = TaskGraph()
+    graph.add_task(task_a.id, task_a)
+    graph.add_task(task_b.id, task_b)
+    graph.add_task(task_c.id, task_c)
+
+    plan = Plan(
+        goal=goal,
+        tasks=[task_a, task_b, task_c],
+        task_graph=graph,
+    )
+
+    execution_graph = PlanCompiler().compile(plan)
+
+    nodes_by_task_id = {
+        node.metadata["source"]["task_id"]: node
+        for node in execution_graph.nodes.values()
+    }
+
+    node_a = nodes_by_task_id["A"]
+    node_b = nodes_by_task_id["B"]
+    node_c = nodes_by_task_id["C"]
+
+    assert len(execution_graph.edges) == 2
+
+    dependency_edges = {
+        (edge.source_id, edge.target_id)
+        for edge in execution_graph.edges
+    }
+
+    assert dependency_edges == {
+        (node_a.node_id, node_c.node_id),
+        (node_b.node_id, node_c.node_id),
+    }
+
+    assert all(
+        edge.relation == "dependency"
+        for edge in execution_graph.edges
+    )

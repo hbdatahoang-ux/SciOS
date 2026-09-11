@@ -1,62 +1,46 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import List
-from uuid import UUID, uuid4
+
+from collections import deque
 
 from scios.execution.node.node import ExecutionNode
+from scios.execution.node.status import NodeStatus
 
 
-@dataclass
 class TaskQueue:
     """
-    TaskQueue = Manages execution-ready nodes.
+    Queue of execution-ready nodes.
+
+    TaskQueue owns queue mechanics only. It does not know about
+    ExecutionGraph or dependency resolution.
     """
 
-    queue_id: UUID = field(default_factory=uuid4)
-    tasks: List[ExecutionNode] = field(default_factory=list)
-
-    # =========================================================
-    # Core API
-    # =========================================================
+    def __init__(self) -> None:
+        self._queue: deque[ExecutionNode] = deque()
 
     def enqueue(self, node: ExecutionNode) -> None:
-        """
-        Add node to queue.
-        """
-        self.tasks.append(node)
+        if not isinstance(node, ExecutionNode):
+            raise TypeError("node must be an ExecutionNode")
+
+        if node.status is not NodeStatus.READY:
+            raise ValueError("only READY nodes can be enqueued")
+
+        self._queue.append(node)
 
     def dequeue(self) -> ExecutionNode | None:
-        """
-        Remove and return next node from queue.
-        """
-        if not self.tasks:
+        if not self._queue:
             return None
-        return self.tasks.pop(0)
+        return self._queue.popleft()
 
     def peek(self) -> ExecutionNode | None:
-        """
-        Peek at next node without removing.
-        """
-        return self.tasks[0] if self.tasks else None
+        if not self._queue:
+            return None
+        return self._queue[0]
 
     def has_tasks(self) -> bool:
-        """
-        Check if queue has tasks.
-        """
-        return len(self.tasks) > 0
-
-    # =========================================================
-    # Utility
-    # =========================================================
-
-    def reset(self) -> None:
-        """
-        Clear queue.
-        """
-        self.tasks.clear()
+        return bool(self._queue)
 
     def size(self) -> int:
-        """
-        Return number of tasks in queue.
-        """
-        return len(self.tasks)
+        return len(self._queue)
+
+    def reset(self) -> None:
+        self._queue.clear()
