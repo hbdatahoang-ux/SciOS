@@ -563,3 +563,41 @@ class TestPlanCompilerContract:
         node = next(iter(graph.nodes.values()))
 
         assert node.metadata["source"]["type"] == "cognitive_task"
+    def test_explicit_operation_binding_is_preserved(self):
+        from scios.execution.operation.ref import OperationRef
+
+        class Binder:
+            def bind(self, task):
+                return OperationRef(
+                    name="data.analyze",
+                    version="1.0",
+                )
+
+        task = Task(
+            description="Analyze data",
+            task_id="task-a",
+        )
+
+        graph = PlanCompiler(
+            operation_binder=Binder()
+        ).compile(make_plan(task))
+
+        node = next(iter(graph.nodes.values()))
+
+        assert node.operation_ref == OperationRef(
+            name="data.analyze",
+            version="1.0",
+        )
+        assert node.name == "Analyze data"
+
+    def test_description_is_not_used_as_operation_binding(self):
+        task = Task(
+            description="data.analyze",
+            task_id="task-a",
+        )
+
+        graph = PlanCompiler().compile(make_plan(task))
+
+        node = next(iter(graph.nodes.values()))
+
+        assert node.operation_ref is None

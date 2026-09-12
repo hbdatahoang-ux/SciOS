@@ -1,37 +1,4 @@
-"""
-SciOS Plan Compiler
-===================
-
-Semantic compiler at the boundary between the Cognitive Planner
-and the Execution IR.
-
-Canonical transformation:
-
-    Cognitive Plan
-        |
-        | semantic lowering
-        v
-    ExecutionGraph
-
-Responsibilities
-----------------
-- Validate the input Plan.
-- Lower each cognitive Task to one ExecutionNode.
-- Lower TaskGraph dependencies to ExecutionEdges.
-- Preserve cognitive-task provenance.
-- Preserve selected execution-relevant metadata.
-
-Non-responsibilities
---------------------
-- Runtime execution.
-- Scheduling.
-- Dispatch.
-- Tool invocation.
-- Runtime callable resolution.
-- Retry or recovery.
-"""
-
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -44,6 +11,7 @@ from scios.execution.node.kind import NodeKind
 from scios.execution.node.node import ExecutionNode
 from scios.execution.node.status import NodeStatus
 
+from .operation_binder import OperationBinder
 from .errors import (
     CyclicPlanError,
     InvalidPlanError,
@@ -51,51 +19,19 @@ from .errors import (
     UnsupportedTaskError,
 )
 
-
-__all__ = [
-    "PlanCompiler",
-]
+__all__ = ["PlanCompiler"]
 
 
 class PlanCompiler:
-    """
-    Compile a cognitive Plan into an ExecutionGraph.
+    """Compile a cognitive Plan into an ExecutionGraph."""
 
-    This class is deliberately a pure semantic compiler.
-
-    It does not execute, schedule, dispatch, or resolve runtime
-    operations.
-    """
+    def __init__(
+        self,
+        operation_binder: OperationBinder | None = None,
+    ) -> None:
+        self._operation_binder = operation_binder
 
     def compile(self, plan: Plan) -> ExecutionGraph:
-        """
-        Compile a cognitive Plan into an ExecutionGraph.
-
-        Parameters
-        ----------
-        plan:
-            Canonical cognitive-core Plan.
-
-        Returns
-        -------
-        ExecutionGraph
-            Execution IR containing one node per Task and one edge
-            per TaskGraph dependency.
-
-        Raises
-        ------
-        InvalidPlanError
-            If the input is not a valid Plan or is structurally invalid.
-
-        MissingTaskDependencyError
-            If a Task dependency cannot be resolved to another Task.
-
-        UnsupportedTaskError
-            If a Task cannot be lowered to an ExecutionNode.
-
-        CyclicPlanError
-            If the planning graph contains a cycle.
-        """
         self._validate_plan(plan)
 
         try:
@@ -118,17 +54,10 @@ class PlanCompiler:
             ) from exc
 
         graph = ExecutionGraph()
-
-        # Planning identity -> runtime execution identity.
         task_to_node_id: dict[str, Any] = {}
-
-        # ----------------------------------------------------------
-        # Phase 1: Task -> ExecutionNode
-        # ----------------------------------------------------------
 
         for task in plan.tasks:
             node = self._compile_task(task)
-
             graph.add_node(node)
 
             if task.id is not None:
@@ -138,21 +67,6 @@ class PlanCompiler:
                     )
 
                 task_to_node_id[task.id] = node.node_id
-
-        # ----------------------------------------------------------
-        # Phase 2: TaskGraph dependency -> ExecutionEdge
-        #
-        # Canonical cognitive topology:
-        #
-        #     TaskGraph.edges["B"] = ["A"]
-        #
-        # Execution representation:
-        #
-        #     A -> B
-        #
-        # TaskGraph owns dependency topology.
-        # Task.dependencies is only a structural mirror.
-        # ----------------------------------------------------------
 
         for task_id, dependency_ids in plan.task_graph.edges.items():
             try:
@@ -186,14 +100,8 @@ class PlanCompiler:
 
         return graph
 
-    # ==============================================================
-    # Validation
-    # ==============================================================
-
     @staticmethod
     def _validate_plan(plan: Plan) -> None:
-        """Validate the basic input boundary."""
-
         if not isinstance(plan, Plan):
             raise InvalidPlanError(
                 "PlanCompiler.compile() requires "
@@ -201,9 +109,7 @@ class PlanCompiler:
             )
 
         if not isinstance(plan.tasks, list):
-            raise InvalidPlanError(
-                "Plan.tasks must be a list."
-            )
+            raise InvalidPlanError("Plan.tasks must be a list.")
 
         for index, task in enumerate(plan.tasks):
             if not isinstance(task, Task):
@@ -211,34 +117,16 @@ class PlanCompiler:
                     f"Plan.tasks[{index}] is not a Task."
                 )
 
-    # ==============================================================
-    # Task lowering
-    # ==============================================================
-
-    @staticmethod
-    def _compile_task(task: Task) -> ExecutionNode:
-        """
-        Lower one cognitive Task to one ExecutionNode.
-
-        Semantic mapping:
-
-            Task.description
-                -> ExecutionNode.name
-
-            Task.id
-                -> metadata.source.task_id
-
-            Task
-                -> NodeKind.PROCESS
-
-            compilation
-                -> NodeStatus.READY
-        """
-
+    def _compile_task(self, task: Task) -> ExecutionNode:
         if not isinstance(task, Task):
             raise UnsupportedTaskError(
                 f"Unsupported planning object: {type(task).__name__}"
             )
+
+        operation_ref = None
+
+        if self._operation_binder is not None:
+            operation_ref = self._operation_binder.bind(task)
 
         metadata: dict[str, Any] = {
             "source": {
@@ -248,7 +136,6 @@ class PlanCompiler:
             "task_metadata": dict(task.metadata),
         }
 
-        # Priority is an execution-relevant planning attribute.
         if "priority" in task.constraints:
             metadata["priority"] = task.constraints["priority"]
 
@@ -256,5 +143,6 @@ class PlanCompiler:
             kind=NodeKind.PROCESS,
             status=NodeStatus.READY,
             name=task.description,
+            operation_ref=operation_ref,
             metadata=metadata,
         )
