@@ -1,18 +1,10 @@
-"""
-SciOS Cognitive Core Planning Strategy
-======================================
+﻿from __future__ import annotations
 
-Strategy abstraction for the canonical SciOS cognitive planner.
-
-A planning strategy transforms planning objects only. It does not
-execute tasks, schedule runtime work, or resolve runtime operations.
-"""
-
-from __future__ import annotations
-
+from .constraint import ConstraintSet
 from .goal import Goal
 from .plan import Plan
 from .task import Task
+from .task_graph import TaskGraph
 
 __all__ = [
     "PlanningStrategy",
@@ -61,29 +53,34 @@ class PlanningStrategy:
 
         Returns a new Plan and never mutates the input Plan.
 
-        The default strategy preserves:
-        - the Goal
-        - the Tasks
-        - the TaskGraph topology
-        - the ConstraintSet
-        - existing metadata
+        The returned Plan has independent mutable containers for:
+            - TaskGraph
+            - ConstraintSet
+            - metadata
 
-        It additionally records the selected strategy name in metadata.
+        Existing Goal, Task, and Constraint objects are preserved by identity.
         """
         if not isinstance(plan, Plan):
             raise TypeError("plan must be an instance of Plan")
 
+        task_graph = TaskGraph()
+
+        for task_id in plan.task_graph.topological_sort():
+            task_graph.add_task(task_id, plan.task_graph.get_task(task_id))
+
+        constraints = ConstraintSet(
+            list(plan.constraints.constraints.values())
+        )
+
         new_plan = Plan(
             goal=plan.goal,
             tasks=list(plan.tasks),
-            task_graph=plan.task_graph,
-            constraints=plan.constraints,
+            task_graph=task_graph,
+            constraints=constraints,
         )
 
-        new_plan.constraints = plan.constraints
         new_plan.metadata = dict(plan.metadata)
         new_plan.metadata["strategy"] = self.name
-
 
         return new_plan
 

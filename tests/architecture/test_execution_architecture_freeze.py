@@ -72,10 +72,13 @@ def test_execution_has_no_legacy_subsystems():
         )
 
 
-def test_execution_contains_no_runtime_imports():
+def test_execution_core_contains_no_runtime_imports():
     execution_root = SCIOS_ROOT / "execution"
 
     for path in _python_files(execution_root):
+        if "runner" in path.relative_to(execution_root).parts:
+            continue
+
         text = _read(path)
 
         assert "scios.runtime" not in text

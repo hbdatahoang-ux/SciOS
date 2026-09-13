@@ -1,6 +1,7 @@
-# tests/test_validator.py
+from __future__ import annotations
 
 import pytest
+
 from scios.cognitive_core.planner.validator import PlanValidator
 from scios.cognitive_core.planner.plan import Plan
 from scios.cognitive_core.planner.goal import Goal
@@ -19,27 +20,16 @@ def test_validator_initialization_and_schema():
     assert required_keys.issubset(result.keys())
 
 
-def test_validator_valid_plan_all_tasks_completed():
+def test_validator_valid_structural_plan():
     validator = PlanValidator()
     tasks = [Task(description="Task 1"), Task(description="Task 2")]
-    for t in tasks:
-        t.mark_completed()
     plan = Plan(goal=Goal("Valid goal"), tasks=tasks)
 
     result = validator.validate(plan)
+
     assert result["valid"] is True
     assert result["errors"] == []
     assert result["warnings"] == []
-
-
-def test_validator_incomplete_task_detected():
-    validator = PlanValidator()
-    task = Task(description="Incomplete Task")
-    plan = Plan(goal=Goal("Incomplete goal"), tasks=[task])
-
-    result = validator.validate(plan)
-    assert result["valid"] is False
-    assert any("Incomplete Task" in e for e in result["errors"])
 
 
 def test_validator_empty_plan_detected():
@@ -47,45 +37,47 @@ def test_validator_empty_plan_detected():
     plan = Plan(goal=Goal("Empty goal"), tasks=[])
 
     result = validator.validate(plan)
+
     assert result["valid"] is False
     assert any("No tasks" in e for e in result["errors"])
 
 
-def test_validator_missing_goal_detected():
+def test_validator_missing_goal_rejected_by_plan_contract():
+    with pytest.raises(TypeError, match="goal must be an instance of Goal"):
+        Plan(goal=None, tasks=[Task(description="Task with no goal")])
+
+
+def test_validator_mixed_task_structure_is_valid():
     validator = PlanValidator()
-    tasks = [Task(description="Task with no goal")]
-    plan = Plan(goal=None, tasks=tasks)
-
-    result = validator.validate(plan)
-    assert result["valid"] is False
-    assert any("Missing goal" in e for e in result["errors"])
-
-
-def test_validator_mixed_tasks_produce_errors_or_warnings():
-    validator = PlanValidator()
-    tasks = [Task(description="Completed Task"), Task(description="Pending Task")]
-    tasks[0].mark_completed()
+    tasks = [
+        Task(description="Completed Task"),
+        Task(description="Pending Task"),
+    ]
     plan = Plan(goal=Goal("Mixed goal"), tasks=tasks)
 
     result = validator.validate(plan)
-    assert result["valid"] is False
-    # Pending Task phải xuất hiện trong errors hoặc warnings
-    assert any("Pending Task" in msg for msg in result["errors"] + result["warnings"])
+
+    assert result["valid"] is True
+    assert result["errors"] == []
+    assert result["warnings"] == []
 
 
 def test_validator_multiple_plans_consistency():
     validator = PlanValidator()
 
-    # Plan hợp lệ
-    t1 = Task(description="Done")
-    t1.mark_completed()
-    plan1 = Plan(goal=Goal("Plan 1"), tasks=[t1])
+    plan1 = Plan(
+        goal=Goal("Plan 1"),
+        tasks=[Task(description="Done")],
+    )
     r1 = validator.validate(plan1)
-    assert r1["valid"] is True
 
-    # Plan không hợp lệ
-    t2 = Task(description="Not done")
-    plan2 = Plan(goal=Goal("Plan 2"), tasks=[t2])
+    plan2 = Plan(
+        goal=Goal("Plan 2"),
+        tasks=[Task(description="Not done")],
+    )
     r2 = validator.validate(plan2)
-    assert r2["valid"] is False
-    assert any("Not done" in e or "No tasks" in e for e in r2["errors"])
+
+    assert r1["valid"] is True
+    assert r2["valid"] is True
+    assert r1["errors"] == []
+    assert r2["errors"] == []

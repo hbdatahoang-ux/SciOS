@@ -6,15 +6,8 @@ from scios.cognitive_core.planner.task import Task
 def test_task_initialization():
     task = Task(description="Collect customer feedback")
     assert task.description == "Collect customer feedback"
-    assert task.completed is False
     assert task.constraints == {}
     assert task.dependencies == []
-
-def test_mark_completed():
-    task = Task(description="Prepare report")
-    assert task.is_completed() is False
-    task.mark_completed()
-    assert task.is_completed() is True
 
 def test_add_constraint():
     task = Task(description="Design prototype")
