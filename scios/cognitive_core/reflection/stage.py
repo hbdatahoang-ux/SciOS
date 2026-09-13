@@ -122,9 +122,13 @@ class StageTracker:
 
 
 
-        stages = list(
-            ReflectionStage
-        )
+        # SCORE is a legacy compatibility member, not a canonical
+        # lifecycle stage. Sequential advancement must use SCORING.
+        stages = [
+            stage
+            for stage in ReflectionStage
+            if stage is not ReflectionStage.SCORE
+        ]
 
 
         index = stages.index(
@@ -219,6 +223,10 @@ class StageTracker:
     def get_stage_enum(
         self,
     ) -> ReflectionStage:
+
+        # Canonicalize the legacy SCORE stage at the enum API boundary.
+        if self.current_stage is ReflectionStage.SCORE:
+            return ReflectionStage.SCORING
 
         return self.current_stage
 
