@@ -252,3 +252,109 @@ class TestPlanningStrategyInfo:
             "description",
             "type",
         }
+
+
+class TestPlanningStrategyDecomposeGoal:
+    def test_decompose_requires_goal(self):
+        strategy = PlanningStrategy()
+
+        with pytest.raises(TypeError):
+            strategy.decompose_goal("not-a-goal")
+
+    def test_one_task_per_success_criterion(self):
+        strategy = PlanningStrategy()
+
+        goal = Goal(
+            description="Improve system",
+            success_criteria=[
+                "Increase reliability",
+                "Reduce latency",
+                "Reduce cost",
+            ],
+        )
+
+        tasks = strategy.decompose_goal(goal)
+
+        assert len(tasks) == 3
+        assert all(isinstance(task, Task) for task in tasks)
+
+    def test_task_descriptions_follow_criteria(self):
+        strategy = PlanningStrategy()
+
+        goal = Goal(
+            description="Improve system",
+            success_criteria=[
+                "Increase reliability",
+                "Reduce latency",
+            ],
+        )
+
+        tasks = strategy.decompose_goal(goal)
+
+        assert tasks[0].description == (
+            "Achieve criterion: Increase reliability"
+        )
+        assert tasks[1].description == (
+            "Achieve criterion: Reduce latency"
+        )
+
+    def test_empty_success_criteria_creates_fallback_task(self):
+        strategy = PlanningStrategy()
+
+        goal = Goal(
+            description="Improve system",
+            success_criteria=[],
+        )
+
+        tasks = strategy.decompose_goal(goal)
+
+        assert len(tasks) == 1
+        assert tasks[0].description == (
+            "Plan execution for Improve system"
+        )
+
+    def test_decompose_returns_new_tasks(self):
+        strategy = PlanningStrategy()
+
+        goal = Goal(
+            description="Improve system",
+            success_criteria=["Increase reliability"],
+        )
+
+        tasks_a = strategy.decompose_goal(goal)
+        tasks_b = strategy.decompose_goal(goal)
+
+        assert tasks_a is not tasks_b
+        assert tasks_a[0] is not tasks_b[0]
+
+    def test_decompose_does_not_mutate_goal(self):
+        strategy = PlanningStrategy()
+
+        goal = Goal(
+            description="Improve system",
+            success_criteria=["Increase reliability"],
+        )
+
+        original = goal.to_dict()
+
+        strategy.decompose_goal(goal)
+
+        assert goal.to_dict() == original
+
+    def test_generated_tasks_have_no_execution_state(self):
+        strategy = PlanningStrategy()
+
+        goal = Goal(
+            description="Improve system",
+            success_criteria=["Increase reliability"],
+        )
+
+        tasks = strategy.decompose_goal(goal)
+
+        for task in tasks:
+            assert not hasattr(task, "status")
+            assert not hasattr(task, "result")
+            assert not hasattr(task, "started_at")
+            assert not hasattr(task, "completed_at")
+            assert not hasattr(task, "error")
+            assert not hasattr(task, "retry_count")
