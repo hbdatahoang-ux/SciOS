@@ -39,7 +39,7 @@ from .lifecycle import LifecycleManager
 from .registry import ServiceRegistry
 from .scheduler import Scheduler
 from .dispatcher import Dispatcher
-from .plugin_manager import PluginManager
+from .plugins import PluginManager
 from .artifact_manager import ArtifactManager
 
 

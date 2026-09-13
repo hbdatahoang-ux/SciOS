@@ -30,7 +30,7 @@ from scios.shared import EventBus
 from .artifact_manager import ArtifactManager
 from .dispatcher import Dispatcher
 from .lifecycle import LifecycleManager
-from .plugin_manager import PluginManager
+from .plugins import PluginManager
 from .registry import ServiceRegistry
 from .scheduler import Scheduler
 
