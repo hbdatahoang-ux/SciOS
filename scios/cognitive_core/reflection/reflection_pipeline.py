@@ -15,48 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 
-try:
-    from .reflection import ReflectionEngine
-
-except ImportError:
-
-    try:
-        from .reflection import Reflector as ReflectionEngine
-
-    except ImportError:
-
-        class ReflectionEngine:
-            """
-            Minimal fallback reflection engine.
-            """
-
-            def __init__(
-                self,
-                *args: Any,
-                **kwargs: Any,
-            ) -> None:
-
-                self.state = {}
-
-
-            def run(
-                self,
-                data: dict[str, Any] | None = None,
-            ) -> dict[str, Any]:
-
-                return data or {}
-
-
-            def process(
-                self,
-                data: dict[str, Any] | None = None,
-            ) -> dict[str, Any]:
-
-                return self.run(
-                    data
-                )
-
-
+from .reflection import ReflectionEngine
 
 __all__ = [
     "ReflectionPipeline",
