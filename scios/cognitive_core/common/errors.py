@@ -32,8 +32,6 @@ class ToolError(CognitiveError):
     """Raised when tool invocation or execution fails."""
 
 
-class PipelineError(CognitiveError):
-    """Raised when cognitive pipeline execution fails."""
 
 
 __all__ = [
@@ -42,5 +40,4 @@ __all__ = [
     "ReasoningError",
     "MemoryError",
     "ToolError",
-    "PipelineError",
 ]

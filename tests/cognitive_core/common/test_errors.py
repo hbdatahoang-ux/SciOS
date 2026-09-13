@@ -5,7 +5,6 @@ import pytest
 from scios.cognitive_core.common.errors import (
     CognitiveError,
     MemoryError,
-    PipelineError,
     PlannerError,
     ReasoningError,
     ToolError,
@@ -44,7 +43,6 @@ def test_cognitive_error_preserves_message():
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_specialized_errors_inherit_from_cognitive_error(error_type):
@@ -58,7 +56,6 @@ def test_specialized_errors_inherit_from_cognitive_error(error_type):
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_specialized_errors_are_exceptions(error_type):
@@ -72,7 +69,6 @@ def test_specialized_errors_are_exceptions(error_type):
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_specialized_errors_preserve_message(error_type):
@@ -88,7 +84,6 @@ def test_specialized_errors_preserve_message(error_type):
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_specialized_errors_can_be_raised(error_type):
@@ -107,10 +102,9 @@ def test_specialized_errors_are_distinct_types():
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     }
 
-    assert len(error_types) == 5
+    assert len(error_types) == 4
 
 
 def test_specialized_errors_do_not_inherit_from_each_other():
@@ -119,7 +113,6 @@ def test_specialized_errors_do_not_inherit_from_each_other():
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ]
 
     for current in error_types:
@@ -142,7 +135,6 @@ def test_specialized_errors_do_not_inherit_from_each_other():
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_specialized_errors_are_caught_by_cognitive_error(error_type):
@@ -163,7 +155,6 @@ def test_specialized_errors_are_caught_by_cognitive_error(error_type):
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_all_errors_are_caught_by_exception(error_type):
@@ -184,7 +175,6 @@ def test_all_errors_are_caught_by_exception(error_type):
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_errors_support_empty_message(error_type):
@@ -206,7 +196,6 @@ def test_errors_support_empty_message(error_type):
         ReasoningError,
         MemoryError,
         ToolError,
-        PipelineError,
     ],
 )
 def test_errors_preserve_args(error_type):

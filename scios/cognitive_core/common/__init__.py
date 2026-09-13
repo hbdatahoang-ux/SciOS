@@ -22,7 +22,6 @@ from scios.cognitive_core.common.errors import (
     ReasoningError,
     MemoryError,
     ToolError,
-    PipelineError,
 )
 
 __all__ = [
@@ -36,5 +35,4 @@ __all__ = [
     "ReasoningError",
     "MemoryError",
     "ToolError",
-    "PipelineError",
 ]
