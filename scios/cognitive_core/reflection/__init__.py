@@ -23,7 +23,7 @@ from .adaptive import AdaptivePolicy
 from .history import ReflectionHistory
 from .recorder import ReflectionRecorder
 from .state import ReflectionState
-from .stage import ReflectionStage, StageTracker
+from .stage import ReflectionStage
 
 __all__ = [
     "Evaluator",
@@ -41,5 +41,4 @@ __all__ = [
     "ReflectionRecorder",
     "ReflectionState",
     "ReflectionStage",
-    "StageTracker",
 ]
