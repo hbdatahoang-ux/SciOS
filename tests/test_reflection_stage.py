@@ -1,6 +1,6 @@
 # tests/test_reflection_stage.py
 import pytest
-from scios.cognitive_core.reflection.reflection_stage import StageTracker
+from scios.cognitive_core.reflection.stage import StageTracker
 
 def test_stage_tracker_initialization():
     tracker = StageTracker()
