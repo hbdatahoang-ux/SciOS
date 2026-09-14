@@ -197,7 +197,7 @@ python_files = [
     "test_*.py"
 ]
 
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 
 # ============================================================
 # Coverage
