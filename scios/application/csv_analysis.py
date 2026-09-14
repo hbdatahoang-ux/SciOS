@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from scios.cognitive_core.planner.task import Task
+from scios.cognitive_core.reasoning.core.problem import ReasoningProblem
 from scios.compilation.operation_binder import OperationBinder
 from scios.compilation.plan_compiler import PlanCompiler
 from scios.execution.operation.ref import OperationRef
@@ -81,4 +82,24 @@ class CSVAnalysisApplication:
             compiler=compiler,
             resolver=resolver,
             executor=executor,
+        )
+
+    def reasoning_problem(
+        self,
+        *,
+        query: str,
+        evidence: dict[str, object],
+    ) -> ReasoningProblem:
+        """Build a reasoning problem from deterministic tool evidence."""
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+
+        if not isinstance(evidence, dict):
+            raise TypeError("evidence must be a dict")
+
+        return ReasoningProblem(
+            query=query,
+            context={
+                "evidence": dict(evidence),
+            },
         )

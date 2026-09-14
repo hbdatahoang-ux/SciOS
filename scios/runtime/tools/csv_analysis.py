@@ -1,4 +1,4 @@
-﻿"""
+"""
 SciOS CSV Analysis Tool
 =======================
 
@@ -83,10 +83,11 @@ class CSVAnalysisTool(Tool):
             series = numeric[column].dropna()
 
             if series.empty:
+                q1 = q3 = iqr = lower = upper = 0.0
                 indices: list[int] = []
             else:
-                q1 = series.quantile(0.25)
-                q3 = series.quantile(0.75)
+                q1 = float(series.quantile(0.25))
+                q3 = float(series.quantile(0.75))
                 iqr = q3 - q1
 
                 lower = q1 - 1.5 * iqr
@@ -102,9 +103,25 @@ class CSVAnalysisTool(Tool):
                     for index in dataframe.index[mask]
                 ]
 
+            evidence = [
+                {
+                    "column": column,
+                    "index": int(index),
+                    "value": float(dataframe.at[index, column]),
+                    "q1": q1,
+                    "q3": q3,
+                    "iqr": iqr,
+                    "lower_bound": lower,
+                    "upper_bound": upper,
+                    "rule": "IQR",
+                }
+                for index in indices
+            ]
+
             outliers[column] = {
                 "count": len(indices),
                 "indices": indices,
+                "evidence": evidence,
             }
 
         return {
