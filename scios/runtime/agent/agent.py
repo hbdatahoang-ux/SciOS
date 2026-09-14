@@ -380,7 +380,7 @@ class Agent:
 
             else:
 
-                result = self._execute_plan(
+                result = self._execute_decision(
                     plan
                 )
 
@@ -448,17 +448,17 @@ class Agent:
             }
 
     # ======================================================
-    # Plan Execution
+    # Decision Execution
     # ======================================================
 
-    def _execute_plan(
+    def _execute_decision(
         self,
-        plan: Any,
+        decision: Any,
     ) -> Any:
         """
-        Execute a planner-produced plan.
+        Execute a runtime decision produced by the decision provider.
 
-        Tool plan:
+        Tool decision:
 
             {
                 "tool": "echo",
@@ -467,19 +467,19 @@ class Agent:
                 }
             }
 
-        Other planner output is returned as-is.
+        Other decision output is returned as-is.
         """
 
         if isinstance(
-            plan,
+            decision,
             dict,
         ):
 
-            tool = plan.get(
+            tool = decision.get(
                 "tool"
             )
 
-            args = plan.get(
+            args = decision.get(
                 "args",
                 {},
             )
@@ -492,7 +492,7 @@ class Agent:
                 dict,
             ):
                 raise TypeError(
-                    "plan args must be a dict"
+                    "decision args must be a dict"
                 )
 
             if tool:
@@ -502,7 +502,7 @@ class Agent:
                     **args,
                 )
 
-        return plan
+        return decision
 
     # ======================================================
     # Result Classification
