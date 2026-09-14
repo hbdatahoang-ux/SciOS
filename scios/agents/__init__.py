@@ -18,10 +18,13 @@ AgentExecutor
     reasoning pipeline.
 """
 
-from .base import BaseAgent
+from .base import Agent, BaseAgent
+from .adapters.runtime import RuntimeAgentAdapter
 from .executor import AgentExecutor
 
 __all__ = [
+    "Agent",
     "BaseAgent",
+    "RuntimeAgentAdapter",
     "AgentExecutor",
 ]
