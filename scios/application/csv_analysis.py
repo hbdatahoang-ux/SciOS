@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
+from scios.cognitive_core.planner.goal import Goal
+from scios.cognitive_core.planner.planner import Planner
 from scios.cognitive_core.planner.task import Task
 from scios.cognitive_core.reasoning.core.problem import ReasoningProblem
+from scios.cognitive_core.reasoning.core.result import ReasoningResult
 from scios.compilation.operation_binder import OperationBinder
 from scios.compilation.plan_compiler import PlanCompiler
 from scios.execution.operation.ref import OperationRef
@@ -11,6 +16,7 @@ from scios.runtime.executor import Executor
 from scios.runtime.tools.csv_analysis import CSVAnalysisTool
 from scios.runtime.tools.result import ToolResult
 
+from .csv_reasoning import EvidenceDeductiveStrategy
 from .goal_execution import GoalExecutionResult, GoalExecutionService
 
 
@@ -35,10 +41,23 @@ class CSVAnalysisBinder(OperationBinder):
 
 class CSVAnalysisApplication:
     """
-    Application adapter for the CSV anomaly-analysis use case.
+    Application orchestration for CSV anomaly analysis.
 
-    This class connects the generic cognitive/execution boundary to the
-    existing CSVAnalysisTool without modifying any core contract.
+    The application composes existing frozen contracts:
+
+        Goal
+          -> Planner
+          -> Plan
+          -> PlanCompiler
+          -> ExecutionGraph
+          -> ExecutionRunner
+          -> CSVAnalysisTool
+          -> evidence
+          -> EvidenceDeductiveStrategy
+          -> ReasoningResult
+          -> final answer
+
+    No core runtime or cognitive contract is modified here.
     """
 
     def __init__(self, *, file_path: str) -> None:
@@ -72,11 +91,28 @@ class CSVAnalysisApplication:
     def execution_service(
         self,
         *,
-        planner,
-        compiler: PlanCompiler,
-        resolver: OperationResolver,
-        executor: Executor,
+        planner: Planner | None = None,
+        compiler: PlanCompiler | None = None,
+        resolver: OperationResolver | None = None,
+        executor: Executor | None = None,
     ) -> GoalExecutionService:
+        """Build the existing generic goal-execution orchestration."""
+        if planner is None:
+            planner = Planner()
+
+        if compiler is None:
+            compiler = PlanCompiler(
+                operation_binder=self.binder,
+            )
+
+        if resolver is None:
+            resolver = OperationResolver(
+                self.registry,
+            )
+
+        if executor is None:
+            executor = Executor()
+
         return GoalExecutionService(
             planner=planner,
             compiler=compiler,
@@ -103,3 +139,98 @@ class CSVAnalysisApplication:
                 "evidence": dict(evidence),
             },
         )
+
+    def analyze(
+        self,
+        *,
+        goal: Goal,
+        query: str,
+    ) -> dict[str, object]:
+        """
+        Execute the complete CSV product vertical slice.
+
+        Returns a minimal application-level answer representation.
+        """
+        if not isinstance(goal, Goal):
+            raise TypeError("goal must be a Goal")
+
+        execution_service = self.execution_service()
+
+        task = Task(
+            "Analyze CSV dataset for anomalies.",
+            task_id="csv-analysis",
+        )
+
+        execution = execution_service.execute(
+            goal,
+            tasks=[task],
+        )
+
+        if self.last_result is None:
+            raise RuntimeError(
+                "CSV analysis execution produced no ToolResult."
+            )
+
+        if not self.last_result.success:
+            error = self.last_result.error
+            raise RuntimeError(
+                "CSV analysis execution failed."
+            ) from error
+
+        evidence_payload = self.last_result.value
+
+        if not isinstance(evidence_payload, dict):
+            raise TypeError(
+                "CSV analysis tool returned invalid evidence."
+            )
+
+        anomalies = evidence_payload["outliers"]
+
+        reasoning_results: list[ReasoningResult] = []
+
+        for _, outlier_data in anomalies.items():
+            if not isinstance(outlier_data, dict):
+                continue
+
+            evidence_items = outlier_data.get("evidence", [])
+
+            for evidence in evidence_items:
+                problem = self.reasoning_problem(
+                    query=query,
+                    evidence=evidence,
+                )
+
+                reasoning_results.append(
+                    EvidenceDeductiveStrategy().execute(problem)
+                )
+
+        answer = self._build_answer(
+            goal=goal,
+            execution=execution,
+            evidence=evidence_payload,
+            reasoning=reasoning_results,
+        )
+
+        return answer
+
+    def _build_answer(
+        self,
+        *,
+        goal: Goal,
+        execution: GoalExecutionResult,
+        evidence: dict[str, object],
+        reasoning: list[ReasoningResult],
+    ) -> dict[str, object]:
+        """Build the minimal user-facing application result."""
+        return {
+            "goal": goal.description,
+            "rows": evidence["rows"],
+            "columns": evidence["columns"],
+            "column_names": evidence["column_names"],
+            "missing": evidence["missing"],
+            "outliers": evidence["outliers"],
+            "reasoning": [
+                result.conclusion
+                for result in reasoning
+            ],
+        }
