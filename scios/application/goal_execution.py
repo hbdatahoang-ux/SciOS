@@ -7,8 +7,10 @@ from scios.cognitive_core.planner.goal import Goal
 from scios.cognitive_core.planner.plan import Plan
 from scios.cognitive_core.planner.planner import Planner
 from scios.cognitive_core.planner.task import Task
+from scios.compilation.operation_binder import OperationBinder
 from scios.compilation.plan_compiler import PlanCompiler
 from scios.execution.graph.graph import ExecutionGraph
+from scios.execution.operation.registry import OperationRegistry
 from scios.execution.operation.resolver import OperationResolver
 from scios.execution.runner.runner import ExecutionRunner
 from scios.execution.scheduler.scheduler import Scheduler
@@ -64,3 +66,35 @@ class GoalExecutionService:
             plan=plan,
             graph=graph,
         )
+
+
+def build_goal_execution_service(
+    *,
+    binder: OperationBinder,
+    registry: OperationRegistry,
+    planner: Planner | None = None,
+    compiler: PlanCompiler | None = None,
+    resolver: OperationResolver | None = None,
+    executor: Executor | None = None,
+) -> GoalExecutionService:
+    """Build the shared goal-execution composition for an application."""
+    if planner is None:
+        planner = Planner()
+
+    if compiler is None:
+        compiler = PlanCompiler(
+            operation_binder=binder,
+        )
+
+    if resolver is None:
+        resolver = OperationResolver(registry)
+
+    if executor is None:
+        executor = Executor()
+
+    return GoalExecutionService(
+        planner=planner,
+        compiler=compiler,
+        resolver=resolver,
+        executor=executor,
+    )

@@ -16,7 +16,11 @@ from scios.runtime.executor import Executor
 from scios.runtime.tools.result import ToolResult
 from scios.runtime.tools.time_series import TimeSeriesChangeTool
 
-from .goal_execution import GoalExecutionResult, GoalExecutionService
+from .goal_execution import (
+    GoalExecutionResult,
+    GoalExecutionService,
+    build_goal_execution_service,
+)
 
 
 TIME_SERIES_CHANGE_REF = OperationRef(
@@ -75,21 +79,10 @@ class TimeSeriesChangeApplication:
         resolver: OperationResolver | None = None,
         executor: Executor | None = None,
     ) -> GoalExecutionService:
-        if planner is None:
-            planner = Planner()
-
-        if compiler is None:
-            compiler = PlanCompiler(
-                operation_binder=self.binder,
-            )
-
-        if resolver is None:
-            resolver = OperationResolver(self.registry)
-
-        if executor is None:
-            executor = Executor()
-
-        return GoalExecutionService(
+        """Build the shared goal-execution composition."""
+        return build_goal_execution_service(
+            binder=self.binder,
+            registry=self.registry,
             planner=planner,
             compiler=compiler,
             resolver=resolver,

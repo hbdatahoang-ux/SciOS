@@ -17,7 +17,11 @@ from scios.runtime.tools.csv_analysis import CSVAnalysisTool
 from scios.runtime.tools.result import ToolResult
 
 from .csv_reasoning import EvidenceDeductiveStrategy
-from .goal_execution import GoalExecutionResult, GoalExecutionService
+from .goal_execution import (
+    GoalExecutionResult,
+    GoalExecutionService,
+    build_goal_execution_service,
+)
 from .natural_language import DeterministicNaturalLanguageReasoner
 
 
@@ -98,24 +102,10 @@ class CSVAnalysisApplication:
         resolver: OperationResolver | None = None,
         executor: Executor | None = None,
     ) -> GoalExecutionService:
-        """Build the existing generic goal-execution orchestration."""
-        if planner is None:
-            planner = Planner()
-
-        if compiler is None:
-            compiler = PlanCompiler(
-                operation_binder=self.binder,
-            )
-
-        if resolver is None:
-            resolver = OperationResolver(
-                self.registry,
-            )
-
-        if executor is None:
-            executor = Executor()
-
-        return GoalExecutionService(
+        """Build the shared goal-execution composition."""
+        return build_goal_execution_service(
+            binder=self.binder,
+            registry=self.registry,
             planner=planner,
             compiler=compiler,
             resolver=resolver,
