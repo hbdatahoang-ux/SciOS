@@ -18,6 +18,7 @@ from scios.runtime.tools.result import ToolResult
 
 from .csv_reasoning import EvidenceDeductiveStrategy
 from .goal_execution import GoalExecutionResult, GoalExecutionService
+from .natural_language import DeterministicNaturalLanguageReasoner
 
 
 CSV_ANALYSIS_REF = OperationRef(
@@ -71,6 +72,7 @@ class CSVAnalysisApplication:
         self.tool = CSVAnalysisTool()
         self.registry = OperationRegistry()
         self.binder = CSVAnalysisBinder()
+        self.reasoner = DeterministicNaturalLanguageReasoner()
         self.last_result: ToolResult | None = None
 
         self._register_operations()
@@ -204,14 +206,54 @@ class CSVAnalysisApplication:
                     EvidenceDeductiveStrategy().execute(problem)
                 )
 
+        try:
+            explanation = self.reasoner.explain(
+                query=query,
+                evidence=evidence_payload,
+                reasoning=[
+                    result.conclusion
+                    for result in reasoning_results
+                ],
+            )
+        except Exception:
+            explanation = self._deterministic_fallback_explanation(
+                evidence=evidence_payload,
+                reasoning=reasoning_results,
+            )
+
         answer = self._build_answer(
             goal=goal,
             execution=execution,
             evidence=evidence_payload,
             reasoning=reasoning_results,
+            explanation=explanation,
         )
 
         return answer
+
+    @staticmethod
+    def _deterministic_fallback_explanation(
+        *,
+        evidence: dict[str, object],
+        reasoning: list[ReasoningResult],
+    ) -> str:
+        anomaly_count = sum(
+            1
+            for result in reasoning
+            if result.conclusion.get("is_outlier") is True
+        )
+
+        if anomaly_count == 0:
+            return (
+                "No anomalous numeric values were identified using the "
+                "available deterministic evidence."
+            )
+
+        return (
+            f"{anomaly_count} anomalous numeric value(s) were identified "
+            "by the deterministic reasoning layer."
+        )
+
 
     def _build_answer(
         self,
@@ -220,6 +262,7 @@ class CSVAnalysisApplication:
         execution: GoalExecutionResult,
         evidence: dict[str, object],
         reasoning: list[ReasoningResult],
+        explanation: str,
     ) -> dict[str, object]:
         """Build the minimal user-facing application result."""
         return {
@@ -233,4 +276,5 @@ class CSVAnalysisApplication:
                 result.conclusion
                 for result in reasoning
             ],
+            "explanation": explanation,
         }
