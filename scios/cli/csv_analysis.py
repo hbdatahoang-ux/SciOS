@@ -81,6 +81,10 @@ def _render_answer(answer: dict[str, object]) -> None:
         print(f"     evidence: {conclusion['evidence']['rule']}")
 
     print()
+    print("Explanation")
+    print(f"  {answer['explanation']}")
+
+    print()
     print("Conclusion")
     print(f"  {anomaly_count} anomalous value(s) detected.")
 

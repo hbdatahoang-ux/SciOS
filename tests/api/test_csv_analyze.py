@@ -61,6 +61,11 @@ def test_csv_analyze_api_end_to_end(tmp_path) -> None:
     assert reasoning["is_outlier"] is True
     assert reasoning["evidence"]["rule"] == "IQR"
 
+    assert "explanation" in payload
+    assert "100.0" in payload["explanation"]
+    assert "row 5" in payload["explanation"]
+    assert "IQR" in payload["explanation"]
+
     assert "Plan" not in payload
     assert "ExecutionGraph" not in payload
     assert "ToolResult" not in payload

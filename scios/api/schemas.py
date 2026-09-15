@@ -37,3 +37,4 @@ class CSVAnalyzeResponse(BaseModel):
     missing: dict[str, int]
     outliers: dict[str, Any]
     reasoning: list[dict[str, Any]]
+    explanation: str

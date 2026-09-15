@@ -34,6 +34,10 @@ def test_csv_analysis_cli_end_to_end(tmp_path, capsys) -> None:
     assert "row: 5" in captured.out
     assert "value: 100.0" in captured.out
     assert "rule: IQR" in captured.out
+    assert "Explanation" in captured.out
+    assert "100.0" in captured.out
+    assert "row 5" in captured.out
+    assert "IQR" in captured.out
     assert "1 anomalous value(s) detected." in captured.out
 
     assert "Plan(" not in captured.out
