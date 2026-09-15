@@ -1,7 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
+
+import scios.api.routes as routes
 
 from scios.api.server import create_app
 
@@ -69,3 +72,87 @@ def test_csv_analyze_api_end_to_end(tmp_path) -> None:
     assert "Plan" not in payload
     assert "ExecutionGraph" not in payload
     assert "ToolResult" not in payload
+
+
+def test_csv_analyze_api_missing_file_returns_404(tmp_path) -> None:
+    csv_path = tmp_path / "missing.csv"
+
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/csv/analyze",
+        json={
+            "file_path": str(csv_path),
+            "query": "Why are there anomalous values?",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "CSV file not found."}
+
+
+def test_csv_analyze_api_empty_file_returns_400(tmp_path) -> None:
+    csv_path = tmp_path / "empty.csv"
+    csv_path.write_text("", encoding="utf-8")
+
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/csv/analyze",
+        json={
+            "file_path": str(csv_path),
+            "query": "Why are there anomalous values?",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "CSV file is empty."}
+
+
+def test_csv_analyze_api_malformed_file_returns_400(tmp_path) -> None:
+    csv_path = tmp_path / "malformed.csv"
+    csv_path.write_text(
+        "value,other\n1,2,\"unterminated\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/csv/analyze",
+        json={
+            "file_path": str(csv_path),
+            "query": "Why are there anomalous values?",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "CSV file is malformed."}
+
+
+def test_csv_analyze_api_unexpected_failure_returns_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_analyze(self, *, goal, query):
+        raise RuntimeError("CSV analysis execution failed.") from ValueError(
+            "unexpected failure"
+        )
+
+    monkeypatch.setattr(
+        routes.CSVAnalysisApplication,
+        "analyze",
+        fail_analyze,
+    )
+
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/csv/analyze",
+        json={
+            "file_path": "unused.csv",
+            "query": "Why are there anomalous values?",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "CSV analysis failed."}

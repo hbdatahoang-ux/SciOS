@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends
+﻿from fastapi import APIRouter, Depends, HTTPException
 
 from scios.api.controller import SciOSController
 from scios.api.schemas import (
@@ -15,6 +15,35 @@ from scios.application.csv_analysis import CSVAnalysisApplication
 from scios.cognitive_core.planner import Goal
 
 router = APIRouter()
+
+
+def _csv_failure_response(exc: RuntimeError) -> HTTPException:
+    cause = exc.__cause__
+
+    if isinstance(cause, FileNotFoundError):
+        return HTTPException(
+            status_code=404,
+            detail="CSV file not found.",
+        )
+
+    from pandas.errors import EmptyDataError, ParserError
+
+    if isinstance(cause, EmptyDataError):
+        return HTTPException(
+            status_code=400,
+            detail="CSV file is empty.",
+        )
+
+    if isinstance(cause, ParserError):
+        return HTTPException(
+            status_code=400,
+            detail="CSV file is malformed.",
+        )
+
+    return HTTPException(
+        status_code=500,
+        detail="CSV analysis failed.",
+    )
 
 
 @router.post("/run", response_model=RunResponse)
@@ -39,10 +68,13 @@ def csv_analyze(request: CSVAnalyzeRequest):
         "Analyze the CSV dataset and explain anomalous values."
     )
 
-    return application.analyze(
-        goal=goal,
-        query=request.query,
-    )
+    try:
+        return application.analyze(
+            goal=goal,
+            query=request.query,
+        )
+    except RuntimeError as exc:
+        raise _csv_failure_response(exc) from exc
 
 
 @router.get("/status", response_model=StatusResponse)

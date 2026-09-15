@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 
 from scios.application.csv_analysis import CSVAnalysisApplication
@@ -96,10 +97,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     application = CSVAnalysisApplication(file_path=args.file)
     goal = Goal(DEFAULT_GOAL)
 
-    answer = application.analyze(
-        goal=goal,
-        query=args.query,
-    )
+    try:
+        answer = application.analyze(
+            goal=goal,
+            query=args.query,
+        )
+    except RuntimeError as exc:
+        cause = exc.__cause__
+
+        if isinstance(cause, FileNotFoundError):
+            message = "CSV file not found."
+        else:
+            from pandas.errors import EmptyDataError, ParserError
+
+            if isinstance(cause, EmptyDataError):
+                message = "CSV file is empty."
+            elif isinstance(cause, ParserError):
+                message = "CSV file is malformed."
+            else:
+                message = "CSV analysis failed."
+
+        print(f"Error: {message}", file=sys.stderr)
+        return 1
 
     _render_answer(answer)
     return 0
