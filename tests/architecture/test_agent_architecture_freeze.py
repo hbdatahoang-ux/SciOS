@@ -81,3 +81,104 @@ def test_runtime_agent_adapter_is_not_canonical_agent():
 
     assert RuntimeAgentAdapter is not Agent
     assert RuntimeAgentAdapter.__module__ == "scios.agents.adapters.runtime"
+
+
+def test_canonical_agent_depends_only_on_agent_capabilities():
+    from typing import get_type_hints
+
+    from scios.agents.base import Agent
+    from scios.agents.contracts import (
+        MemoryCapability,
+        ToolRoutingCapability,
+    )
+
+    annotations = get_type_hints(Agent.__init__)
+
+    assert annotations["memory"] is MemoryCapability
+    assert annotations["router"] is ToolRoutingCapability
+
+
+def test_agent_base_has_no_runtime_memory_or_tool_router_dependency():
+    agent_base = (
+        SCIOS
+        / "agents"
+        / "base.py"
+    )
+
+    text = agent_base.read_text(
+        encoding="utf-8"
+    )
+
+    forbidden = (
+        "scios.runtime.agent.memory",
+        "scios.runtime.agent.tool_router",
+        "from scios.runtime",
+        "import scios.runtime",
+    )
+
+    for token in forbidden:
+        assert token not in text, (
+            f"{agent_base}: forbidden runtime dependency {token}"
+        )
+
+
+def test_agent_capability_contracts_are_minimal():
+    from scios.agents.contracts import (
+        MemoryCapability,
+        ToolRoutingCapability,
+    )
+
+    memory_methods = {
+        name
+        for name in MemoryCapability.__dict__
+        if not name.startswith("_")
+    }
+
+    router_methods = {
+        name
+        for name in ToolRoutingCapability.__dict__
+        if not name.startswith("_")
+    }
+
+    assert memory_methods == {"store", "get"}
+    assert router_methods == {"route"}
+
+
+def test_runtime_implementations_can_be_injected_into_canonical_agent():
+    from scios.agents.base import Agent
+    from scios.runtime.agent.memory import Memory
+    from scios.runtime.agent.tool_router import ToolRouter
+
+    class TestAgent(Agent):
+        def run(self, task, *args, **kwargs):
+            return task
+
+    memory = Memory()
+    router = ToolRouter()
+
+    agent = TestAgent(
+        "test-agent",
+        memory=memory,
+        router=router,
+    )
+
+    assert agent.memory is memory
+    assert agent.router is router
+    assert agent.tool_router is router
+
+
+def test_canonical_agent_does_not_create_runtime_dependencies():
+    from scios.agents.base import Agent
+
+    class TestAgent(Agent):
+        def run(self, task, *args, **kwargs):
+            return task
+
+    try:
+        TestAgent("test-agent")
+    except TypeError:
+        pass
+    else:
+        raise AssertionError(
+            "Canonical Agent must require injected capabilities."
+        )

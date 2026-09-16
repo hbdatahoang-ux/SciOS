@@ -24,6 +24,15 @@ from scios.runtime.tools import (
 
 class IntegrationAgent(Agent):
 
+    def __init__(self, name="integration-agent", *, router=None):
+        from scios.runtime.agent.memory import Memory
+
+        super().__init__(
+            name=name,
+            memory=Memory(),
+            router=router if router is not None else ToolRouter(),
+        )
+
     def run(self, task, *args, **kwargs):
         return {
             "task": task,

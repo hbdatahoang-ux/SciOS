@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from .contracts import MemoryCapability, ToolRoutingCapability
+
 
 __all__ = [
     "Agent",
@@ -65,8 +67,8 @@ class Agent(ABC):
         name: str,
         version: str = "0.3.0",
         *,
-        memory: Any | None = None,
-        router: Any | None = None,
+        memory: MemoryCapability,
+        router: ToolRoutingCapability,
     ) -> None:
 
         # ---------------------------------------------------
@@ -104,37 +106,25 @@ class Agent(ABC):
         # ---------------------------------------------------
         # Dependencies
         #
-        # IMPORTANT:
-        #
-        # Do not use:
-        #
-        #     memory or Memory()
-        #
-        # or:
-        #
-        #     router or ToolRouter()
-        #
-        # because Memory and ToolRouter can be empty and
-        # therefore evaluate as False.
+        # The canonical Agent depends only on minimal
+        # capability contracts. Concrete implementations
+        # are supplied by the composition root.
         #
         # Dependency injection is identity-preserving.
         # ---------------------------------------------------
 
         if memory is None:
-            from scios.runtime.agent.memory import Memory
-
-            self._memory = Memory()
-
-        else:
-            self._memory = memory
+            raise ValueError(
+                "Agent requires a MemoryCapability."
+            )
 
         if router is None:
-            from scios.runtime.agent.tool_router import ToolRouter
+            raise ValueError(
+                "Agent requires a ToolRoutingCapability."
+            )
 
-            self._router = ToolRouter()
-
-        else:
-            self._router = router
+        self._memory: MemoryCapability = memory
+        self._router: ToolRoutingCapability = router
 
     # =======================================================
     # Metadata
@@ -186,23 +176,23 @@ class Agent(ABC):
         return self._enabled
 
     @property
-    def memory(self) -> Any:
+    def memory(self) -> MemoryCapability:
         """
-        Injected memory dependency.
+        Injected memory capability.
         """
 
         return self._memory
 
     @property
-    def router(self) -> Any:
+    def router(self) -> ToolRoutingCapability:
         """
-        Injected tool router dependency.
+        Injected tool-routing capability.
         """
 
         return self._router
 
     @property
-    def tool_router(self) -> Any:
+    def tool_router(self) -> ToolRoutingCapability:
         """
         Alias for ``router``.
         """
