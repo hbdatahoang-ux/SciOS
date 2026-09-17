@@ -173,8 +173,19 @@ def test_csv_analysis_is_reproducible_for_same_inputs(tmp_path) -> None:
     assert first_record is not None
     assert second_record is not None
 
-    # Analytical output is reproducible.
-    assert second_answer == first_answer
+    # Analytical output is reproducible, while each analysis run
+    # receives a distinct public run identifier.
+    assert second_answer["analysis_run_id"] != first_answer["analysis_run_id"]
+    assert second_answer["dataset_hash"] == first_answer["dataset_hash"]
+
+    assert second_answer["goal"] == first_answer["goal"]
+    assert second_answer["rows"] == first_answer["rows"]
+    assert second_answer["columns"] == first_answer["columns"]
+    assert second_answer["column_names"] == first_answer["column_names"]
+    assert second_answer["missing"] == first_answer["missing"]
+    assert second_answer["outliers"] == first_answer["outliers"]
+    assert second_answer["reasoning"] == first_answer["reasoning"]
+    assert second_answer["explanation"] == first_answer["explanation"]
 
     # Dataset identity is reproducible.
     assert (
@@ -199,7 +210,32 @@ def test_csv_analysis_is_reproducible_for_same_inputs(tmp_path) -> None:
     assert second_record.metadata["plan"] == first_record.metadata["plan"]
     assert second_record.metadata["evidence"] == first_record.metadata["evidence"]
     assert second_record.metadata["reasoning"] == first_record.metadata["reasoning"]
-    assert second_record.metadata["answer"] == first_record.metadata["answer"]
+
+    # Provenance records retain the same reproducible analytical answer,
+    # while the public run identifier remains unique per analysis run.
+    first_record_answer = first_record.metadata["answer"]
+    second_record_answer = second_record.metadata["answer"]
+
+    assert (
+        second_record_answer["analysis_run_id"]
+        != first_record_answer["analysis_run_id"]
+    )
+    assert (
+        second_record_answer["dataset_hash"]
+        == first_record_answer["dataset_hash"]
+    )
+
+    for field in (
+        "goal",
+        "rows",
+        "columns",
+        "column_names",
+        "missing",
+        "outliers",
+        "reasoning",
+        "explanation",
+    ):
+        assert second_record_answer[field] == first_record_answer[field]
 
     # Run identity is intentionally unique per invocation.
     assert second_record.id != first_record.id

@@ -71,7 +71,9 @@ dependencies = [
     "pydantic>=2.10",
     "PyYAML>=6.0",
     "networkx>=3.4",
-    "typing-extensions>=4.12"
+    "typing-extensions>=4.12",
+    "fastapi>=0.115",
+    "pandas>=2.3"
 ]
 
 dynamic = []
@@ -98,7 +100,6 @@ docs = [
 ]
 
 research = [
-    "pandas>=2.3",
     "matplotlib>=3.10",
     "scipy>=1.15",
     "jupyter>=1.1",

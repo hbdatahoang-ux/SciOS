@@ -221,17 +221,19 @@ class CSVAnalysisApplication:
                 reasoning=reasoning_results,
             )
 
+        dataset_hash = self.last_result.metadata.get("dataset_hash")
+        if not isinstance(dataset_hash, str) or not dataset_hash:
+            raise RuntimeError("CSV analysis result is missing dataset_hash")
+
         answer = self._build_answer(
             goal=goal,
             execution=execution,
             evidence=evidence_payload,
             reasoning=reasoning_results,
             explanation=explanation,
+            analysis_run_id=analysis_run_id,
+            dataset_hash=dataset_hash,
         )
-
-        dataset_hash = self.last_result.metadata.get("dataset_hash")
-        if not isinstance(dataset_hash, str) or not dataset_hash:
-            raise RuntimeError("CSV analysis result is missing dataset_hash")
 
         provenance = ProvenanceRecord(
             id=analysis_run_id,
@@ -297,6 +299,8 @@ class CSVAnalysisApplication:
         evidence: dict[str, object],
         reasoning: list[ReasoningResult],
         explanation: str,
+        analysis_run_id: str,
+        dataset_hash: str,
     ) -> dict[str, object]:
         """Build the minimal user-facing application result."""
         return {
@@ -311,4 +315,6 @@ class CSVAnalysisApplication:
                 for result in reasoning
             ],
             "explanation": explanation,
+            "analysis_run_id": analysis_run_id,
+            "dataset_hash": dataset_hash,
         }

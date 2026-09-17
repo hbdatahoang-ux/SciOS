@@ -38,3 +38,5 @@ class CSVAnalyzeResponse(BaseModel):
     outliers: dict[str, Any]
     reasoning: list[dict[str, Any]]
     explanation: str
+    analysis_run_id: str
+    dataset_hash: str
