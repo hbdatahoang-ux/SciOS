@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from scios.cognitive_core.planner.goal import Goal
 from scios.cognitive_core.planner.planner import Planner
@@ -13,6 +15,8 @@ from scios.execution.operation.ref import OperationRef
 from scios.execution.operation.registry import OperationRegistry
 from scios.execution.operation.resolver import OperationResolver
 from scios.runtime.executor import Executor
+from scios.runtime.science.provenance.lineage import ProvenanceLineage
+from scios.runtime.science.provenance.models import ProvenanceRecord
 from scios.runtime.tools.csv_analysis import CSVAnalysisTool
 from scios.runtime.tools.result import ToolResult
 
@@ -78,6 +82,9 @@ class CSVAnalysisApplication:
         self.binder = CSVAnalysisBinder()
         self.reasoner = DeterministicNaturalLanguageReasoner()
         self.last_result: ToolResult | None = None
+        self.last_analysis_run_id: str | None = None
+        self.last_provenance_record: ProvenanceRecord | None = None
+        self.last_provenance_lineage: ProvenanceLineage | None = None
 
         self._register_operations()
 
@@ -145,6 +152,9 @@ class CSVAnalysisApplication:
         """
         if not isinstance(goal, Goal):
             raise TypeError("goal must be a Goal")
+
+        analysis_run_id = str(uuid4())
+        self.last_analysis_run_id = analysis_run_id
 
         execution_service = self.execution_service()
 
@@ -217,6 +227,40 @@ class CSVAnalysisApplication:
             evidence=evidence_payload,
             reasoning=reasoning_results,
             explanation=explanation,
+        )
+
+        dataset_hash = self.last_result.metadata.get("dataset_hash")
+        if not isinstance(dataset_hash, str) or not dataset_hash:
+            raise RuntimeError("CSV analysis result is missing dataset_hash")
+
+        provenance = ProvenanceRecord(
+            id=analysis_run_id,
+            entity_type="csv_analysis",
+            created_at=datetime.now(timezone.utc),
+            parent_ids=(),
+            metadata={
+                "analysis_run_id": analysis_run_id,
+                "dataset_hash": dataset_hash,
+                "question": query,
+                "plan": execution.plan.to_dict(),
+                "operation": {
+                    "name": CSV_ANALYSIS_REF.name,
+                    "version": CSV_ANALYSIS_REF.version,
+                },
+                "parameters": {
+                    "file_path": self.file_path,
+                },
+                "evidence": evidence_payload,
+                "reasoning": [
+                    result.conclusion for result in reasoning_results
+                ],
+                "answer": answer,
+            },
+        )
+
+        self.last_provenance_record = provenance
+        self.last_provenance_lineage = ProvenanceLineage(
+            records=(provenance,),
         )
 
         return answer

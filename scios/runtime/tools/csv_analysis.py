@@ -9,12 +9,15 @@ Python 3.11+
 
 from __future__ import annotations
 
+import hashlib
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from .base import Tool
+from .result import ToolResult
 
 
 __all__ = [
@@ -49,11 +52,14 @@ class CSVAnalysisTool(Tool):
             },
         }
 
-    def execute(self, **kwargs: Any) -> dict[str, Any]:
+    def execute(self, **kwargs: Any) -> ToolResult:
         file_path = kwargs["file_path"]
         path = Path(file_path)
 
-        dataframe = pd.read_csv(path)
+        raw_bytes = path.read_bytes()
+        dataset_hash = hashlib.sha256(raw_bytes).hexdigest()
+
+        dataframe = pd.read_csv(BytesIO(raw_bytes))
 
         missing = {
             column: int(dataframe[column].isna().sum())
@@ -124,7 +130,7 @@ class CSVAnalysisTool(Tool):
                 "evidence": evidence,
             }
 
-        return {
+        evidence_payload = {
             "rows": int(len(dataframe)),
             "columns": int(len(dataframe.columns)),
             "column_names": list(dataframe.columns),
@@ -132,3 +138,10 @@ class CSVAnalysisTool(Tool):
             "numeric_summary": numeric_summary,
             "outliers": outliers,
         }
+
+        return ToolResult.ok(
+            value=evidence_payload,
+            metadata={
+                "dataset_hash": dataset_hash,
+            },
+        )
