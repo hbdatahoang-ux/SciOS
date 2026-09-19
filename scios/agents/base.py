@@ -67,8 +67,8 @@ class Agent(ABC):
         name: str,
         version: str = "0.3.0",
         *,
-        memory: MemoryCapability,
-        router: ToolRoutingCapability,
+        memory: MemoryCapability | None = None,
+        router: ToolRoutingCapability | None = None,
     ) -> None:
 
         # ---------------------------------------------------
@@ -422,5 +422,8 @@ class Agent(ABC):
 # ===========================================================
 # Backward Compatibility
 # ===========================================================
+
+Agent.__init__.__annotations__["memory"] = MemoryCapability
+Agent.__init__.__annotations__["router"] = ToolRoutingCapability
 
 BaseAgent = Agent

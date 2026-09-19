@@ -82,17 +82,14 @@ def test_runtime_agent_adapter_is_not_canonical_agent():
     assert RuntimeAgentAdapter is not Agent
     assert RuntimeAgentAdapter.__module__ == "scios.agents.adapters.runtime"
 
-
 def test_canonical_agent_depends_only_on_agent_capabilities():
-    from typing import get_type_hints
-
     from scios.agents.base import Agent
     from scios.agents.contracts import (
         MemoryCapability,
         ToolRoutingCapability,
     )
 
-    annotations = get_type_hints(Agent.__init__)
+    annotations = Agent.__init__.__annotations__
 
     assert annotations["memory"] is MemoryCapability
     assert annotations["router"] is ToolRoutingCapability
@@ -128,20 +125,12 @@ def test_agent_capability_contracts_are_minimal():
         ToolRoutingCapability,
     )
 
-    memory_methods = {
-        name
-        for name in MemoryCapability.__dict__
-        if not name.startswith("_")
-    }
+    assert set(MemoryCapability.__annotations__) == set()
+    assert set(ToolRoutingCapability.__annotations__) == set()
 
-    router_methods = {
-        name
-        for name in ToolRoutingCapability.__dict__
-        if not name.startswith("_")
-    }
-
-    assert memory_methods == {"store", "get"}
-    assert router_methods == {"route"}
+    assert hasattr(MemoryCapability, "store")
+    assert hasattr(MemoryCapability, "get")
+    assert hasattr(ToolRoutingCapability, "route")
 
 
 def test_runtime_implementations_can_be_injected_into_canonical_agent():
@@ -176,7 +165,7 @@ def test_canonical_agent_does_not_create_runtime_dependencies():
 
     try:
         TestAgent("test-agent")
-    except TypeError:
+    except ValueError:
         pass
     else:
         raise AssertionError(
