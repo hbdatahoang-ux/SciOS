@@ -371,7 +371,7 @@ pytest -v
 
 pytest --maxfail=1
 
-python -m scios.apps.cli.main
+scios "Analyze this system"
 ```
 
 For coverage reporting:
