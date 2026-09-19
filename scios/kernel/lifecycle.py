@@ -1,176 +1,388 @@
 """
-SciOS Kernel Lifecycle
-======================
+SciOS Kernel Lifecycle Manager
+==============================
 
-Kernel lifecycle state machine.
+Kernel lifecycle orchestration.
 
 Responsibilities
 ----------------
-- Kernel state transitions
-- Transition validation
-- Idempotent lifecycle management
-- Runtime status reporting
+- Manage kernel lifecycle states.
+- Initialize runtime components.
+- Start/stop kernel services.
+- Coordinate lifecycle hooks.
+- Preserve deterministic transitions.
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
-from enum import Enum
+
+from collections.abc import Iterable
+from threading import RLock
+from typing import Any
+
+
+from .state import KernelState
+
 
 __all__ = [
-    "KernelState",
     "LifecycleManager",
 ]
 
 
-class KernelState(str, Enum):
-    """
-    Kernel lifecycle states.
-    """
-
-    STOPPED = "stopped"
-
-    BOOTING = "booting"
-
-    READY = "running"
-
-    STOPPING = "stopping"
-
 
 class LifecycleManager:
     """
-    Finite-state machine for the SciOS kernel.
+    SciOS Kernel Lifecycle Coordinator.
 
-    State Diagram
-    -------------
+    State machine:
 
-        STOPPED
-            │
-            ▼
-        BOOTING
-            │
-            ▼
-        READY
-            │
-            ▼
-        STOPPING
-            │
-            ▼
-        STOPPED
+        created
+           |
+        initialize()
+           |
+        booting
+           |
+        start()
+           |
+        running
+           |
+        shutdown()
+           |
+        stopped
     """
 
-    _ALLOWED = {
 
-        KernelState.STOPPED: {
-            KernelState.BOOTING,
-        },
-
-        KernelState.BOOTING: {
-            KernelState.READY,
-            KernelState.STOPPED,
-        },
-
-        KernelState.READY: {
-            KernelState.STOPPING,
-        },
-
-        KernelState.STOPPING: {
-            KernelState.STOPPED,
-        },
-    }
 
     def __init__(self) -> None:
 
-        self._state = KernelState.STOPPED
+        self._state: KernelState = "created"
 
-    # =====================================================
+        self._hooks: list[Any] = []
+
+        self._lock = RLock()
+
+
+
+    # ======================================================
     # Properties
-    # =====================================================
+    # ======================================================
 
     @property
     def state(self) -> KernelState:
+        """
+        Current lifecycle state.
+        """
+
         return self._state
 
-    @property
-    def running(self) -> bool:
-        return self._state is KernelState.READY
 
-    @property
-    def booted(self) -> bool:
-        return self.running
 
-    # =====================================================
-    # Transition
-    # =====================================================
+    # ======================================================
+    # Hook Management
+    # ======================================================
 
-    def transition(
+    def add_hook(
         self,
-        state: KernelState,
+        hook: Any,
     ) -> None:
         """
-        Perform a validated lifecycle transition.
+        Register lifecycle hook.
         """
 
-        if state is self._state:
-            return
+        with self._lock:
 
-        allowed = self._ALLOWED[self._state]
+            if hook not in self._hooks:
 
-        if state not in allowed:
+                self._hooks.append(
+                    hook
+                )
 
-            raise RuntimeError(
-                f"Illegal lifecycle transition: "
-                f"{self._state.value} -> {state.value}"
+
+
+    def add_hooks(
+        self,
+        hooks: Iterable[Any],
+    ) -> None:
+        """
+        Register multiple hooks.
+        """
+
+        for hook in hooks:
+
+            self.add_hook(
+                hook
             )
 
-        self._state = state
 
-    # =====================================================
-    # Force
-    # =====================================================
 
-    def force(
+    def remove_hook(
         self,
-        state: KernelState,
+        hook: Any,
     ) -> None:
         """
-        Force lifecycle state.
-
-        Intended only for emergency recovery
-        during failed boot sequences.
+        Remove lifecycle hook.
         """
 
-        self._state = state
+        with self._lock:
 
-    # =====================================================
-    # Helpers
-    # =====================================================
+            if hook in self._hooks:
 
-    def reset(self) -> None:
+                self._hooks.remove(
+                    hook
+                )
+
+
+
+    def clear_hooks(self) -> None:
         """
-        Reset lifecycle.
+        Remove all hooks.
         """
 
-        self._state = KernelState.STOPPED
+        with self._lock:
 
-    # =====================================================
+            self._hooks.clear()
+
+
+
+    # ======================================================
+    # Lifecycle
+    # ======================================================
+
+    def initialize(self) -> None:
+        """
+        Initialize registered components.
+
+        Transition:
+
+            created -> booting
+        """
+
+        with self._lock:
+
+            self._state = "booting"
+
+
+            hooks = tuple(
+                self._hooks
+            )
+
+
+
+        for hook in hooks:
+
+            initialize = getattr(
+                hook,
+                "initialize",
+                None,
+            )
+
+            if callable(initialize):
+
+                try:
+
+                    initialize()
+
+                except Exception:
+                    #
+                    # Kernel lifecycle isolation.
+                    #
+                    continue
+
+
+
+    def start(self) -> None:
+        """
+        Start runtime.
+
+        Transition:
+
+            booting -> running
+        """
+
+        with self._lock:
+
+            hooks = tuple(
+                self._hooks
+            )
+
+
+        for hook in hooks:
+
+            start = getattr(
+                hook,
+                "start",
+                None,
+            )
+
+            if callable(start):
+
+                try:
+
+                    start()
+
+                except Exception:
+
+                    continue
+
+
+
+        with self._lock:
+
+            self._state = "running"
+
+
+
+    def shutdown(self) -> None:
+        """
+        Shutdown runtime.
+
+        Transition:
+
+            running -> stopped
+        """
+
+        with self._lock:
+
+            self._state = "stopping"
+
+            hooks = tuple(
+                reversed(
+                    self._hooks
+                )
+            )
+
+
+        for hook in hooks:
+
+            shutdown = getattr(
+                hook,
+                "shutdown",
+                None,
+            )
+
+            if callable(shutdown):
+
+                try:
+
+                    shutdown()
+
+                except Exception:
+
+                    continue
+
+
+
+        with self._lock:
+
+            self._state = "stopped"
+
+
+
+    def restart(self) -> None:
+        """
+        Restart lifecycle.
+
+        stopped -> booting -> running
+        """
+
+        self.shutdown()
+
+        self.initialize()
+
+        self.start()
+
+
+
+    # ======================================================
     # Status
-    # =====================================================
+    # ======================================================
 
-    def status(self) -> dict[str, object]:
+    def status(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Lifecycle status snapshot.
+        """
 
         return {
-            "state": self._state.value,
-            "booted": self.booted,
-            "running": self.running,
+
+            "state": self._state,
+
+            "hooks": len(
+                self._hooks
+            ),
+
         }
 
-    # =====================================================
-    # Representation
-    # =====================================================
 
-    def __repr__(self) -> str:
+
+    # ======================================================
+    # Helpers
+    # ======================================================
+
+    def is_running(
+        self,
+    ) -> bool:
+
+        return self._state == "running"
+
+
+
+    def is_stopped(
+        self,
+    ) -> bool:
+
+        return self._state == "stopped"
+
+
+
+    def hook_count(
+        self,
+    ) -> int:
+
+        return len(
+            self._hooks
+        )
+
+
+
+    # ======================================================
+    # Protocols
+    # ======================================================
+
+    def __len__(
+        self,
+    ) -> int:
+
+        return len(
+            self._hooks
+        )
+
+
+
+    def __contains__(
+        self,
+        hook: Any,
+    ) -> bool:
+
+        return hook in self._hooks
+
+
+
+    def __repr__(
+        self,
+    ) -> str:
 
         return (
-            "LifecycleManager("
-            f"state='{self._state.value}')"
+
+            f"{self.__class__.__name__}("
+
+            f"state={self._state!r}, "
+
+            f"hooks={len(self._hooks)}"
+
+            ")"
+
         )

@@ -3,83 +3,76 @@ SciOS Reasoning Benchmarks
 
 Run:
 
-pytest benchmarks/benchmark_reasoning.py \
-    --benchmark-only
+pytest benchmarks/benchmark_reasoning.py --benchmark-only
 """
 
 from __future__ import annotations
 
-import pytest
-
-from scios.reasoning.engine import ReasoningEngine
-from scios.reasoning.state import ReasoningState
-
-
-@pytest.fixture
-def engine():
-    return ReasoningEngine()
+from scios.cognitive_core.reasoning.core import ReasoningProblem
+from scios.cognitive_core.reasoning.core.types import ReasoningType
+from scios.cognitive_core.reasoning.engine import ReasoningEngine
+from scios.cognitive_core.reasoning.manager import ReasoningManager
 
 
-@pytest.fixture
-def state():
-    return ReasoningState()
+def _problem(
+    query: str = "benchmark reasoning query",
+    reasoning_type: ReasoningType = ReasoningType.DEDUCTIVE,
+) -> ReasoningProblem:
+    return ReasoningProblem(
+        query=query,
+        reasoning_type=reasoning_type,
+    )
 
 
-def test_reasoning_engine_creation(benchmark):
-    """
-    Benchmark engine construction.
-    """
+def test_benchmark_engine_creation(benchmark) -> None:
     benchmark(ReasoningEngine)
 
 
-def test_reasoning_initialize(engine, benchmark):
-    """
-    Benchmark engine initialization.
-    """
-    benchmark(engine.initialize)
+def test_benchmark_engine_execute(benchmark) -> None:
+    engine = ReasoningEngine()
+    problem = _problem()
+
+    benchmark(engine.execute, problem)
 
 
-def test_reasoning_inference(engine, state, benchmark):
-    """
-    Benchmark inference.
-    """
+def test_benchmark_engine_execute_inductive(benchmark) -> None:
+    engine = ReasoningEngine()
+    problem = _problem(
+        reasoning_type=ReasoningType.INDUCTIVE,
+    )
+
+    benchmark(engine.execute, problem)
+
+
+def test_benchmark_engine_execute_abductive(benchmark) -> None:
+    engine = ReasoningEngine()
+    problem = _problem(
+        reasoning_type=ReasoningType.ABDUCTIVE,
+    )
+
+    benchmark(engine.execute, problem)
+
+
+def test_benchmark_engine_get_strategy(benchmark) -> None:
+    engine = ReasoningEngine()
+
     benchmark(
-        engine.infer,
-        state,
+        engine.get_strategy,
+        ReasoningType.DEDUCTIVE,
     )
 
 
-def test_reasoning_verification(engine, state, benchmark):
-    """
-    Benchmark verification.
-    """
-    benchmark(
-        engine.verify,
-        state,
+def test_benchmark_manager_execute(benchmark) -> None:
+    manager = ReasoningManager()
+    problem = _problem()
+
+    benchmark(manager.execute, problem)
+
+
+def test_benchmark_manager_execute_inductive(benchmark) -> None:
+    manager = ReasoningManager()
+    problem = _problem(
+        reasoning_type=ReasoningType.INDUCTIVE,
     )
 
-
-def test_reasoning_step(engine, state, benchmark):
-    """
-    Benchmark one reasoning iteration.
-    """
-    benchmark(
-        engine.step,
-        state,
-    )
-
-
-def test_reasoning_pipeline(engine, state, benchmark):
-    """
-    Benchmark complete reasoning pipeline.
-    """
-
-    def workload():
-
-        engine.initialize()
-
-        hypothesis = engine.infer(state)
-
-        engine.verify(hypothesis)
-
-    benchmark(workload)
+    benchmark(manager.execute, problem)

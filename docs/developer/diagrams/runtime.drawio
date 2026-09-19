@@ -1,0 +1,207 @@
+                         +----------------------------------+
+                         |          SciOS Kernel            |
+                         |----------------------------------|
+                         | Kernel State                     |
+                         | Lifecycle Manager                |
+                         | Scheduler                        |
+                         | Dispatcher                       |
+                         | Service Registry                 |
+                         | Context Manager                  |
+                         | Event Bus                        |
+                         | Plugin Manager                   |
+                         | Artifact Manager                 |
+                         | Runtime                          |
+                         +----------------+-----------------+
+                                          |
+                                          |
+                                          v
+                              +------------------------+
+                              |   Pipeline Builder     |
+                              +-----------+------------+
+                                          |
+                                          v
+                              +------------------------+
+                              | Cognitive Pipeline     |
+                              +-----------+------------+
+                                          |
+                 +------------------------+------------------------+
+                 |                        |                        |
+                 v                        v                        v
+         +--------------+        +---------------+        +---------------+
+         | Perception   | -----> | Memory        | -----> | Reasoning     |
+         +--------------+        +---------------+        +---------------+
+                                                             |
+                                                             v
+                                                     +---------------+
+                                                     | Planning      |
+                                                     +---------------+
+                                                             |
+                                                             v
+                                                     +---------------+
+                                                     | Tool Use      |
+                                                     +---------------+
+                                                             |
+                                                             v
+                                                     +---------------+
+                                                     | Reflection    |
+                                                     +---------------+
+                                                             |
+                                                             v
+                                                     +---------------+
+                                                     | Output        |
+                                                     +---------------+
+                                                             |
+                                                             v
+                                                 +----------------------+
+                                                 | Artifact Manager     |
+                                                 +----------------------+
+                                                             |
+                                                             v
+                                                 +----------------------+
+                                                 | Memory Update        |
+                                                 +----------------------+
+Runtime Lifecycle
+boot()
+    │
+    ▼
+initialize()
+    │
+    ▼
+start_loop()
+    │
+    ▼
+wait_for_task()
+    │
+    ▼
+execute()
+    │
+    ▼
+collect_result()
+    │
+    ▼
+update_metrics()
+    │
+    ▼
+next_task()
+    │
+    ▼
+shutdown()
+Runtime Components
+Component	Responsibility
+KernelRuntime	Runtime facade
+RuntimeLoop	Main execution loop
+RuntimeExecutor	Execute scheduled tasks
+RuntimeWorker	Worker abstraction
+Scheduler	Task scheduling
+Task Queue	Pending execution queue
+AgentExecutor	Invoke cognitive execution
+Cognitive Pipeline	Execute reasoning pipeline
+Runtime Data Flow
+Task
+
+↓
+
+Scheduler
+
+↓
+
+Queue
+
+↓
+
+RuntimeExecutor
+
+↓
+
+AgentExecutor
+
+↓
+
+Cognitive Pipeline
+
+↓
+
+Result
+
+↓
+
+Metrics
+
+↓
+
+Runtime Status
+Internal Runtime Layers
++-----------------------------------+
+|           Runtime API             |
++-----------------------------------+
+|        Runtime Facade             |
++-----------------------------------+
+| RuntimeLoop | Executor | Worker   |
++-----------------------------------+
+| Scheduler | Queue | Metrics        |
++-----------------------------------+
+| Agent Executor                    |
++-----------------------------------+
+| Cognitive Pipeline                |
++-----------------------------------+
+Runtime State Machine
+Created
+
+↓
+
+Booting
+
+↓
+
+Idle
+
+↓
+
+Running
+
+↓
+
+Waiting
+
+↓
+
+Running
+
+↓
+
+Stopping
+
+↓
+
+Stopped
+Suggested Colors
+
+Blue — Runtime Core
+
+KernelRuntime
+RuntimeLoop
+RuntimeExecutor
+RuntimeWorker
+
+Green — Scheduling
+
+Scheduler
+Queue
+
+Orange — Cognitive Execution
+
+AgentExecutor
+Cognitive Pipeline
+
+Purple — Monitoring
+
+Runtime State
+Runtime Metrics
+Footer
+SciOS Developer Handbook
+
+Runtime Architecture
+
+Version: v0.2
+
+Phase 8 — Runtime Engine                                                 

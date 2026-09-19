@@ -1,288 +1,502 @@
 """
-SciOS End-to-End Pipeline Tests
-===============================
+SciOS Runtime Pipeline Contract Tests
+======================================
 
-Integration tests for the complete SciOS execution pipeline.
+Canonical contract tests for:
 
-Pipeline
+    scios.runtime.pipeline.Pipeline
 
-    Kernel
-        ↓
-    Planner
-        ↓
-    Scheduler
-        ↓
-    Runtime
-        ↓
-    Agent
-        ↓
-    QTC
-        ↓
-    Memory
-        ↓
-      Result
+Python 3.11+
 """
 
 from __future__ import annotations
 
 import pytest
 
-from scios.api.scios import SciOS
+from scios.runtime import (
+    ExecutionContext,
+    Pipeline,
+    Stage,
+)
+
+
+# ==========================================================
+# Test Stages
+# ==========================================================
+
+
+class FirstStage(Stage):
+
+    def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+
+        context.log("first")
+        context.set_artifact(
+            "first",
+            True,
+        )
+
+
+class SecondStage(Stage):
+
+    def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+
+        context.log("second")
+
+        context.set_artifact(
+            "second",
+            True,
+        )
+
+
+class FailingStage(Stage):
+
+    def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+
+        raise ValueError("boom")
+
+
+class OutputStage(Stage):
+
+    def __init__(
+        self,
+        output,
+    ) -> None:
+
+        self.output = output
+
+    def execute(
+        self,
+        context: ExecutionContext,
+    ):
+
+        return self.output
 
 
 # ==========================================================
 # Construction
 # ==========================================================
 
-def test_pipeline_construction() -> None:
-    """
-    SciOS should construct successfully.
-    """
 
-    os = SciOS()
+def test_default_pipeline():
 
-    assert os is not None
+    pipeline = Pipeline()
 
-
-# ==========================================================
-# Boot
-# ==========================================================
-
-def test_pipeline_boot() -> None:
-    """
-    Entire system should boot.
-    """
-
-    os = SciOS()
-
-    assert os.boot() is True
+    assert len(pipeline) == 0
+    assert pipeline.stage_count == 0
+    assert pipeline.stages == ()
 
 
-# ==========================================================
-# Single Task
-# ==========================================================
+def test_pipeline_from_stages():
 
-def test_single_task() -> None:
-    """
-    Execute one task.
-    """
+    first = FirstStage()
+    second = SecondStage()
 
-    os = SciOS()
+    pipeline = Pipeline(
+        [
+            first,
+            second,
+        ]
+    )
 
-    os.boot()
-
-    result = os.run("ping")
-
-    assert result is not None
+    assert pipeline.stage_count == 2
+    assert pipeline.stages == (
+        first,
+        second,
+    )
 
 
 # ==========================================================
-# Multiple Tasks
+# Stage Management
 # ==========================================================
 
-def test_multiple_tasks() -> None:
-    """
-    Execute multiple tasks sequentially.
-    """
 
-    os = SciOS()
+def test_add_stage():
 
-    os.boot()
+    pipeline = Pipeline()
+    stage = FirstStage()
 
-    for i in range(20):
+    returned = pipeline.add_stage(stage)
 
-        result = os.run(f"task-{i}")
-
-        assert result is not None
+    assert returned is None
+    assert stage in pipeline
+    assert pipeline.stage_count == 1
 
 
-# ==========================================================
-# Memory Persistence
-# ==========================================================
+def test_duplicate_stage_is_ignored():
 
-def test_pipeline_memory() -> None:
-    """
-    Pipeline should remember previous tasks.
-    """
+    pipeline = Pipeline()
+    stage = FirstStage()
 
-    os = SciOS()
+    pipeline.add_stage(stage)
+    pipeline.add_stage(stage)
 
-    os.boot()
-
-    os.run("first")
-
-    os.run("second")
-
-    memory = os.kernel.context.memory
-
-    assert len(memory) >= 2
+    assert pipeline.stage_count == 1
 
 
-# ==========================================================
-# Scheduler Queue
-# ==========================================================
+def test_remove_stage():
 
-def test_scheduler_pipeline() -> None:
-    """
-    Scheduler should become empty after execution.
-    """
+    stage = FirstStage()
 
-    os = SciOS()
+    pipeline = Pipeline(
+        [stage]
+    )
 
-    os.boot()
+    pipeline.remove_stage(stage)
 
-    for i in range(10):
-
-        os.run(i)
-
-    scheduler = os.kernel.scheduler
-
-    assert scheduler.empty()
+    assert stage not in pipeline
+    assert pipeline.stage_count == 0
 
 
-# ==========================================================
-# Runtime Counter
-# ==========================================================
+def test_remove_missing_stage_is_safe():
 
-def test_runtime_counter() -> None:
-    """
-    Runtime should count executed tasks.
-    """
+    pipeline = Pipeline()
 
-    os = SciOS()
+    pipeline.remove_stage(
+        FirstStage()
+    )
 
-    os.boot()
-
-    for i in range(5):
-
-        os.run(i)
-
-    runtime = os.kernel.runtime
-
-    assert runtime.status()["tasks_executed"] == 5
+    assert pipeline.stage_count == 0
 
 
-# ==========================================================
-# Agent State
-# ==========================================================
+def test_clear():
 
-def test_agent_pipeline() -> None:
-    """
-    Agent should finish idle.
-    """
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
 
-    os = SciOS()
+    pipeline.clear()
 
-    os.boot()
+    assert pipeline.stage_count == 0
+    assert pipeline.stages == ()
 
-    os.run("hello")
 
-    agent = os.kernel.agent
+def test_stages_are_read_only_view():
 
-    assert agent.status()["state"] == "idle"
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+        ]
+    )
+
+    stages = pipeline.stages
+
+    assert isinstance(stages, tuple)
+
+    with pytest.raises(AttributeError):
+        stages.append(
+            SecondStage()
+        )
 
 
 # ==========================================================
-# Kernel Status
+# Execution
 # ==========================================================
 
-def test_kernel_pipeline_status() -> None:
-    """
-    Kernel should remain running.
-    """
 
-    os = SciOS()
+def test_execute_returns_same_context():
 
-    os.boot()
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+        ]
+    )
 
-    os.run("task")
+    context = ExecutionContext(
+        "demo"
+    )
 
-    assert os.kernel.status()["state"] == "running"
+    returned = pipeline.execute(
+        context
+    )
+
+    assert returned is context
+
+
+def test_run_is_execute_alias():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    returned = pipeline.run(
+        context
+    )
+
+    assert returned is context
+
+
+def test_stages_execute_in_order():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    pipeline.execute(
+        context
+    )
+
+    assert context.logs == [
+        "Executing stage: FirstStage",
+        "first",
+        "Executing stage: SecondStage",
+        "second",
+    ]
+
+
+def test_stage_artifacts_survive_pipeline():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    pipeline.execute(
+        context
+    )
+
+    assert context.get_artifact(
+        "first"
+    ) is True
+
+    assert context.get_artifact(
+        "second"
+    ) is True
 
 
 # ==========================================================
-# Shutdown
+# Events
 # ==========================================================
 
-def test_pipeline_shutdown() -> None:
-    """
-    Entire pipeline should shutdown correctly.
-    """
 
-    os = SciOS()
+def test_stage_lifecycle_events():
 
-    os.boot()
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
 
-    os.shutdown()
+    context = ExecutionContext(
+        "demo"
+    )
 
-    assert os.kernel.status()["state"] == "stopped"
+    pipeline.execute(
+        context
+    )
+
+    assert context.events == [
+        "FirstStage.started",
+        "FirstStage.completed",
+        "SecondStage.started",
+        "SecondStage.completed",
+    ]
+
+
+def test_failed_stage_emits_failed_event():
+
+    pipeline = Pipeline(
+        [
+            FailingStage(),
+        ]
+    )
+
+    context = ExecutionContext(
+        "demo"
+    )
+
+    context.start()
+
+    # Context.start() emits the execution-level lifecycle event.
+    # This test focuses exclusively on Pipeline stage events.
+    context.events.clear()
+
+    with pytest.raises(
+        ValueError,
+        match="boom",
+    ):
+        pipeline.execute(
+            context
+        )
+
+    assert context.events == [
+        "FailingStage.started",
+        "FailingStage.failed",
+    ]
+
+    # Pipeline propagates the exception to ExecutionEngine.
+    # ExecutionContext lifecycle failure is owned by the Engine,
+    # therefore Pipeline must not transition the context to failed.
+    assert context.failed is False
+    assert context.error is None
 
 
 # ==========================================================
-# Boot -> Run -> Shutdown Cycles
+# Output Capture
 # ==========================================================
+
 
 @pytest.mark.parametrize(
-    "cycles",
+    "output",
     [
-        1,
-        3,
-        5,
+        None,
+        "hello",
+        {"answer": 42},
+        123,
+        ["a", "b"],
     ],
 )
-def test_pipeline_cycles(
-    cycles: int,
-) -> None:
-    """
-    Entire system should survive repeated cycles.
-    """
+def test_stage_output_is_accepted(
+    output,
+):
 
-    os = SciOS()
+    pipeline = Pipeline(
+        [
+            OutputStage(output),
+        ]
+    )
 
-    for _ in range(cycles):
+    context = ExecutionContext(
+        "demo"
+    )
 
-        assert os.boot() is True
+    pipeline.execute(
+        context
+    )
 
-        result = os.run("hello")
+    if isinstance(output, dict):
 
-        assert result is not None
+        assert context.metadata[
+            "answer"
+        ] == 42
 
-        assert os.shutdown() is True
+    elif isinstance(output, str):
 
+        assert output in context.logs
 
-# ==========================================================
-# Run Without Boot
-# ==========================================================
+    elif output is not None:
 
-def test_pipeline_requires_boot() -> None:
-    """
-    Running before boot should fail.
-    """
-
-    os = SciOS()
-
-    with pytest.raises(Exception):
-
-        os.run("task")
+        assert str(output) in context.logs
 
 
 # ==========================================================
-# End-to-End Stability
+# Validation
 # ==========================================================
 
-def test_pipeline_stress() -> None:
-    """
-    Execute many tasks without failure.
-    """
 
-    os = SciOS()
+def test_execute_requires_context():
 
-    os.boot()
+    pipeline = Pipeline()
 
-    for i in range(100):
+    with pytest.raises(
+        ValueError,
+        match="ExecutionContext is required",
+    ):
 
-        result = os.run(i)
+        pipeline.execute(
+            None
+        )
 
-        assert result is not None
 
-    assert os.kernel.status()["state"] == "running"
+# ==========================================================
+# Diagnostics
+# ==========================================================
+
+
+def test_summary():
+
+    first = FirstStage()
+    second = SecondStage()
+
+    pipeline = Pipeline(
+        [
+            first,
+            second,
+        ]
+    )
+
+    summary = pipeline.summary()
+
+    assert summary == {
+        "stage_count": 2,
+        "stages": [
+            "FirstStage",
+            "SecondStage",
+        ],
+    }
+
+
+def test_iteration():
+
+    first = FirstStage()
+    second = SecondStage()
+
+    pipeline = Pipeline(
+        [
+            first,
+            second,
+        ]
+    )
+
+    assert list(pipeline) == [
+        first,
+        second,
+    ]
+
+
+def test_contains():
+
+    stage = FirstStage()
+
+    pipeline = Pipeline(
+        [stage]
+    )
+
+    assert stage in pipeline
+    assert SecondStage() not in pipeline
+
+
+def test_repr():
+
+    pipeline = Pipeline(
+        [
+            FirstStage(),
+            SecondStage(),
+        ]
+    )
+
+    text = repr(pipeline)
+
+    assert "Pipeline" in text
+    assert "stages=2" in text

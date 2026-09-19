@@ -1,0 +1,23 @@
+# SciOS Metadata
+
+ID: SCIOS-0001
+Title: "Scientific Operating System (SciOS) – Foundation Paper"
+File: "paper.md"
+Section: "Systems Research"
+Paper: "SciOS"
+Version: "v0.1"
+Status: "Draft"
+Author: "SciOS Research Team"
+Created: "2026-07-08"
+Modified: "2026-07-08"
+Type: "Research Paper"
+Description: "Foundational manuscript describing the architecture, kernel design, and runtime model of SciOS."
+
+Related:
+  Tables: ["T-0001", "T-0002"]
+  Figures: ["F-0001", "F-0002"]
+  Equations: ["EQ-0001"]
+  Derivations: ["SUP-DER-0001"]
+  Methods: ["EM-0001"]
+  Results: ["AR-0001"]
+  Appendices: ["APP-0001"]

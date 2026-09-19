@@ -1,0 +1,28 @@
+SciOS
+Scientific Cognitive Operating System
+
+Copyright (c) 2026 Bui Dinh Hoang
+
+Licensed under the Apache License, Version 2.0.
+
+This project contains original software, documentation,
+scientific artifacts, benchmark definitions, datasets,
+research workflows, and supporting materials developed
+for the SciOS Research Platform.
+
+Unless otherwise noted, original source code is licensed
+under the Apache License, Version 2.0.
+
+Documentation, figures, tables, equations, datasets,
+and supplementary research artifacts may be subject to
+additional licensing terms as specified in their
+corresponding metadata files.
+
+Third-party software and assets remain under their
+respective licenses.
+
+For details see:
+
+LICENSE
+docs/legal/licensing.md
+docs/legal/third_party.md

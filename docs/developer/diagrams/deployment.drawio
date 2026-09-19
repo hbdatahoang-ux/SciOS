@@ -1,0 +1,218 @@
+Overall Deployment
+                    +--------------------------------------+
+                    |            User / Client             |
+                    +------------------+-------------------+
+                                       |
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |          SciOS API / CLI             |
+                    +------------------+-------------------+
+                                       |
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |           SciOS Kernel               |
+                    +------------------+-------------------+
+                                       |
+            +--------------------------+--------------------------+
+            |                          |                          |
+            v                          v                          v
+      Runtime Engine            Cognitive Core            Service Registry
+Single Machine Deployment
++-----------------------------------------------------------+
+|                     Developer Workstation                 |
+|-----------------------------------------------------------|
+|                                                           |
+| CLI                                                      |
+| API                                                      |
+| Kernel                                                   |
+| Runtime                                                  |
+| Cognitive Pipeline                                       |
+| Memory                                                   |
+| Reasoning                                                |
+| Tool Use                                                 |
+| Reflection                                               |
+|                                                           |
++-----------------------------------------------------------+
+
+Đây là mô hình mặc định cho phát triển và kiểm thử cục bộ.
+
+Multi-Service Deployment
+                 Load Balancer
+                       |
+      +----------------+----------------+
+      |                                 |
+      v                                 v
+ SciOS Instance 1                SciOS Instance 2
+      |                                 |
+      +----------------+----------------+
+                       |
+                       v
+                Shared Storage
+
+Nhiều instance SciOS có thể hoạt động đồng thời và dùng chung tài nguyên lưu trữ.
+
+Distributed Cognitive System
+                    Scheduler
+                        |
+        +---------------+---------------+
+        |                               |
+        v                               v
+ Runtime Node 1                  Runtime Node 2
+        |                               |
+        +---------------+---------------+
+                        |
+                        v
+                Knowledge Store
+
+Scheduler phân phối công việc giữa nhiều Runtime Node.
+
+Storage Layer
+                 SciOS Kernel
+                       |
+      +----------------+----------------+
+      |                                 |
+      v                                 v
+ Artifact Store                  Memory Store
+      |                                 |
+      +----------------+----------------+
+                       |
+                       v
+                Persistent Storage
+
+Lớp lưu trữ bao gồm:
+
+Artifact Store
+Memory Store
+Metadata
+Logs
+Snapshots
+Plugin Deployment
+                Plugin Repository
+                        |
+                        v
+                Plugin Manager
+                        |
+        +---------------+---------------+
+        |                               |
+        v                               v
+ Built-in Plugins             External Plugins
+
+Plugin được tải và đăng ký trong quá trình khởi động hệ thống.
+
+Runtime Scaling
+                 Scheduler
+                      |
+      +---------------+---------------+
+      |               |               |
+      v               v               v
+ Runtime 1      Runtime 2      Runtime 3
+
+Các Runtime có thể mở rộng theo chiều ngang để xử lý khối lượng công việc lớn hơn.
+
+Research Cluster
+               Research Cluster
+                      |
+      +---------------+---------------+
+      |               |               |
+      v               v               v
+ CPU Node       GPU Node      Simulation Node
+
+Ví dụ:
+
+CPU Node: điều phối và xử lý tổng quát.
+GPU Node: suy luận mô hình lớn hoặc tăng tốc AI.
+Simulation Node: mô phỏng khoa học và thí nghiệm.
+External Services
+                  SciOS Kernel
+                       |
+      +----------------+----------------+
+      |                |                |
+      v                v                v
+   Database        Object Store     Message Bus
+
+Kernel giao tiếp với các dịch vụ bên ngoài thông qua adapter hoặc plugin.
+
+Deployment Layers
+User
+
+↓
+
+CLI / API
+
+↓
+
+Kernel
+
+↓
+
+Runtime
+
+↓
+
+Execution Graph
+
+↓
+
+Pipeline
+
+↓
+
+Subsystems
+
+↓
+
+Storage
+
+↓
+
+Infrastructure
+
+Mỗi lớp có thể được triển khai độc lập hoặc kết hợp trong một tiến trình.
+
+Suggested Colors
+Thành phần	Màu
+Kernel	Dark Blue
+Runtime	Blue
+Pipeline	Green
+Storage	Gray
+Plugin	Orange
+Infrastructure	Purple
+Footer
+SciOS Developer Handbook
+
+Deployment Architecture
+
+Version: v0.2
+
+Phase 8 — Deployment
+Vai trò trong bộ sơ đồ SciOS
+
+Sơ đồ này hoàn thiện góc nhìn triển khai của hệ thống:
+
+architecture.drawio
+        │
+        ▼
+kernel.drawio
+        │
+        ▼
+runtime.drawio
+        │
+        ▼
+pipeline.drawio
+        │
+        ▼
+execution_graph.drawio
+        │
+        ▼
+deployment.drawio
+
+Trong chuỗi này:
+
+architecture.drawio mô tả kiến trúc tổng thể.
+kernel.drawio mô tả các thành phần điều phối trung tâm.
+runtime.drawio mô tả cơ chế thực thi.
+pipeline.drawio mô tả luồng nhận thức.
+execution_graph.drawio mô tả DAG và lập lịch thực thi.
+deployment.drawio mô tả cách toàn bộ hệ thống được triển khai từ môi trường phát triển đơn máy đến các cụm tính toán phân tán.

@@ -2,54 +2,109 @@
 SciOS Kernel
 ============
 
-Control Plane of the Scientific Cognitive Operating System.
-
-The kernel is responsible for:
-
-- System bootstrapping
-- Lifecycle management
-- Component registration
-- Dependency injection
-- Runtime execution
-- Task scheduling
-- Event dispatching
-- Global execution context
-
-Public Components
------------------
-Kernel
-    Main kernel facade.
-
-Bootstrap
-    Kernel boot sequence.
-
-LifecycleManager
-    Kernel lifecycle controller.
-
-Scheduler
-    Kernel task scheduler.
-
-Registry
-    Global component registry.
-
-DependencyContainer
-    Dependency injection container.
+Core orchestration layer of the Scientific Cognitive Operating System.
 """
 
-from .bootstrap import Bootstrap
-from .dependency import DependencyContainer
-from .kernel import Kernel
-from .lifecycle import LifecycleManager
-from .registry import Registry
-from .scheduler import Scheduler
+from __future__ import annotations
 
-__version__ = "0.1.3"
+# ==========================================================
+# Core
+# ==========================================================
+
+from .kernel import Kernel
+from .bootstrap import Bootstrap
+
+
+# ==========================================================
+# Factory
+# ==========================================================
+
+def build_kernel() -> Kernel:
+    """
+    Build a default SciOS Kernel.
+
+    Returns
+    -------
+    Kernel
+        A fully initialized Kernel instance.
+    """
+    return Kernel()
+
+
+# ==========================================================
+# Infrastructure
+# ==========================================================
+
+from .lifecycle import LifecycleManager
+from .registry import ServiceRegistry
+from .scheduler import Scheduler
+from .dispatcher import Dispatcher
+from .plugins import PluginManager
+from .artifact_manager import ArtifactManager
+
+
+# ==========================================================
+# State
+# ==========================================================
+
+from .state import KernelState, KernelStatus
+
+
+# ==========================================================
+# Services
+# ==========================================================
+
+from .services import (
+    Service,
+    LifecycleService,
+    ExecutionService,
+    ConfigurableService,
+    HealthCheckService,
+    KernelService,
+)
+
+
+# ==========================================================
+# Exceptions
+# ==========================================================
+
+from .exceptions import *
+
+
+# ==========================================================
+# Version
+# ==========================================================
+
+__version__ = "0.3.0-alpha"
+
+
+# ==========================================================
+# Public API
+# ==========================================================
 
 __all__ = [
+    # Core
     "Kernel",
     "Bootstrap",
+    "build_kernel",
+
+    # Infrastructure
     "LifecycleManager",
+    "ServiceRegistry",
     "Scheduler",
-    "Registry",
-    "DependencyContainer",
+    "Dispatcher",
+    "PluginManager",
+    "ArtifactManager",
+
+    # State
+    "KernelState",
+    "KernelStatus",
+
+    # Services
+    "Service",
+    "LifecycleService",
+    "ExecutionService",
+    "ConfigurableService",
+    "HealthCheckService",
+    "KernelService",
 ]

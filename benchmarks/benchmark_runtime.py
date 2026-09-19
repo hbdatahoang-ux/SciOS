@@ -1,72 +1,116 @@
 """
-Runtime Benchmarks
+SciOS Runtime Benchmarks
+========================
 
 Run with:
 
-pytest benchmarks/benchmark_runtime.py \
-    --benchmark-only
+    pytest benchmarks/benchmark_runtime.py --benchmark-only
 """
 
 from __future__ import annotations
 
 import pytest
 
-from scios.kernel.runtime.engine import RuntimeEngine
+from scios.runtime import (
+    ExecutionContext,
+    ExecutionEngine,
+    Pipeline,
+    Stage,
+)
+
+
+class NoOpStage(Stage):
+    """
+    Minimal pipeline stage for benchmarking.
+    """
+
+    def execute(self, context: ExecutionContext) -> None:
+        context.log("NoOpStage executed")
+        context.set_result("ok")
 
 
 @pytest.fixture
-def runtime() -> RuntimeEngine:
+def engine() -> ExecutionEngine:
     """
-    Create a fresh runtime instance.
+    Create an execution engine with a minimal pipeline.
     """
-    return RuntimeEngine()
+    pipeline = Pipeline()
+    pipeline.add_stage(NoOpStage())
+
+    return ExecutionEngine(
+        pipeline=pipeline,
+    )
 
 
-def test_runtime_creation(benchmark):
+@pytest.fixture
+def context() -> ExecutionContext:
     """
-    Benchmark Runtime construction.
+    Create a reusable execution context.
     """
-    benchmark(RuntimeEngine)
+    return ExecutionContext(
+        task="benchmark task",
+    )
 
 
-def test_runtime_start(runtime: RuntimeEngine, benchmark):
-    """
-    Benchmark runtime startup.
-    """
-    benchmark(runtime.start)
+# ----------------------------------------------------------------------
+# Construction
+# ----------------------------------------------------------------------
+
+def test_execution_context_creation(benchmark):
+    benchmark(
+        ExecutionContext,
+        "benchmark task",
+    )
 
 
-def test_runtime_stop(runtime: RuntimeEngine, benchmark):
-    """
-    Benchmark runtime shutdown.
-    """
-    runtime.start()
-
-    benchmark(runtime.stop)
+def test_execution_engine_creation(benchmark):
+    benchmark(
+        ExecutionEngine,
+    )
 
 
-def test_runtime_execute(runtime: RuntimeEngine, benchmark):
-    """
-    Benchmark execution of a lightweight task.
-    """
-    runtime.start()
+# ----------------------------------------------------------------------
+# Context operations
+# ----------------------------------------------------------------------
 
-    benchmark(runtime.execute, lambda: 42)
-
-
-def test_runtime_status(runtime: RuntimeEngine, benchmark):
-    """
-    Benchmark status retrieval.
-    """
-    runtime.start()
-
-    benchmark(runtime.status)
+def test_context_logging(context, benchmark):
+    benchmark(
+        context.log,
+        "benchmark log message",
+    )
 
 
-def test_runtime_restart(runtime: RuntimeEngine, benchmark):
-    """
-    Benchmark runtime restart.
-    """
-    runtime.start()
+def test_context_set_result(context, benchmark):
+    benchmark(
+        context.set_result,
+        "result",
+    )
 
-    benchmark(runtime.restart)
+
+# ----------------------------------------------------------------------
+# Pipeline
+# ----------------------------------------------------------------------
+
+def test_pipeline_execution(engine, benchmark):
+    benchmark(
+        engine.pipeline.execute,
+        ExecutionContext("pipeline benchmark"),
+    )
+
+
+# ----------------------------------------------------------------------
+# Engine
+# ----------------------------------------------------------------------
+
+def test_engine_run(engine, benchmark):
+    benchmark(
+        engine.run,
+        "runtime benchmark",
+    )
+
+
+def test_engine_execute(engine, benchmark):
+    benchmark(
+        engine.execute,
+        "runtime benchmark",
+    )

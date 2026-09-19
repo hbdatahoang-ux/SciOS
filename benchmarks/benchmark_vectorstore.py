@@ -3,8 +3,7 @@ SciOS Vector Store Benchmarks
 
 Run:
 
-pytest benchmarks/benchmark_vectorstore.py \
-    --benchmark-only
+pytest benchmarks/benchmark_vectorstore.py --benchmark-only
 """
 
 from __future__ import annotations
@@ -13,102 +12,137 @@ import random
 
 import pytest
 
-from scios.substrate.vectorstore.index import VectorIndex
+from scios.substrate.vectorstore.storage import (
+    VectorRecord,
+    VectorStore,
+)
 
 
 DIMENSION = 128
 NUM_VECTORS = 1_000
 
 
+def make_vector() -> list[float]:
+    return [random.random() for _ in range(DIMENSION)]
+
+
 @pytest.fixture
-def index() -> VectorIndex:
-    idx = VectorIndex(dimension=DIMENSION)
+def store() -> VectorStore:
+    vector_store = VectorStore(dimension=DIMENSION)
 
     for i in range(NUM_VECTORS):
-        vector = [random.random() for _ in range(DIMENSION)]
-        idx.add(f"doc-{i}", vector)
+        vector_store.add(
+            f"doc-{i}",
+            make_vector(),
+        )
 
-    return idx
+    return vector_store
 
 
 @pytest.fixture
-def query_vector():
-    return [random.random() for _ in range(DIMENSION)]
+def query_vector() -> list[float]:
+    return make_vector()
 
 
 def test_vectorstore_creation(benchmark):
     """
-    Benchmark index construction.
+    Benchmark VectorStore construction.
     """
-    benchmark(VectorIndex, dimension=DIMENSION)
+    benchmark(
+        VectorStore,
+        dimension=DIMENSION,
+    )
 
 
 def test_vectorstore_insert(benchmark):
     """
     Benchmark single vector insertion.
     """
+    vector_store = VectorStore(
+        dimension=DIMENSION,
+    )
 
-    idx = VectorIndex(dimension=DIMENSION)
     vector = [0.5] * DIMENSION
 
-    benchmark(idx.add, "sample", vector)
-
-
-def test_vectorstore_search(index, query_vector, benchmark):
-    """
-    Benchmark top-k search.
-    """
-
     benchmark(
-        index.search,
+        vector_store.add,
+        "sample",
+        vector,
+    )
+
+
+def test_vectorstore_search(
+    store,
+    query_vector,
+    benchmark,
+):
+    """
+    Benchmark top-k cosine similarity search.
+    """
+    benchmark(
+        store.search,
         query_vector,
         10,
     )
 
 
-def test_vectorstore_update(index, benchmark):
+def test_vectorstore_update(
+    store,
+    benchmark,
+):
     """
-    Benchmark vector replacement.
+    Benchmark VectorRecord replacement.
     """
-
-    vector = [0.8] * DIMENSION
+    record = VectorRecord(
+        id="doc-1",
+        vector=store.get_record("doc-1").vector,
+        metadata=store.get_record("doc-1").metadata,
+    )
 
     benchmark(
-        index.update,
-        "doc-1",
-        vector,
+        store.update,
+        record,
     )
 
 
-def test_vectorstore_delete(index, benchmark):
+def test_vectorstore_delete(
+    store,
+    benchmark,
+):
     """
     Benchmark vector deletion.
     """
-
     benchmark(
-        index.delete,
+        store.delete,
         "doc-1",
     )
 
 
 def test_vectorstore_bulk_insert(benchmark):
     """
-    Benchmark bulk insertion.
+    Benchmark bulk VectorRecord insertion.
     """
+    vector_store = VectorStore(
+        dimension=DIMENSION,
+    )
 
-    idx = VectorIndex(dimension=DIMENSION)
-
-    vectors = [
-        (
-            f"doc-{i}",
-            [random.random() for _ in range(DIMENSION)]
+    records = [
+        VectorRecord(
+            id=f"doc-{i}",
+            vector=vector_store._normalize_vector(
+                make_vector()
+            ),
+            metadata=vector_store.values()[0].metadata
+            if vector_store.values()
+            else __import__(
+                "scios.substrate.vectorstore.metadata",
+                fromlist=["Metadata"],
+            ).Metadata(),
         )
         for i in range(NUM_VECTORS)
     ]
 
-    def workload():
-
-        for key, vector in vectors:
-            idx.add(key, vector)
-
-    benchmark(workload)
+    benchmark(
+        vector_store.add_many,
+        records,
+    )

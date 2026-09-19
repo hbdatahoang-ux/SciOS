@@ -1,0 +1,5 @@
+ID,Title,File,Section,Paper,Version,Status,Author,Created,Modified,EquationType,Description
+EQ-0001,Effective Elasticity Equation,EQ-0001.md,Theory,CEIT,v1.0,Approved,Bui Dinh Hoang,2026-07-08,2026-07-08,Analytical,Core CEIT equation
+EQ-0002,Constraint Energy Function,EQ-0002.md,Theory,CEIT,v1.0,Draft,Bui Dinh Hoang,2026-07-08,2026-07-08,Analytical,Constraint-induced energy
+EQ-0003,Gradient Flow Equation,EQ-0003.md,Methods,CEIT,v0.2,Reviewed,Bui Dinh Hoang,2026-07-08,2026-07-08,Differential,Equation for microfluidic gradient flow
+EQ-0004,Elastic Potential Function,EQ-0004.md,Results,CEIT,v0.1,Draft,Bui Dinh Hoang,2026-07-08,2026-07-08,Analytical,Potential energy landscape
