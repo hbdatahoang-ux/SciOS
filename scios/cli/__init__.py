@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from typing import Sequence
 
 from scios import SciOS
@@ -22,6 +23,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    cli_args = list(sys.argv[1:] if argv is None else argv)
+
+    if cli_args and cli_args[0] == "csv-analysis":
+        from scios.cli.csv_analysis import main as csv_analysis_main
+
+        return csv_analysis_main(cli_args[1:])
+
     parser = _build_parser()
 
     try:
