@@ -15,6 +15,9 @@ import pytest
 from scios.runtime.observability.metrics.core.metrics.core.metric import (
     Metric,
 )
+from scios.runtime.observability.metrics.core.metrics.metric import (
+    Metric as CompositeMetric,
+)
 
 
 # ==========================================================
@@ -263,6 +266,50 @@ class TestSerialization:
         )
 
         assert restored == full_metric
+
+
+    def test_from_dict_does_not_eval_value_type(
+        self,
+        monkeypatch,
+    ):
+        data = {
+            "metadata": {
+                "name": "cpu_usage",
+                "namespace": "",
+                "description": "",
+                "unit": "%",
+                "category": "",
+            },
+            "descriptor": {
+                "metric_type": "gauge",
+                "value_type": "1 + 1",
+            },
+            "labels": {},
+            "attributes": {},
+            "state": {
+                "value": 87.5,
+            },
+        }
+
+        def forbidden_eval(*args, **kwargs):
+            raise AssertionError(
+                "Metric.from_dict() must not execute value_type with eval()"
+            )
+
+        monkeypatch.setattr(
+            "builtins.eval",
+            forbidden_eval,
+        )
+
+        monkeypatch.setattr(
+            "scios.runtime.observability.metrics.core.metrics.metric.MetricState.restore",
+            lambda self, data: None,
+            raising=False,
+        )
+
+        restored = CompositeMetric.from_dict(data)
+
+        assert restored.descriptor.value_type is float
 
 
 # ==========================================================

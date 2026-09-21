@@ -526,24 +526,26 @@ class Metric:
             data.get("metadata", {})
         )
 
-        descriptor = data.get(
+        descriptor_data = data.get(
             "descriptor",
             {},
+        )
+
+        descriptor = MetricDescriptor.from_dict(
+            {
+                "metadata": data.get(
+                    "metadata",
+                    {},
+                ),
+                **descriptor_data,
+            }
         )
 
         metric = cls(
             metadata=metadata,
             value=data.get("state", {}).get("value"),
-            metric_type=descriptor.get(
-                "metric_type",
-                DEFAULT_METRIC_TYPE,
-            ),
-            value_type=eval(
-                descriptor.get(
-                    "value_type",
-                    "float",
-                )
-            ),
+            metric_type=descriptor.metric_type,
+            value_type=descriptor.value_type,
         )
 
         metric.labels.update(
