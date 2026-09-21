@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile, ZipFile
 from io import BytesIO
-from xml.etree import ElementTree
+from defusedxml import ElementTree
 
 
 _SUPPORTED_EXTENSIONS = {

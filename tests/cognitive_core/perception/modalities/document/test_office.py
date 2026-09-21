@@ -1,4 +1,4 @@
-﻿"""Tests for the Office document adapter."""
+"""Tests for the Office document adapter."""
 
 from io import BytesIO
 from pathlib import Path
@@ -252,6 +252,18 @@ def test_invalid_xml_is_wrapped(
     with pytest.raises(PerceptionProcessingError):
         reader.read(data)
 
+
+def test_xml_internal_entity_is_rejected(
+    reader: OfficeDocumentReader,
+) -> None:
+    data = make_office_package(
+        "word/document.xml",
+        '<!DOCTYPE document [<!ENTITY x "SECRET">]>'
+        "<document><body><p>&x;</p></body></document>",
+    )
+
+    with pytest.raises(PerceptionProcessingError):
+        reader.read(data)
 
 def test_processing_error_is_wrapped(
     reader: OfficeDocumentReader,

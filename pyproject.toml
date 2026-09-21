@@ -74,7 +74,8 @@ dependencies = [
     "typing-extensions>=4.12",
     "fastapi>=0.115",
     "uvicorn>=0.30",
-    "pandas>=2.3"
+    "pandas>=2.3",
+    "defusedxml>=0.7,<1.0"
 ]
 
 dynamic = []
@@ -91,7 +92,8 @@ dev = [
     "ruff>=0.12",
     "black>=25.0",
     "mypy>=1.16",
-    "pre-commit>=4.0"
+    "pre-commit>=4.0",
+    "bandit>=1.9,<2.0"
 ]
 
 docs = [
@@ -123,12 +125,14 @@ all = [
     "black>=25.0",
     "mypy>=1.16",
     "pre-commit>=4.0",
+    "bandit>=1.9,<2.0",
 
     "mkdocs>=1.6",
     "mkdocs-material>=9.6",
     "mkdocstrings[python]>=0.30",
 
     "pandas>=2.3",
+    "defusedxml>=0.7,<1.0",
     "matplotlib>=3.10",
     "scipy>=1.15",
     "jupyter>=1.1",
