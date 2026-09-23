@@ -435,12 +435,11 @@ class TraceProvider:
 
     def context(self) -> TraceContext:
         """Return the current tracing context."""
-
-        context = self._manager.context
+        context = self._manager.current_context()
 
         if context is None:
             context = TraceContext()
-            self._manager._context = context
+            self._manager.set_context(context)
 
         return context
 
@@ -787,17 +786,12 @@ class TraceProvider:
         return self.context()
 
 
-    def set_context(
-        self,
-        context: Optional[TraceContext],
-    ) -> "TraceProvider":
-        """Set the current tracing context."""
-
+    def set_context(self, context: Optional[TraceContext]) -> "TraceProvider":
         if context is None:
             context = TraceContext()
 
-        self._manager._context = context
-
+        self._manager.set_context(context)
+        self._context = context
         return self
 
 
@@ -1474,11 +1468,11 @@ class TraceProvider:
 
 
     def _ensure_context(self) -> TraceContext:
-        context = self._manager.context
+        context = self._manager.current_context()
 
         if context is None:
             context = TraceContext()
-            self._manager._context = context
+            self._manager.set_context(context)
 
         return context
 # ==========================================================================
