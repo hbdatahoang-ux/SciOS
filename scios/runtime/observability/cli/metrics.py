@@ -28,6 +28,7 @@ Architecture
 from __future__ import annotations
 
 import csv
+import copy as _copy
 import json
 import time
 import uuid
@@ -1727,7 +1728,6 @@ class MetricsCLI:
 #   • shallow/deep cloneable
 # ==========================================================
 
-import copy as _copy
 
     # ------------------------------------------------------
     # Part 7.1 Representation

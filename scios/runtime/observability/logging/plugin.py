@@ -1156,17 +1156,17 @@ class PluginManager:
                 module
             ).values():
 
-                if isinstance(
-                    obj,
-                    type,
-                )
-
-                and issubclass(
-                    obj,
-                    LoggingPlugin,
-                )
-
-                and obj is not LoggingPlugin:
+                if (
+                    isinstance(
+                        obj,
+                        type,
+                    )
+                    and issubclass(
+                        obj,
+                        LoggingPlugin,
+                    )
+                    and obj is not LoggingPlugin
+                ):
 
                     return obj()
 

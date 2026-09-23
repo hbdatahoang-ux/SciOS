@@ -25,6 +25,7 @@ runtime components and provides a unified inspection API.
 
 from __future__ import annotations
 
+import copy as _copy
 import json
 import time
 import uuid
@@ -1883,7 +1884,6 @@ class InspectCLI:
 # registered observability components rather than records.
 # ==========================================================
 
-import copy as _copy
 
     # ------------------------------------------------------
     # Part 7.1 Representation

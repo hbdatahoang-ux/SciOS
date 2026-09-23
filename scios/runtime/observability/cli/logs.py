@@ -23,6 +23,7 @@ delegates storage and retrieval to the configured backend.
 from __future__ import annotations
 
 import csv
+import copy as _copy
 import json
 import logging
 import time
@@ -1946,7 +1947,6 @@ class LogsCLI:
 #   • copyable object
 # ==========================================================
 
-import copy as _copy
 
     # ------------------------------------------------------
     # Part 7.1 Representation

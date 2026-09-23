@@ -28,6 +28,8 @@ Architecture:
 
 from __future__ import annotations
 
+import copy as _copy
+import csv
 import json
 import time
 import uuid
@@ -1142,7 +1144,6 @@ class TraceCLI:
 #     • export_statistics()
 # ==========================================================
 
-import csv
 
 
     # ------------------------------------------------------
@@ -1782,7 +1783,6 @@ import csv
 #         └── Cloneable
 # ==========================================================
 
-import copy as _copy
 
 
     # ------------------------------------------------------
