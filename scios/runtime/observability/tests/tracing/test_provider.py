@@ -14,6 +14,7 @@ from scios.runtime.observability.tracing.provider import (
 )
 
 from scios.runtime.observability.tracing.manager import TraceManager
+from scios.runtime.observability.tracing.context import TraceContext
 from scios.runtime.observability.tracing.sampler import TraceSampler
 from scios.runtime.observability.tracing.processor import TraceProcessor
 from scios.runtime.observability.tracing.exporter import Exporter
@@ -372,28 +373,37 @@ def test_current_span(provider):
 def test_context(provider):
     context = provider.context()
 
-    assert context is not None
+    assert isinstance(
+        context,
+        TraceContext,
+    )
 
 
 def test_current_context(provider):
     context = provider.current_context()
 
-    assert context is not None
+    assert isinstance(
+        context,
+        TraceContext,
+    )
+    assert provider.context() is context
 
 
 def test_set_context(provider):
-    context = provider.current_context()
+    context = TraceContext()
 
     result = provider.set_context(
         context,
     )
 
     assert result is provider
-    assert provider.current_context() is not None
+    assert provider.current_context() is context
+    assert provider.context() is context
+    assert provider._context is context
 
 
 def test_update_context(provider):
-    context = provider.current_context()
+    context = TraceContext()
 
     provider.set_context(
         context,
@@ -404,13 +414,22 @@ def test_update_context(provider):
     )
 
     assert result is provider
+    assert provider.current_context() is context
+    assert provider.context() is context
 
 
 def test_clear_context(provider):
+    context = TraceContext()
+
+    provider.set_context(
+        context,
+    )
+
     result = provider.clear_context()
 
     assert result is provider
-
+    assert provider.manager.current_context() is None
+    assert provider._context is None
 
 # ==============================================================================
 # Part 8. Metadata
