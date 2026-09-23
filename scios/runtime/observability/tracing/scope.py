@@ -192,105 +192,6 @@ class BaseScope:
                 "Scope is closed"
             )
 
-    def _ensure_manager_ready(
-        self,
-    ) -> None:
-        """
-        Ensure TraceManager has a usable tracer.
-
-        TraceManager.start_trace() may require
-        a registered tracer.
-        """
-
-        try:
-
-            tracers = getattr(
-                self._manager,
-                "_tracers",
-                None,
-            )
-
-            if tracers:
-                return
-
-            register = getattr(
-                self._manager,
-                "register",
-                None,
-            )
-
-            if callable(register):
-
-                try:
-                    register("default")
-                except Exception:
-                    pass
-
-                tracers = getattr(
-                    self._manager,
-                    "_tracers",
-                    None,
-                )
-
-                if tracers:
-                    return
-
-            register_tracer = getattr(
-                self._manager,
-                "register_tracer",
-                None,
-            )
-
-            if callable(register_tracer):
-
-                try:
-                    register_tracer(
-                        "default"
-                    )
-
-                except TypeError:
-
-                    try:
-                        register_tracer()
-                    except Exception:
-                        pass
-
-                except Exception:
-                    pass
-
-                tracers = getattr(
-                    self._manager,
-                    "_tracers",
-                    None,
-                )
-
-                if tracers:
-                    return
-
-            tracers = getattr(
-                self._manager,
-                "_tracers",
-                None,
-            )
-
-            if isinstance(
-                tracers,
-                dict,
-            ):
-
-                try:
-
-                    from .tracer import Tracer
-
-                    tracers["default"] = Tracer(
-                        name="default"
-                    )
-
-                except Exception:
-                    pass
-
-        except Exception:
-            pass
 
     def _current_trace(
         self,
@@ -488,11 +389,6 @@ class TraceScope(BaseScope):
 
         try:
 
-            # ------------------------------------------------------------------
-            # Ensure the manager can create a trace.
-            # ------------------------------------------------------------------
-
-            self._ensure_manager_ready()
 
             # ------------------------------------------------------------------
             # TraceScope owns trace creation.
@@ -801,11 +697,6 @@ class SpanScope(BaseScope):
 
         try:
 
-            # ==============================================================
-            # Part 3. Ensure Manager Is Ready
-            # ==============================================================
-
-            self._ensure_manager_ready()
 
             # ==============================================================
             # Part 4. Resolve Trace
