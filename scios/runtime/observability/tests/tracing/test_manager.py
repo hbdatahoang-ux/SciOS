@@ -1199,7 +1199,14 @@ def test_restore_snapshot() -> None:
     manager.start_trace("test")
     manager.start_span("root")
 
+    original_context = manager.current_context()
+
+    assert original_context is not None
+
     snapshot = manager.snapshot()
+
+    assert snapshot["context"] is not None
+    assert snapshot["context"] is not original_context
 
     manager.finish_trace()
 
@@ -1211,6 +1218,12 @@ def test_restore_snapshot() -> None:
     assert manager.active is True
     assert manager.current_trace is not None
     assert manager.current_span is not None
+
+    restored_context = manager.current_context()
+
+    assert restored_context is not None
+    assert restored_context is not original_context
+    assert restored_context == original_context
 
 
 def test_restore_does_not_use_same_metadata_object() -> None:

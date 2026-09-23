@@ -1922,6 +1922,8 @@ def test_span_snapshot_restore():
     assert restored.trace_id == value.trace_id
     assert restored.parent_id == value.parent_id
     assert restored.name == value.name
+    assert restored.context_id == value.context_id
+    assert restored.context is None
     assert restored.get_attribute(
         "service",
     ) == "scios"
