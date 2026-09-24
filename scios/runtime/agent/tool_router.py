@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from scios.runtime.governance import GovernanceContext
 from scios.runtime.tools.base import Tool
 from scios.runtime.tools.executor import ToolExecutor
 from scios.runtime.tools.registry import ToolRegistry
@@ -191,6 +192,8 @@ class ToolRouter:
     def route(
         self,
         name: str,
+        *,
+        governance_context: GovernanceContext | None = None,
         **kwargs: Any,
     ) -> ToolResult:
         """
@@ -206,10 +209,17 @@ class ToolRouter:
                 name
             )
 
-            result = self._executor.execute_tool(
-                tool,
-                **kwargs,
-            )
+            if governance_context is None:
+                result = self._executor.execute_tool(
+                    tool,
+                    **kwargs,
+                )
+            else:
+                result = self._executor.execute_tool(
+                    tool,
+                    governance_context=governance_context,
+                    **kwargs,
+                )
 
             if isinstance(
                 result,

@@ -47,6 +47,7 @@ from .planner import Planner
 from .state import AgentState
 from .tool_router import ToolRouter
 
+from scios.runtime.governance import GovernanceContext
 from scios.runtime.tools.result import ToolResult
 
 
@@ -296,14 +297,23 @@ class Agent:
     def execute_tool(
         self,
         name: str,
+        *,
+        governance_context: GovernanceContext | None = None,
         **kwargs: Any,
     ) -> ToolResult:
         """
         Delegate tool execution to the injected ToolRouter.
         """
 
+        if governance_context is None:
+            return self._router.route(
+                name,
+                **kwargs,
+            )
+
         return self._router.route(
             name,
+            governance_context=governance_context,
             **kwargs,
         )
 

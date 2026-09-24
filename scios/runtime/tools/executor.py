@@ -24,6 +24,11 @@ from .policy import ToolPolicy
 from .registry import ToolRegistry
 from .result import ToolResult
 from .sandbox import ToolSandbox
+from scios.runtime.governance import (
+    GovernanceAdapter,
+    GovernanceContext,
+    GovernanceError,
+)
 
 
 __all__ = [
@@ -63,6 +68,7 @@ class ToolExecutor:
         registry: ToolRegistry | None = None,
         policy: ToolPolicy | None = None,
         sandbox: ToolSandbox | None = None,
+        governance_adapter: GovernanceAdapter | None = None,
     ) -> None:
         # IMPORTANT:
         # Use explicit None checks rather than ``or``.
@@ -90,6 +96,8 @@ class ToolExecutor:
                 policy=self._policy
             )
         )
+
+        self._governance_adapter = governance_adapter
 
         # --------------------------------------------------
         # Execution statistics
@@ -221,6 +229,8 @@ class ToolExecutor:
     def execute_tool(
         self,
         tool: Any,
+        *,
+        governance_context: GovernanceContext | None = None,
         **kwargs: Any,
     ) -> ToolResult:
         """
@@ -232,6 +242,18 @@ class ToolExecutor:
         self._executions += 1
 
         try:
+            if governance_context is not None:
+                if self._governance_adapter is None:
+                    raise GovernanceError(
+                        "GovernanceContext provided but no "
+                        "GovernanceAdapter is configured"
+                    )
+
+                self._governance_adapter.authorize(
+                    governance_context,
+                    tool,
+                )
+
             result = self._sandbox.execute(
                 tool,
                 **kwargs,
