@@ -93,7 +93,8 @@ dev = [
     "black>=25.0",
     "mypy>=1.16",
     "pre-commit>=4.0",
-    "bandit>=1.9,<2.0"
+    "bandit>=1.9,<2.0",
+    "httpx2>=2.13.1"
 ]
 
 docs = [
