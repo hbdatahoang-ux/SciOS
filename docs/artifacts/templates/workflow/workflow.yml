@@ -1,0 +1,74 @@
+# ============================================================
+# SciOS Workflow Definition Template
+# ============================================================
+
+WorkflowID: WF-XXXX
+
+Title: 
+
+Version: v0.1
+
+Status: Draft
+
+Author: 
+
+Created: YYYY-MM-DD
+
+LastUpdated: YYYY-MM-DD
+
+Description: >
+  Short description of the workflow, its purpose, and context.
+
+Purpose: >
+  Why this workflow exists and what it demonstrates.
+
+Steps:
+  - StepID: 1
+    Name: Data Preparation
+    Input: DATA-XXXX
+    Output: Cleaned dataset
+    Description: >
+      Load raw dataset, clean missing values, normalize features.
+    Dependencies: []
+
+  - StepID: 2
+    Name: Experiment Execution
+    Input: Cleaned dataset
+    Output: EXP-XXXX
+    Description: >
+      Run experiment protocol using prepared dataset.
+    Dependencies: [DATA-XXXX]
+
+  - StepID: 3
+    Name: Model Training
+    Input: EXP-XXXX
+    Output: MODEL-XXXX
+    Description: >
+      Train model based on experiment results.
+    Dependencies: [EXP-XXXX]
+
+  - StepID: 4
+    Name: Benchmark Evaluation
+    Input: MODEL-XXXX
+    Output: BENCH-XXXX
+    Description: >
+      Evaluate model performance using benchmark protocol.
+    Dependencies: [MODEL-XXXX]
+
+ArtifactsLinked:
+  Datasets: [DATA-XXXX]
+  Experiments: [EXP-XXXX]
+  Models: [MODEL-XXXX]
+  Benchmarks: [BENCH-XXXX]
+  Figures: []
+  Tables: []
+  Equations: []
+  Supplementary: []
+
+Notes: >
+  Any additional notes or comments about workflow execution.
+
+RevisionHistory:
+  - Version: v0.1
+    Date: YYYY-MM-DD
+    Changes: Initial draft

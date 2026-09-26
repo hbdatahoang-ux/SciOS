@@ -1,0 +1,61 @@
+# ============================================================
+# SciOS Dataset Schema Template
+# ============================================================
+
+# Schema version
+SchemaVersion: 1.0
+
+# Required metadata fields
+MetadataFields:
+  - ID: string   # Must follow naming convention (DATA-XXXX)
+  - Title: string
+  - Paper: string
+  - Section: string
+  - Version: string   # Semantic versioning (MAJOR.MINOR.PATCH)
+  - Status: string    # Draft, Review, Approved, Published, Archived
+  - Author: string
+  - Created: date
+  - LastUpdated: date
+  - Caption: string   # Path to caption.md
+  - Files:
+      Data: string    # dataset.csv
+      Source: string  # source.xlsx (optional)
+
+# Optional metadata fields
+OptionalFields:
+  - Reviewer: string
+  - ApprovedBy: string
+  - Keywords: list
+  - Dependencies: map
+  - RelatedSections: list
+  - License: string
+  - DOI: string
+  - Notes: string
+
+# Dataset file schema
+DatasetFile:
+  Format: csv
+  Requirements:
+    - Must include header row
+    - Columns must be named consistently
+    - No empty rows
+    - UTF-8 encoding
+    - Values must match declared types
+
+# Column type definitions (example)
+ColumnTypes:
+  - Column: SampleID
+    Type: string
+  - Column: Value
+    Type: float
+  - Column: Timestamp
+    Type: datetime
+
+# Validation rules
+Validation:
+  - Metadata must include all required fields
+  - Registry entry must match metadata
+  - Dataset file must conform to schema
+  - No duplicate IDs
+  - Lifecycle state must be valid
+  - Dependencies must reference valid artifact IDs

@@ -1,0 +1,54 @@
+# ============================================================
+# SciOS Table Metadata Template
+# ============================================================
+
+ID: T-XXXX
+
+Title: 
+
+Paper: SciOS
+
+Section: 
+
+Version: v0.1
+
+Status: Draft
+
+Author: 
+
+Created: YYYY-MM-DD
+
+LastUpdated: YYYY-MM-DD
+
+Reviewer: 
+
+ApprovedBy: 
+
+Keywords: []
+
+Description: >
+  Short description of the table, its purpose, and context.
+
+Purpose: >
+  Why this table exists and what it demonstrates.
+
+Caption: caption.md
+
+Files:
+  Data: table.csv
+  Source: source.xlsx
+
+Dependencies:
+  Figures: []
+  Equations: []
+  Datasets: []
+  Supplementary: []
+
+RelatedSections: []
+
+License: CC-BY-4.0
+
+DOI: 
+
+Notes: >
+  Any additional notes or comments.

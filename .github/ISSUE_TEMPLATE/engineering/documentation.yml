@@ -1,0 +1,97 @@
+name: 📚 Documentation Report
+description: Report an issue or propose an improvement to SciOS-NG documentation
+title: "[Docs]: "
+labels:
+  - documentation
+  - enhancement
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Documentation Report
+
+        Cảm ơn bạn đã đóng góp!  
+        Vui lòng điền thông tin dưới đây để chúng tôi có thể cải thiện tài liệu.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the documentation issue or improvement.
+      placeholder: "Typo in pipeline tutorial..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Detailed Description
+      description: Explain the documentation problem or improvement idea.
+      placeholder: |
+        - Current docs: ...
+        - Issue: ...
+        - Suggested fix: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Documentation Scope
+      description: Select the area affected.
+      options:
+        - README
+        - Tutorials
+        - API Reference
+        - Architecture Docs
+        - Benchmarks
+        - Research
+        - Developer Guide
+        - Governance
+        - Other
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples / References
+      description: Provide examples, links, or references to clarify.
+      placeholder: |
+        - Example: ...
+        - Reference: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: benefits
+    attributes:
+      label: Expected Benefits
+      description: What benefits will this improvement bring?
+      placeholder: |
+        - Easier onboarding
+        - Clearer API usage
+        - Better reproducibility
+
+# --------------------------------------------------
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked that this documentation issue is not already reported.
+          required: true
+        - label: I have described the problem and suggested improvement clearly.
+          required: true
+        - label: I have provided examples or references if applicable.

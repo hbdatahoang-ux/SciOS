@@ -1,0 +1,3 @@
+"""
+SciOS pytest configuration.
+"""

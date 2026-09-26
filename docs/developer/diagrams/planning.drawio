@@ -1,0 +1,309 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |        Reasoning Engine              |
+                    +------------------+-------------------+
+                                       |
+                                  Hypothesis
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |        Planning Engine               |
+                    +--------------------------------------+
+                    | Goal Manager                         |
+                    | Task Planner                         |
+                    | Dependency Resolver                  |
+                    | Plan Optimizer                       |
+                    | Validator                            |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                                Execution Plan
+                                       |
+                                       v
+                                   Tool Use
+Planning Pipeline
+Hypothesis
+
+↓
+
+Goal Analysis
+
+↓
+
+Task Decomposition
+
+↓
+
+Dependency Resolution
+
+↓
+
+Plan Optimization
+
+↓
+
+Validation
+
+↓
+
+Execution Plan
+
+↓
+
+Tool Use
+Internal Components
+                +------------------------------+
+                |       Planning Engine        |
+                +------------------------------+
+                | Goal Manager                |
+                | Planner                     |
+                | Task Graph                  |
+                | Optimizer                   |
+                | Validator                   |
+                | Plan Serializer             |
+                +------------------------------+
+Goal Decomposition
+Goal
+
+↓
+
+Planner
+
+↓
+
+Sub-goal 1
+
+Sub-goal 2
+
+Sub-goal 3
+
+↓
+
+Task Graph
+
+Một mục tiêu lớn được chia thành các mục tiêu nhỏ có thể thực hiện độc lập hoặc theo thứ tự.
+
+Task Graph
+              Goal
+                |
+        +-------+-------+
+        |               |
+        v               v
+    Task A         Task B
+        |               |
+        +-------+-------+
+                |
+                v
+            Task C
+                |
+                v
+            Final Task
+
+Task Graph là biểu diễn DAG của kế hoạch thực thi.
+
+Dependency Resolution
+Task A
+
+↓
+
+Task B
+
+↓
+
+Task C
+
+Hoặc với các nhánh song song:
+
+          Task A
+             |
+      +------+------+
+      |             |
+      v             v
+  Task B       Task C
+      |             |
+      +------+------+
+             |
+             v
+         Task D
+
+Planning xác định các phụ thuộc giữa các nhiệm vụ để Runtime có thể lập lịch phù hợp.
+
+Plan Optimization
+Execution Plan
+
+↓
+
+Cost Estimation
+
+↓
+
+Resource Allocation
+
+↓
+
+Optimization
+
+↓
+
+Optimized Plan
+
+Các tiêu chí tối ưu có thể bao gồm:
+
+thời gian
+tài nguyên
+độ tin cậy
+chi phí
+năng lượng
+Validation
+Execution Plan
+
+↓
+
+Constraint Checker
+
+↓
+
+Valid?
+
+↓
+
+Yes
+
+↓
+
+Tool Use
+
+Nếu không hợp lệ:
+
+Execution Plan
+
+↓
+
+Validation Failed
+
+↓
+
+Re-plan
+Planning Flow
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+Planning Lifecycle
+Receive Goal
+
+↓
+
+Analyze
+
+↓
+
+Decompose
+
+↓
+
+Build Task Graph
+
+↓
+
+Optimize
+
+↓
+
+Validate
+
+↓
+
+Output Plan
+Relationship with Cognitive Core
+Memory
+      |
+      v
+Reasoning
+      |
+      v
+Planning
+      |
+      v
+Tool Use
+      |
+      v
+Reflection
+
+Planning là cầu nối giữa suy luận và hành động.
+
+Planning API
+PlanningEngine
+
+├── plan()
+
+├── analyze_goal()
+
+├── decompose()
+
+├── build_graph()
+
+├── optimize()
+
+├── validate()
+
+├── serialize()
+
+└── replan()
+Suggested Colors
+Component	Color
+Planning Engine	Yellow
+Goal Manager	Blue
+Task Graph	Green
+Optimizer	Orange
+Validator	Purple
+Execution Plan	Cyan
+Footer
+SciOS Developer Handbook
+
+Planning Architecture
+
+Version: v0.2
+
+Phase 8 — Cognitive Core
+Vai trò trong kiến trúc SciOS
+
+Planning đóng vai trò chuyển đổi ý định thành kế hoạch thực thi và liên kết với các sơ đồ khác:
+
+perception.drawio
+        │
+        ▼
+memory.drawio
+        │
+        ▼
+reasoning.drawio
+        │
+        ▼
+planning.drawio
+        │
+        ▼
+tool_use.drawio
+        │
+        ▼
+reflection.drawio
+        │
+        ▼
+artifact_manager.drawio
+
+Trong chuỗi này:
+
+Reasoning sinh ra giả thuyết và mục tiêu.
+Planning chuyển mục tiêu thành một Execution Plan có cấu trúc.
+Tool Use thực thi kế hoạch thông qua các công cụ và dịch vụ.
+Reflection đánh giá kết quả và có thể yêu cầu re-planning nếu mục tiêu chưa đạt.
+
+Điểm đáng chú ý của thiết kế này là Planning không phụ thuộc vào công cụ thực thi cụ thể. Nó chỉ tạo và tối ưu hóa kế hoạch, trong khi Tool Use quyết định cách thực hiện. Điều này giúp SciOS dễ dàng mở rộng sang các môi trường thực thi khác nhau (cục bộ, phân tán, robot, mô phỏng khoa học hoặc đa tác tử) mà không cần thay đổi kiến trúc của Planning.

@@ -1,0 +1,39 @@
+# CODEOWNERS file for SciOS-NG
+# This file assigns ownership of different parts of the repository.
+# Owners are automatically requested for review when changes are made.
+
+# Default owners
+*       @SciOS-NG/core-team
+
+# Engineering templates
+.github/ISSUE_TEMPLATE/engineering/*   @SciOS-NG/engineering-team
+
+# Architecture templates
+.github/ISSUE_TEMPLATE/architecture/*  @SciOS-NG/architecture-team
+
+# Research templates
+.github/ISSUE_TEMPLATE/research/*      @SciOS-NG/research-team
+
+# Workflows
+.github/workflows/*                    @SciOS-NG/devops-team
+
+# Documentation
+docs/*                                 @SciOS-NG/docs-team
+
+# Kernel and runtime
+src/kernel/*                           @SciOS-NG/kernel-team
+src/runtime/*                          @SciOS-NG/runtime-team
+
+# Planner, memory, reflection
+src/planner/*                          @SciOS-NG/reasoning-team
+src/memory/*                           @SciOS-NG/memory-team
+src/reflection/*                       @SciOS-NG/research-team
+
+# Tool use
+src/tools/*                            @SciOS-NG/tooling-team
+
+# Benchmarks
+benchmarks/*                           @SciOS-NG/research-team
+
+# Security
+security/*                             @SciOS-NG/security-team

@@ -1,0 +1,275 @@
+Overall UML Class Diagram
+                          +----------------------+
+                          |        SciOS         |
+                          +----------------------+
+                          | +boot()             |
+                          | +run()              |
+                          | +shutdown()         |
+                          +----------+----------+
+                                     |
+                                     |
+                                     v
+                          +----------------------+
+                          |       Kernel         |
+                          +----------------------+
+                          | bootstrap            |
+                          | runtime              |
+                          | builder              |
+                          | registry             |
+                          +----------+-----------+
+                                     |
+         +--------------+------------+-------------+--------------+
+         |              |                          |              |
+         v              v                          v              v
++----------------+ +---------------+      +----------------+ +----------------+
+| Bootstrap      | | KernelRuntime |      | PipelineBuilder| | ServiceRegistry|
++----------------+ +---------------+      +----------------+ +----------------+
+Kernel Layer
+                   +----------------------+
+                   |       Kernel         |
+                   +----------------------+
+                   | +boot()              |
+                   | +shutdown()          |
+                   | +status()            |
+                   +----------+-----------+
+                              |
+        +---------------------+----------------------+
+        |                     |                      |
+        v                     v                      v
+  KernelRuntime         EventBus              Scheduler
+Runtime Layer
+                  +----------------------+
+                  |    KernelRuntime     |
+                  +----------------------+
+                  | scheduler            |
+                  | worker_pool          |
+                  +----------+-----------+
+                             |
+          +------------------+------------------+
+          |                  |                  |
+          v                  v                  v
+   RuntimeLoop      RuntimeExecutor     RuntimeWorker
+Pipeline Layer
+                    +----------------------+
+                    |  PipelineBuilder     |
+                    +----------------------+
+                    | +build()             |
+                    +----------+-----------+
+                               |
+                               v
+                    +----------------------+
+                    | CognitivePipeline    |
+                    +----------------------+
+                    | +run()               |
+                    | +add_stage()         |
+                    | +remove_stage()      |
+                    +----------+-----------+
+                               |
+                    +----------+-----------+
+                    |                      |
+                    v                      v
+                  Stage                ExecutionGraph
+Stage Hierarchy
+                      +----------------------+
+                      |       Stage          |
+                      +----------------------+
+                      | name                 |
+                      | handler              |
+                      +----------+-----------+
+                                 |
+     +-----------+----------+----------+----------+-----------+
+     |           |          |          |           |           |
+     v           v          v          v           v           v
+Perception   Memory   Reasoning   Planning   ToolUse   Reflection
+
+Stage là lớp generic; các module nhận thức là handler hoặc triển khai giao diện chung.
+
+Cognitive Modules
+                +----------------------+
+                | CognitivePipeline    |
+                +----------+-----------+
+                           |
+      +--------------------+----------------------+
+      |                    |                      |
+      v                    v                      v
+ Perception          MemoryManager        ReasoningEngine
+                                             |
+                                             v
+                                         Planner
+                                             |
+                                             v
+                                       ToolExecutor
+                                             |
+                                             v
+                                     ReflectionEngine
+Infrastructure Layer
+              +----------------------+
+              | ServiceRegistry      |
+              +----------------------+
+
+              +----------------------+
+              | EventBus             |
+              +----------------------+
+
+              +----------------------+
+              | Configuration        |
+              +----------------------+
+
+              +----------------------+
+              | ContextManager       |
+              +----------------------+
+Artifact Layer
+             +----------------------+
+             | ArtifactManager      |
+             +----------------------+
+             | save()               |
+             | load()               |
+             | export()             |
+             +----------------------+
+
+ArtifactManager được sử dụng chủ yếu bởi Reflection.
+
+Main Relationships
+SciOS
+    |
+    v
+Kernel
+    |
+    +--------> Bootstrap
+    |
+    +--------> KernelRuntime
+    |
+    +--------> PipelineBuilder
+                    |
+                    v
+            CognitivePipeline
+                    |
+                 contains
+                    |
+                    v
+                 Stage
+                    |
+             executes handler
+                    |
+                    v
+Perception → Memory → Reasoning → Planning → ToolUse → Reflection
+Composition Relationships
+Kernel
+
+◆── Bootstrap
+
+◆── KernelRuntime
+
+◆── PipelineBuilder
+
+◆── ServiceRegistry
+
+◆── EventBus
+
+Sử dụng Composition vì các đối tượng này có vòng đời gắn với Kernel.
+
+Aggregation Relationships
+CognitivePipeline
+
+◇── Stage
+
+Pipeline chứa nhiều Stage nhưng có thể thay đổi thành phần trong quá trình cấu hình.
+
+Dependency Relationships
+Planning
+
+-------> ToolExecutor
+
+Reflection
+
+-------> Memory
+
+Reflection
+
+-------> ArtifactManager
+
+Reasoning
+
+-------> Memory
+
+Reasoning
+
+-------> Context
+
+Các mũi tên nét đứt biểu thị quan hệ phụ thuộc (dependency).
+
+Package View
+SciOS
+
+├── api
+
+├── kernel
+
+├── cognitive_core
+
+│      ├── perception
+
+│      ├── memory
+
+│      ├── reasoning
+
+│      ├── planning
+
+│      ├── tool_use
+
+│      └── reflection
+
+├── runtime
+
+├── agents
+
+└── artifacts
+UML Legend
+Symbol	Meaning
+◆	Composition
+◇	Aggregation
+───▶	Association
+- - -▶	Dependency
+△	Inheritance
+Suggested Colors
+Layer	Color
+API	Gray
+Kernel	Blue
+Runtime	Orange
+Pipeline	Green
+Cognitive Modules	Cyan
+Infrastructure	Purple
+Artifact	Brown
+Footer
+SciOS Developer Handbook
+
+Core Class Diagram
+
+Version: v0.2
+
+Phase 8 — System Architecture
+Vai trò trong bộ sơ đồ
+
+class_diagram.drawio là sơ đồ UML tĩnh (Static Structure), đóng vai trò bản đồ tổng thể của toàn bộ mã nguồn SciOS.
+
+package_diagram.drawio
+          │
+          ▼
+class_diagram.drawio
+          │
+          ▼
+kernel.drawio
+          │
+          ▼
+runtime.drawio
+          │
+          ▼
+pipeline.drawio
+          │
+          ▼
+runtime_sequence.drawio
+Mục tiêu của sơ đồ
+Thể hiện các lớp lõi và mối quan hệ giữa chúng.
+Là tài liệu tham chiếu khi mở rộng hoặc tái cấu trúc hệ thống.
+Phân biệt rõ Composition, Aggregation và Dependency theo chuẩn UML.
+Là nền tảng để đồng bộ với package_diagram.drawio, giúp người phát triển hiểu cả cấu trúc package và cấu trúc lớp của SciOS. Điều này đặc biệt hữu ích khi dự án phát triển lên nhiều module hoặc có nhiều nhóm cùng tham gia phát triển.

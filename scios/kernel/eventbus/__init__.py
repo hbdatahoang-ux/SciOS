@@ -2,19 +2,66 @@
 SciOS Kernel EventBus
 =====================
 
-Public exports for the Kernel EventBus subsystem.
+Event-driven messaging infrastructure for the SciOS Kernel.
 
-The EventBus provides a lightweight publish/subscribe
-communication mechanism for decoupling Kernel components.
+This package provides:
 
-Public API
-----------
-EventBus
-    Kernel publish/subscribe event bus.
+- EventBus
+- Event
+- Publisher
+- Subscriber
+- EventHandler
+- EventMiddleware
+- EventFilter
+- Event topics
 """
+
+from __future__ import annotations
+
+# ==========================================================
+# Core
+# ==========================================================
 
 from .bus import EventBus
 
+from .event import Event
+
+# ==========================================================
+# Interfaces
+# ==========================================================
+
+from .publisher import Publisher
+
+from .subscriber import Subscriber
+
+from .handler import EventHandler
+
+from .middleware import EventMiddleware
+
+from .filters import EventFilter
+
+# ==========================================================
+# Topics
+# ==========================================================
+
+from .topics import *
+
+# ==========================================================
+# Version
+# ==========================================================
+
+__version__ = "0.3.0-alpha"
+
+# ==========================================================
+# Public API
+# ==========================================================
+
 __all__ = [
     "EventBus",
+    "Event",
+    "Publisher",
+    "Subscriber",
+    "EventHandler",
+    "EventMiddleware",
+    "EventFilter",
 ]

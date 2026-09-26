@@ -1,0 +1,5 @@
+ID,Title,Description,File,Section,Status
+F-0001,Kernel Architecture,Schematic of SciOS kernel modules,F-0001.png,Architecture,Final
+F-0002,Runtime Workflow,Diagram of reproducible runtime workflow,F-0002.png,Methods,Draft
+F-0003,Artifact Registry Flow,Visualization of artifact registration and traceability,F-0003.svg,Supplementary,Planned
+F-0004,Benchmark Results,Graph showing reproducible execution benchmarks,F-0004.png,Results,In Progress

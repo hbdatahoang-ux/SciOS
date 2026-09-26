@@ -1,0 +1,121 @@
+name: 🛠️ Design Change
+description: Propose a minor design change or improvement to SciOS-NG architecture.
+title: "[Design Change]: "
+labels:
+  - architecture
+  - design
+  - discussion
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Design Change Proposal
+
+        Đây là template dành cho **Design Change**.  
+        Khác với RFC lớn, Design Change tập trung vào các thay đổi nhỏ, cải tiến hẹp hoặc tinh chỉnh kiến trúc.  
+        Vui lòng điền đầy đủ thông tin để đảm bảo minh bạch và dễ thảo luận.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the design change.
+      placeholder: "Refactor pipeline dispatcher for clarity..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this design change necessary?
+      placeholder: |
+        - Current limitation: ...
+        - Why important: ...
+        - Expected improvement: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: proposed_change
+    attributes:
+      label: Proposed Change
+      description: Explain the design change in detail.
+      render: markdown
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Which modules are affected and how?
+      placeholder: |
+        - Kernel
+        - Pipeline
+        - Memory
+        - Planner
+        - Tool Use
+        - Reflection
+        - Runtime
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Breaking Changes
+      description: Does this change break compatibility?
+      options:
+        - None
+        - Minor
+        - Major
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration Strategy
+      description: Migration plan if needed.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: Technical risks and mitigations.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Papers, RFCs, ADRs, external projects.
+
+# --------------------------------------------------
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: Existing design reviewed
+        - label: Alternatives considered
+        - label: No duplicate proposal
+        - label: Backward compatibility evaluated
+        - label: Documentation planned

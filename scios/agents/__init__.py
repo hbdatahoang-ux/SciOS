@@ -13,15 +13,15 @@ Public API
 BaseAgent
     Abstract base class for all cognitive agents.
 
-AgentExecutor
     Cognitive execution orchestrator coordinating the
     reasoning pipeline.
 """
 
-from .base import BaseAgent
-from .executor import AgentExecutor
+from .base import Agent, BaseAgent
+from .adapters.runtime import RuntimeAgentAdapter
 
 __all__ = [
+    "Agent",
     "BaseAgent",
-    "AgentExecutor",
+    "RuntimeAgentAdapter",
 ]

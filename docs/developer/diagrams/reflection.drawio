@@ -1,0 +1,351 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |        Tool Use Framework            |
+                    +------------------+-------------------+
+                                       |
+                              Execution Result
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |        Reflection Engine             |
+                    +--------------------------------------+
+                    | Evaluator                           |
+                    | Critic                              |
+                    | Confidence Analyzer                 |
+                    | Learning Decision                   |
+                    | Feedback Generator                  |
+                    +------------------+-------------------+
+                                       |
+                     +-----------------+------------------+
+                     |                                    |
+                     v                                    v
+              Long-term Memory                  Artifact Manager
+Reflection Pipeline
+Execution Result
+
+↓
+
+Evaluate
+
+↓
+
+Analyze
+
+↓
+
+Detect Errors
+
+↓
+
+Generate Feedback
+
+↓
+
+Learning Decision
+
+↓
+
+Memory Update
+
+↓
+
+Artifacts
+Internal Components
+                +--------------------------------+
+                |      Reflection Engine         |
+                +--------------------------------+
+                | Evaluator                     |
+                | Critic                        |
+                | Confidence Analyzer           |
+                | Feedback Generator            |
+                | Learning Manager              |
+                | Artifact Exporter             |
+                +--------------------------------+
+Evaluation Flow
+Execution Result
+
+↓
+
+Expected Goal
+
+↓
+
+Comparison
+
+↓
+
+Evaluation Score
+
+↓
+
+Reflection Report
+
+Reflection đo lường mức độ đạt được của mục tiêu ban đầu.
+
+Error Analysis
+Reflection Report
+
+↓
+
+Failure Detection
+
+↓
+
+Root Cause Analysis
+
+↓
+
+Correction Suggestion
+
+Nếu phát hiện lỗi, Reflection tạo thông tin để Planning hoặc Reasoning có thể thực hiện lại.
+
+Confidence Analysis
+Evidence
+
+↓
+
+Consistency Check
+
+↓
+
+Confidence Estimation
+
+↓
+
+Confidence Score
+
+Điểm tin cậy được sử dụng để quyết định:
+
+chấp nhận kết quả,
+yêu cầu suy luận lại,
+hoặc lập kế hoạch mới.
+Learning Decision
+Reflection Report
+
+↓
+
+Learning Policy
+
+↓
+
+Should Learn?
+
+↓
+
+Yes
+
+↓
+
+Memory Update
+
+Nếu không:
+
+Reflection Report
+
+↓
+
+Discard
+
+Reflection quyết định điều gì nên được ghi vào bộ nhớ dài hạn.
+
+Feedback Loop
+Reflection
+
+↓
+
+Feedback
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+Đây là vòng lặp tự cải thiện (Self-Improvement Loop).
+
+Artifact Generation
+Reflection Report
+
+↓
+
+Metadata
+
+↓
+
+Evaluation Metrics
+
+↓
+
+Artifact Manager
+
+Các artifact có thể bao gồm:
+
+reasoning trace
+execution log
+benchmark
+experiment report
+evaluation report
+provenance metadata
+Reflection Lifecycle
+Receive Result
+
+↓
+
+Evaluate
+
+↓
+
+Analyze
+
+↓
+
+Generate Feedback
+
+↓
+
+Decide Learning
+
+↓
+
+Update Memory
+
+↓
+
+Store Artifact
+Relationship with Cognitive Core
+Perception
+      |
+      v
+Memory
+      |
+      v
+Reasoning
+      |
+      v
+Planning
+      |
+      v
+Tool Use
+      |
+      v
+Reflection
+      |
+      +------------+
+      |            |
+      v            v
+Memory     Artifact Manager
+
+Reflection là thành phần duy nhất có khả năng cập nhật cả bộ nhớ và kho artifact.
+
+Reflection API
+ReflectionEngine
+
+├── evaluate()
+
+├── analyze()
+
+├── critique()
+
+├── estimate_confidence()
+
+├── generate_feedback()
+
+├── learn()
+
+├── export_artifact()
+
+└── reflect()
+Complete Cognitive Loop
+           External World
+                  |
+                  v
+             Perception
+                  |
+                  v
+               Memory
+                  |
+                  v
+             Reasoning
+                  |
+                  v
+              Planning
+                  |
+                  v
+              Tool Use
+                  |
+                  v
+             Reflection
+             /          \
+            /            \
+           v              v
+       Memory      Artifact Manager
+           |
+           +--------------+
+                          |
+                          v
+                  Next Cognitive Cycle
+
+Đây là vòng lặp nhận thức đầy đủ của SciOS.
+
+Suggested Colors
+Component	Color
+Reflection Engine	Purple
+Evaluator	Blue
+Critic	Orange
+Confidence Analyzer	Green
+Learning Manager	Cyan
+Artifact Manager	Gray
+Footer
+SciOS Developer Handbook
+
+Reflection Architecture
+
+Version: v0.2
+
+Phase 8 — Cognitive Core
+Vai trò trong kiến trúc SciOS
+
+Reflection là lớp Meta-Cognition và là điểm kết thúc của chu trình nhận thức, đồng thời khởi đầu cho chu trình tiếp theo.
+
+perception.drawio
+        │
+        ▼
+memory.drawio
+        │
+        ▼
+reasoning.drawio
+        │
+        ▼
+planning.drawio
+        │
+        ▼
+tool_use.drawio
+        │
+        ▼
+reflection.drawio
+        │
+        ├────────► artifact_manager.drawio
+        │
+        ├────────► memory.drawio
+        │
+        ├────────► reasoning.drawio (re-reason)
+        │
+        └────────► planning.drawio (re-plan)
+Vai trò của Reflection
+Đánh giá chất lượng: So sánh kết quả thực thi với mục tiêu ban đầu và tính toán các chỉ số đánh giá.
+Phân tích nguyên nhân: Xác định lỗi, điểm yếu hoặc sự không nhất quán trong quá trình nhận thức.
+Tạo phản hồi: Sinh phản hồi để hỗ trợ suy luận lại (re-reasoning) hoặc lập kế hoạch lại (re-planning) khi cần.
+Quản lý học hỏi: Quyết định thông tin nào đủ tin cậy để lưu vào Long-term Memory.
+Lưu trữ tri thức: Ghi lại reasoning trace, execution log và evaluation report vào Artifact Manager nhằm phục vụ khả năng giải thích (Explainability), tái lập (Reproducibility) và kiểm toán (Auditability).
+
+Với thiết kế này, Reflection không chỉ là bước kết thúc của pipeline mà còn là bộ điều khiển vòng lặp tự cải thiện (Self-Improving Cognitive Loop), giúp SciOS liên tục nâng cao chất lượng suy luận và hành động qua mỗi chu kỳ nhận thức. Điều này tạo nền tảng cho các phiên bản tương lai hỗ trợ học tập liên tục (Continual Learning), tối ưu hóa chiến lược và phối hợp đa tác tử mà vẫn giữ được kiến trúc mô-đun, dễ mở rộng và có khả năng kiểm chứng.

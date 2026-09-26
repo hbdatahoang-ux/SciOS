@@ -1,0 +1,339 @@
+Overall Package Diagram
+                           +----------------------+
+                           |         api          |
+                           +----------+-----------+
+                                      |
+                                      v
+                           +----------------------+
+                           |       kernel         |
+                           +----------+-----------+
+                                      |
+          +---------------------------+---------------------------+
+          |                           |                           |
+          v                           v                           v
+ +------------------+       +------------------+        +------------------+
+ |  cognitive_core  |       |     runtime      |        | infrastructure   |
+ +------------------+       +------------------+        +------------------+
+          |                           |                           |
+          +-------------+-------------+-------------+-------------+
+                        |                           |
+                        v                           v
+                 +------------------+      +------------------+
+                 |      agents      |      |    artifacts     |
+                 +------------------+      +------------------+
+Root Package
+SciOS
+
+├── api
+├── kernel
+├── cognitive_core
+├── runtime
+├── infrastructure
+├── agents
+├── artifacts
+├── interfaces
+├── domains
+├── shared
+├── utils
+└── tests
+
+Đây là các package cấp cao của hệ thống.
+
+Kernel Dependencies
+kernel
+
+│
+
+├────► runtime
+
+├────► infrastructure
+
+├────► cognitive_core
+
+└────► shared
+
+Kernel điều phối nhưng không triển khai trực tiếp các chức năng nhận thức.
+
+Cognitive Core Packages
+cognitive_core
+
+├── perception
+
+├── memory
+
+├── reasoning
+
+├── planning
+
+├── tool_use
+
+├── reflection
+
+└── pipeline
+
+Các package này hợp thành Cognitive Pipeline.
+
+Runtime Packages
+runtime
+
+├── runtime
+
+├── loop
+
+├── executor
+
+├── worker
+
+└── scheduler
+
+Runtime quản lý vòng đời thực thi của các tác vụ.
+
+Infrastructure Packages
+infrastructure
+
+├── configuration
+
+├── event_bus
+
+├── service_registry
+
+├── dispatcher
+
+├── logging
+
+└── monitoring
+
+Đây là các dịch vụ hạ tầng dùng chung.
+
+Artifact Packages
+artifacts
+
+├── manager
+
+├── storage
+
+├── exporters
+
+├── metadata
+
+└── serializers
+
+Reflection chủ yếu tương tác với package này.
+
+Agents Package
+agents
+
+├── executor
+
+├── base
+
+├── policy
+
+├── memory_adapter
+
+└── plugins
+
+Agent là lớp thực thi các tác vụ nhận thức.
+
+Interfaces Package
+interfaces
+
+├── contracts
+
+├── protocols
+
+├── abstractions
+
+└── adapters
+
+Đây là nơi định nghĩa các interface và protocol để giảm coupling.
+
+Shared Package
+shared
+
+├── types
+
+├── constants
+
+├── exceptions
+
+├── utilities
+
+└── models
+
+Shared không phụ thuộc vào các package nghiệp vụ.
+
+Dependency Rules
+api
+ │
+ ▼
+kernel
+ │
+ ▼
+runtime
+ │
+ ▼
+cognitive_core
+ │
+ ▼
+agents
+ │
+ ▼
+artifacts
+
+Các package hạ tầng (infrastructure, shared, interfaces) có thể được sử dụng bởi nhiều tầng nhưng không được phụ thuộc ngược lên các tầng nghiệp vụ.
+
+Allowed Dependencies
+api
+
+↓
+
+kernel
+
+↓
+
+runtime
+
+↓
+
+pipeline
+
+↓
+
+cognitive_core
+
+↓
+
+agents
+
+↓
+
+artifacts
+Forbidden Dependencies
+memory
+
+×
+
+imports kernel
+
+planning
+
+×
+
+imports api
+
+reflection
+
+×
+
+imports runtime internals
+
+Các quy tắc này giúp tránh phụ thuộc vòng (circular dependencies).
+
+Package Relationships
+api
+
+────► kernel
+
+kernel
+
+────► runtime
+
+kernel
+
+────► cognitive_core
+
+cognitive_core
+
+────► artifacts
+
+runtime
+
+────► infrastructure
+
+agents
+
+────► cognitive_core
+
+reflection
+
+────► artifacts
+Layered Architecture
++--------------------------------------+
+|              API Layer               |
++--------------------------------------+
+
++--------------------------------------+
+|            Kernel Layer              |
++--------------------------------------+
+
++--------------------------------------+
+|           Runtime Layer              |
++--------------------------------------+
+
++--------------------------------------+
+|        Cognitive Core Layer          |
++--------------------------------------+
+
++--------------------------------------+
+|        Infrastructure Layer          |
++--------------------------------------+
+
++--------------------------------------+
+|      Shared / Utilities Layer        |
++--------------------------------------+
+Package Legend
+Symbol	Meaning
+───▶	Package Dependency
+📦	Package
+Layer	Logical grouping
+Suggested Colors
+Package	Color
+API	Gray
+Kernel	Blue
+Runtime	Orange
+Cognitive Core	Green
+Infrastructure	Purple
+Agents	Cyan
+Artifacts	Brown
+Shared	Yellow
+Footer
+SciOS Developer Handbook
+
+Package Diagram
+
+Version: v0.2
+
+Phase 8 — System Architecture
+Vai trò trong kiến trúc SciOS
+
+package_diagram.drawio là sơ đồ kiến trúc mô-đun (Module Architecture), giúp xác định ranh giới giữa các package và các quy tắc phụ thuộc.
+
+package_diagram.drawio
+          │
+          ▼
+class_diagram.drawio
+          │
+          ▼
+kernel.drawio
+          │
+          ▼
+runtime.drawio
+          │
+          ▼
+pipeline.drawio
+Mục tiêu của sơ đồ
+Thể hiện cấu trúc package của toàn bộ dự án.
+Xác định hướng phụ thuộc hợp lệ, tránh vòng lặp import.
+Hỗ trợ quá trình tái cấu trúc và mở rộng hệ thống theo kiến trúc mô-đun.
+Là cơ sở để áp dụng các nguyên tắc như Dependency Inversion, Layered Architecture và Composition Root trong SciOS.
+Khuyến nghị cho SciOS
+
+Khi dự án phát triển lên các phiên bản tiếp theo (v0.3+), nên giữ package_diagram.drawio ở mức package cấp cao và tạo thêm các sơ đồ package chuyên biệt cho từng miền nếu cần, ví dụ:
+
+kernel_packages.drawio
+cognitive_core_packages.drawio
+runtime_packages.drawio
+infrastructure_packages.drawio
+
+Cách tổ chức này giúp sơ đồ luôn rõ ràng, dễ đọc và vẫn phản ánh chính xác kiến trúc của hệ thống khi số lượng package tăng lên.

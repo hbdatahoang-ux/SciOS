@@ -1,0 +1,47 @@
+# Metadata for SciOS submission to JOSS
+
+title: "SciOS: A Scientific Open Source Framework"
+authors:
+  - name: "Nguyen Van A"
+    affiliation: "Department of Computer Science, Hanoi University"
+    orcid: "0000-0002-1234-5678"
+  - name: "Tran Thi B"
+    affiliation: "Institute of Energy Research, Ho Chi Minh City"
+    orcid: "0000-0003-9876-5432"
+  - name: "Le Van C"
+    affiliation: "Independent Researcher"
+    orcid: "0000-0001-2468-1357"
+
+affiliations:
+  - id: 1
+    name: "Department of Computer Science, Hanoi University"
+  - id: 2
+    name: "Institute of Energy Research, Ho Chi Minh City"
+  - id: 3
+    name: "Independent Researcher"
+
+keywords:
+  - open source
+  - scientific computing
+  - reproducibility
+  - energy modeling
+  - Python framework
+
+repository: "https://github.com/scios-framework/scios"
+license: "MIT"
+version: "1.0.0"
+date_submitted: "2026-07-08"
+
+funding:
+  - agency: "Vietnam National Foundation for Science and Technology Development (NAFOSTED)"
+    grant_number: "102.06-2026.01"
+
+software_requirements:
+  - python >= 3.9
+  - numpy >= 1.25
+  - pandas >= 2.0
+  - matplotlib >= 3.8
+
+notes: |
+  This metadata file provides machine-readable information for the JOSS submission.
+  It includes author details, affiliations, keywords, repository link, license, and funding information.

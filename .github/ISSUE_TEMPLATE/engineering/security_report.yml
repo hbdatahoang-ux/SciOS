@@ -1,0 +1,82 @@
+name: 🔒 Security Report
+description: Report a security vulnerability or concern in SciOS-NG
+title: "[Security]: "
+labels:
+  - security
+  - urgent
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Security Report
+
+        ⚠️ Vui lòng sử dụng template này để báo cáo vấn đề bảo mật.  
+        Nếu phát hiện lỗ hổng nghiêm trọng, hãy cân nhắc liên hệ trực tiếp qua kênh bảo mật riêng (xem `SECURITY.md`).  
+        Điền đầy đủ thông tin để chúng tôi có thể xử lý nhanh chóng và an toàn.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the security issue.
+      placeholder: "Privilege escalation in pipeline dispatcher..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Detailed Description
+      description: Explain the vulnerability, expected behavior, and actual behavior.
+      placeholder: |
+        - Vulnerability: ...
+        - Expected: ...
+        - Actual: ...
+        - Impact: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Provide steps to reproduce the vulnerability.
+      placeholder: |
+        1. Run command ...
+        2. Configure ...
+        3. Observe security issue ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: input
+    id: version
+    attributes:
+      label: SciOS-NG Version
+      description: Version you are using (see `VERSION` or `pyproject.toml`).
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Select the environment where the issue occurs.
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Docker
+        - Cloud (Kubernetes, etc

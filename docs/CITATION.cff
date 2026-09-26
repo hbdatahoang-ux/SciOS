@@ -1,0 +1,32 @@
+# CITATION.cff
+
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Geometry-Driven Renormalization of Elastic Fluctuations in Constrained Hydrogel Microfluidics"
+abstract: >
+  Confinement fundamentally alters the elastic behavior of soft matter systems.
+  The CEIT framework introduces geometry as a renormalization field for elasticity,
+  validated by hydrogel microfluidics experiments and FRG analysis.
+authors:
+  - family-names: Bui Dinh
+    given-names: Hoang
+    orcid: "https://orcid.org/0000-0002-XXXX-XXXX"
+date-released: 2026-07-07
+version: "Draft-1.0"
+license: CC-BY-4.0
+repository-code: "https://github.com/your-org/CEIT"
+keywords:
+  - hydrogel microfluidics
+  - elastic fluctuations
+  - renormalization group
+  - geometry confinement
+  - universality
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Bui Dinh
+      given-names: Hoang
+  title: "Geometry-Driven Renormalization of Elastic Fluctuations in Constrained Hydrogel Microfluidics"
+  journal: "Nature Physics"
+  year: 2026
+  note: "Draft manuscript under development"

@@ -1,0 +1,115 @@
+name: 🐞 Bug Report
+description: Report a bug to help us improve SciOS-NG
+title: "[Bug]: "
+labels:
+  - bug
+  - triage
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Bug Report
+
+        Cảm ơn bạn đã dành thời gian báo cáo lỗi!  
+        Vui lòng điền đầy đủ thông tin để chúng tôi có thể tái hiện và xử lý nhanh chóng.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the bug.
+      placeholder: "Pipeline fails when using custom stage..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Detailed Description
+      description: Explain the bug, expected behavior, and actual behavior.
+      placeholder: |
+        - Expected: ...
+        - Actual: ...
+        - Impact: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: List the steps to reproduce the bug.
+      placeholder: |
+        1. Run command ...
+        2. Configure ...
+        3. Observe result ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: input
+    id: version
+    attributes:
+      label: SciOS-NG Version
+      description: Version you are using (see `VERSION` or `pyproject.toml`).
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Select the environment where the bug occurs.
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Docker
+        - Cloud (Kubernetes, etc.)
+        - Other
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Output
+      description: Paste relevant logs, stack trace, or output.
+      render: shell
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots / Diagrams
+      description: Add screenshots or diagrams if helpful.
+      placeholder: "Drag and drop images here"
+
+# --------------------------------------------------
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked that this bug is not already reported.
+          required: true
+        - label: I have tested with the latest version.
+          required: true
+        - label: I have provided sufficient information to reproduce the bug.
+          required: true
