@@ -1,6 +1,5 @@
-﻿# SciOS Public Trial — CSV Analysis Public API Contract v0.1
-
-**Contract ID:** public-trial-csv-api-v0.1
+# SciOS Public Trial — CSV Analysis Public API Contract v0.2.1
+**Contract ID:** public-trial-csv-api-v0.2.1
 **Status:** FROZEN
 **Authority:** Canonical Public Contract
 **Scope:** SciOS Public Trial / CSV Analysis
@@ -177,47 +176,82 @@ of the public contract.
 
 ## 7. CSV Boundary Semantics
 
-This section records boundary semantics that require explicit
-canonicalization.
+This section defines the normative public semantics proposed by the
+GS-05 contract decision.
 
-### 7.1 Outlier Boundary Rule
+### 7.1 Normative Outlier Boundary Rule
 
-The public contract does not freeze the exact inequality used at the
-lower or upper outlier boundary in this version.
+The public CSV analysis contract uses a strict IQR boundary rule.
 
-Implementation behavior is not promoted automatically into normative
-contract semantics.
+A numeric value is classified as an outlier when:
 
-**Status:** OPEN
+    value < lower_bound
+    OR
+    value > upper_bound
 
-### 7.2 Equality at Lower or Upper Bound
+A value within the inclusive interval
 
-Whether a value exactly equal to `lower_bound` or `upper_bound` is classified
-as an outlier is not frozen by this contract version.
+    lower_bound <= value <= upper_bound
 
-**Status:** OPEN
+is not classified as an outlier under this boundary rule.
 
-### 7.3 Row / Index Convention
+**Status:** FROZEN
 
-The public contract does not currently freeze whether reported row/index
-positions are zero-based or one-based.
+### 7.2 Normative Equality at Lower or Upper Bound
 
-**Status:** OPEN
+A value exactly equal to `lower_bound` is **not** an outlier.
+
+A value exactly equal to `upper_bound` is **not** an outlier.
+
+Therefore both boundary values belong to the accepted interval:
+
+    lower_bound <= value <= upper_bound
+
+Only values strictly outside that interval are classified as statistical
+outliers.
+
+**Status:** FROZEN
+
+### 7.3 Normative Row / Index Convention
+
+The public `index` field is **zero-based**.
+
+It identifies the zero-based position of the data row within the analyzed
+CSV dataset.
+
+The CSV header row is not counted as a data-row index.
+
+For example:
+
+    first data row  -> index 0
+    second data row -> index 1
+    tenth data row  -> index 9
+
+`index` is a data-row position, not a one-based spreadsheet row number and
+not a physical CSV line number.
+
+**Status:** FROZEN
 
 ### 7.4 GS-05
 
-GS-05 represents the CSV boundary-case resolution required to establish
-canonical public semantics.
+GS-05 represents the canonical boundary-case validation required to
+independently verify the normative semantics proposed in Sections 7.1
+through 7.3.
 
-Current status:
+Semantic resolution:
 
-    GS-05
-    INCONCLUSIVE — missing canonical public test artifact
+    lower boundary equality  -> NOT OUTLIER
+    upper boundary equality  -> NOT OUTLIER
+    below lower_bound        -> OUTLIER
+    above upper_bound        -> OUTLIER
+    index convention         -> ZERO-BASED DATA-ROW POSITION
 
-No implementation behavior, internal test, or validator-authored fixture is
-used here to convert GS-05 into a frozen contract result.
+The canonical GS-05 public test fixture has not yet been created.
 
-**Status:** OPEN
+Therefore the semantic decision is resolved at the contract-decision level,
+but independent black-box validation remains pending.
+
+**Status:** FROZEN — VALIDATION ARTIFACT PENDING
 
 ---
 
@@ -250,8 +284,8 @@ contract.
 Such behavior is treated as implementation evidence unless explicitly
 adopted into the canonical contract.
 
-In particular, implementation details must not be used retrospectively to
-resolve currently OPEN contract semantics.
+Implementation evidence does not retrospectively establish or override
+canonical contract semantics.
 
 ---
 
@@ -274,33 +308,32 @@ contract version.
 
 ## 11. Version and Freeze Status
 
-**Version:** v0.1
-
+**Version:** v0.2.1
 **Current status:** FROZEN
 
-This record is not yet a fully frozen semantic specification.
+The boundary semantics resolved in Sections 7.1 through 7.3 are frozen
+normative contract semantics.
 
-The following remain explicitly OPEN:
+GS-05 remains pending independent black-box validation because the canonical
+public test fixture has not yet been created.
 
-- GS-05 boundary semantics;
-- equality at `lower_bound` / `upper_bound`;
-- row/index convention;
+The following item remains explicitly OPEN:
+
 - exact trigger semantics for "Other CSV analysis failure".
 
-A subsequent contract-resolution phase is required before those OPEN items
-are promoted to frozen normative semantics.
+No validation result is retroactively changed by this contract update.
 
 ---
 
-## 12. Next Contract Phase
+## 12. Contract Lifecycle
 
-The planned sequence after creation of this record is:
+The normative lifecycle for this contract is:
 
-    Contract Record v0.1
+    Contract Record v0.2
             ↓
-    review / freeze
+    semantic review
             ↓
-    GS-05 Boundary Contract Resolution
+    boundary semantics freeze
             ↓
     canonical fixture design
             ↓
@@ -308,5 +341,7 @@ The planned sequence after creation of this record is:
             ↓
     independent black-box revalidation
 
-No validation result is retroactively changed by creation of this contract
-record.
+The v0.2.1 record preserves the distinction between frozen contract
+semantics and pending independent validation.
+
+No validation result is retroactively changed by this contract update.
