@@ -148,6 +148,61 @@ To keep architectural vision separate from demonstrated capability, SciOS uses t
 | **Planned** | The capability is part of the future architecture or roadmap and should not be interpreted as currently implemented. |
 
 SciOS therefore distinguishes its long-term research vision from capabilities that can currently be inspected, tested, and reproduced in the public repository.
+
+## New User / Quick Start
+
+SciOS is a research system for running and evaluating scientific analysis workflows.
+
+### Install
+
+1. Install Python 3.11+ and Git.
+2. Clone the repository:
+
+```powershell
+git clone https://github.com/hbdatahoang-ux/SciOS.git
+cd SciOS
+```
+
+3. Install SciOS:
+
+```powershell
+python -m pip install -e .
+```
+
+### Verify
+
+```powershell
+python -c "import scios; print('SciOS is ready')"
+```
+
+### Run
+
+```python
+from scios import SciOS
+
+os = SciOS()
+os.boot()
+result = os.run("Analyze this system")
+print(result)
+os.shutdown()
+```
+
+### Run Tests
+
+```powershell
+pytest -v
+```
+
+### Notes
+
+No OpenAI API key or external model provider is required for the basic SciOS workflow.
+
+For CSV analysis:
+
+```powershell
+python .\scios\cli\csv_analysis.py --file <CSV_FILE> --query "Analyze the CSV dataset and explain anomalous values."
+```
+
 # Features
 
 - Modular Cognitive Architecture
