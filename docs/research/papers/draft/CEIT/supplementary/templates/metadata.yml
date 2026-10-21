@@ -1,0 +1,22 @@
+# CEIT Metadata Template
+
+ID: XXXX-0001            # Unique identifier (e.g., EQ-0001, SUP-0001, AR-0001)
+Title: "Descriptive Title"
+File: "filename.ext"     # Associated file (Markdown, CSV, PDF, etc.)
+Section: "Theory"        # Section in manuscript (Theory, Methods, Results, Supplementary, Appendix)
+Paper: "CEIT"            # Related paper/project
+Version: "v0.1"          # Semantic version
+Status: "Draft"          # Lifecycle status (Draft, Reviewed, Approved, Published)
+Author: "Bui Dinh Hoang" # Creator or maintainer
+Created: "YYYY-MM-DD"    # Creation date
+Modified: "YYYY-MM-DD"   # Last modification date
+Type: "Supplementary"    # Artifact type (Equation, Table, Figure, Derivation, Method, Result, Image, Video, Appendix)
+Description: "Short description of the artifact"
+Related:
+  Tables: ["T-0001"]
+  Figures: ["F-0002"]
+  Equations: ["EQ-0001"]
+  Derivations: ["SUP-DER-0001"]
+  Methods: ["EM-0001"]
+  Results: ["AR-0001"]
+  Appendices: ["APP-0001"]

@@ -11,16 +11,20 @@ Responsibilities
 - Cache management
 - Runtime memory statistics
 - Future CPU/GPU unified allocator
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, Iterator
 import threading
 import uuid
+import copy
 
-from .tensor import SciOSTensor
+if TYPE_CHECKING:
+    from .tensor import SciOSTensor
 
 __all__ = [
     "MemoryBlock",
@@ -79,30 +83,54 @@ class MemoryManager:
         Register a tensor allocation.
         """
 
-        block_id = str(uuid.uuid4())
-
         block = MemoryBlock(
-            id=block_id,
+            id=str(uuid.uuid4()),
             tensor=tensor,
             owner=owner,
-            metadata=metadata,
+            metadata=dict(metadata),
         )
 
         with self._lock:
-            self._blocks[block_id] = block
+            self._blocks[block.id] = block
 
-        return block_id
+        return block.id
 
     def release(
         self,
         block_id: str,
-    ) -> None:
+    ) -> bool:
         """
-        Release an allocated block.
+        Release one allocation.
+
+        Returns
+        -------
+        bool
+            True if removed.
         """
 
         with self._lock:
-            self._blocks.pop(block_id, None)
+            return self._blocks.pop(block_id, None) is not None
+
+    def release_owner(
+        self,
+        owner: str,
+    ) -> int:
+        """
+        Release every allocation owned by one owner.
+        """
+
+        with self._lock:
+
+            ids = [
+                block.id
+                for block in self._blocks.values()
+                if block.owner == owner
+            ]
+
+            for block_id in ids:
+                self._blocks.pop(block_id, None)
+
+            return len(ids)
 
     # ======================================================
     # Lookup
@@ -113,14 +141,36 @@ class MemoryManager:
         block_id: str,
     ) -> MemoryBlock | None:
 
-        return self._blocks.get(block_id)
+        with self._lock:
+            return self._blocks.get(block_id)
 
     def exists(
         self,
         block_id: str,
     ) -> bool:
 
-        return block_id in self._blocks
+        with self._lock:
+            return block_id in self._blocks
+
+    def items(self) -> list[MemoryBlock]:
+
+        with self._lock:
+            return list(self._blocks.values())
+
+    def blocks(self) -> dict[str, MemoryBlock]:
+
+        with self._lock:
+            return dict(self._blocks)
+
+    def owners(self) -> set[str]:
+
+        with self._lock:
+
+            return {
+                block.owner
+                for block in self._blocks.values()
+                if block.owner is not None
+            }
 
     # ======================================================
     # Maintenance
@@ -131,6 +181,19 @@ class MemoryManager:
         with self._lock:
             self._blocks.clear()
 
+    def snapshot(self) -> dict[str, MemoryBlock]:
+
+        with self._lock:
+            return copy.deepcopy(self._blocks)
+
+    def restore(
+        self,
+        snapshot: dict[str, MemoryBlock],
+    ) -> None:
+
+        with self._lock:
+            self._blocks = copy.deepcopy(snapshot)
+
     # ======================================================
     # Statistics
     # ======================================================
@@ -138,24 +201,56 @@ class MemoryManager:
     @property
     def allocations(self) -> int:
 
-        return len(self._blocks)
+        with self._lock:
+            return len(self._blocks)
 
     def stats(self) -> dict[str, Any]:
         """
         Memory usage statistics.
         """
 
+        with self._lock:
+
+            return {
+
+                "allocations": len(self._blocks),
+
+                "owners": len(
+                    {
+                        block.owner
+                        for block in self._blocks.values()
+                        if block.owner is not None
+                    }
+                ),
+
+                "blocks": list(self._blocks),
+
+            }
+
+    def health(self) -> dict[str, Any]:
+
         return {
 
-            "allocations": len(self._blocks),
+            "status": "healthy",
 
-            "owners": len(
-                {
-                    b.owner
-                    for b in self._blocks.values()
-                    if b.owner is not None
-                }
-            ),
+            "allocations": self.allocations,
+
+            "owners": len(self.owners()),
+
+        }
+
+    def api_summary(self) -> dict[str, Any]:
+
+        return {
+
+            "class": self.__class__.__name__,
+
+            "thread_safe": True,
+
+            "snapshot_supported": True,
+
+            "owner_tracking": True,
+
         }
 
     # ======================================================
@@ -164,18 +259,23 @@ class MemoryManager:
 
     def __len__(self) -> int:
 
-        return len(self._blocks)
+        return self.allocations
 
     def __contains__(
         self,
         block_id: str,
     ) -> bool:
 
-        return block_id in self._blocks
+        return self.exists(block_id)
+
+    def __iter__(self) -> Iterator[MemoryBlock]:
+
+        return iter(self.items())
 
     def __repr__(self) -> str:
 
         return (
             "MemoryManager("
-            f"allocations={len(self._blocks)})"
+            f"allocations={self.allocations}, "
+            f"owners={len(self.owners())})"
         )

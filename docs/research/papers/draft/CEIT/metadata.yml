@@ -1,0 +1,46 @@
+# Metadata for CEIT Project
+
+title: "Constrained-Induced Elasticity Theory (CEIT)"
+subtitle: "Geometry-driven stiffness in confined polymers"
+version: "0.1.0"
+date: "2026-07-07"
+
+authors:
+  - name: "Hoang"
+    affiliation: "SciOS Research Group"
+    role: "Lead Researcher"
+  - name: "SciOS Committee"
+    affiliation: "SciOS Core"
+    role: "Governance"
+
+license: "CC BY 4.0"
+
+keywords:
+  - polymer physics
+  - nanoscale confinement
+  - geometry-driven elasticity
+  - CEIT
+  - WLC comparison
+  - microfluidics
+  - biopolymers
+  - reproducibility
+
+links:
+  notes: "notes.md"
+  roadmap: "ROADMAP.md"
+  figures: "figures.md"
+  supplementary: "supplementary.md"
+  datasets: "datasets.md"
+  benchmarks: "benchmarks.md"
+  experiments: "experiments.md"
+  methods: "methods.md"
+  analysis: "analysis.md"
+  code_checklist: "code_checklist.md"
+  integration: "integration.md"
+  publications: "publications.md"
+  citations: "citations.md"
+
+governance:
+  committee: "SciOS Research Committee"
+  sync_meetings: "Weekly, Friday"
+  approval_required: true

@@ -1,0 +1,279 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |      CognitivePipeline               |
+                    +------------------+-------------------+
+                                       |
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |         ExecutionGraph               |
+                    +--------------------------------------+
+                    | Node Registry                        |
+                    | Dependency Manager                   |
+                    | Graph Validator                      |
+                    | Scheduler Interface                  |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                           Topological Ordering
+                                       |
+                                       v
+                             Stage Dispatcher
+DAG Structure
+                      Input Context
+                           |
+                           v
+                     +-------------+
+                     | Perception  |
+                     +------+------+ 
+                            |
+               +------------+-------------+
+               |                          |
+               v                          v
+         +-----------+             +-------------+
+         |  Memory   |             | Perception  |
+         | Retrieval |             | Enrichment  |
+         +-----+-----+             +------+------+
+               |                          |
+               +------------+-------------+
+                            |
+                            v
+                     +-------------+
+                     | Reasoning   |
+                     +------+------+ 
+                            |
+                +-----------+------------+
+                |                        |
+                v                        v
+          +------------+          +--------------+
+          | Planning   |          | Tool Choice  |
+          +------+-----+          +------+-------+
+                 |                       |
+                 +-----------+-----------+
+                             |
+                             v
+                      +--------------+
+                      | Tool Use     |
+                      +------+-------+
+                             |
+                             v
+                      +--------------+
+                      | Reflection   |
+                      +------+-------+
+                             |
+                             v
+                      +--------------+
+                      | Artifacts    |
+                      +------+-------+
+                             |
+                             v
+                      Output Context
+Node Model
+                +----------------------+
+                |     ExecutionNode    |
+                +----------------------+
+                | id                   |
+                | stage                |
+                | dependencies         |
+                | successors           |
+                | state                |
+                +----------------------+
+                | execute()            |
+                | ready()              |
+                | reset()              |
+                +----------------------+
+Graph Components
++--------------------------------------------------+
+|              ExecutionGraph                      |
++--------------------------------------------------+
+| Nodes                                            |
+| Edges                                            |
+| Validator                                        |
+| Topological Sort                                 |
+| Execution Queue                                  |
++--------------------------------------------------+
+Execution Lifecycle
+Build Graph
+
+↓
+
+Validate Graph
+
+↓
+
+Resolve Dependencies
+
+↓
+
+Topological Sort
+
+↓
+
+Ready Queue
+
+↓
+
+Execute Node
+
+↓
+
+Update Graph State
+
+↓
+
+Next Ready Node
+
+↓
+
+Graph Complete
+Node State Machine
+Created
+
+↓
+
+Waiting
+
+↓
+
+Ready
+
+↓
+
+Running
+
+↓
+
+Completed
+
+Nếu lỗi xảy ra:
+
+Running
+
+↓
+
+Failed
+
+↓
+
+Retry
+
+↓
+
+Completed
+
+hoặc
+
+Running
+
+↓
+
+Failed
+
+↓
+
+Abort
+Dependency Resolution
+Memory
+      \
+       \
+        \
+         > Reasoning
+        /
+Planning
+
+↓
+
+Reasoning chỉ được chạy khi
+Memory và Planning dependency
+đã hoàn thành.
+Parallel Execution
+             Perception
+                  |
+        +---------+----------+
+        |                    |
+        v                    v
+ Memory Retrieval      Feature Extraction
+        |                    |
+        +---------+----------+
+                  |
+                  v
+             Reasoning
+
+Execution Graph cho phép các node không phụ thuộc nhau được thực thi song song.
+
+Relationship with Runtime
+Kernel
+
+↓
+
+Runtime
+
+↓
+
+Scheduler
+
+↓
+
+ExecutionGraph
+
+↓
+
+StageDispatcher
+
+↓
+
+Stage
+
+↓
+
+Result
+
+Execution Graph chịu trách nhiệm quyết định thứ tự, Runtime chịu trách nhiệm thực thi.
+
+Suggested Colors
+Thành phần	Màu
+ExecutionGraph	Dark Blue
+ExecutionNode	Blue
+Dependencies	Green
+Scheduler	Orange
+Validator	Purple
+Output	Gray
+Footer
+SciOS Developer Handbook
+
+Execution Graph
+
+Version: v0.2
+
+Phase 8 — Execution Engine
+Vai trò trong kiến trúc SciOS
+
+Sơ đồ execution_graph.drawio là cầu nối giữa pipeline.drawio và runtime.drawio:
+
+Kernel
+   │
+   ▼
+PipelineBuilder
+   │
+   ▼
+CognitivePipeline
+   │
+   ▼
+ExecutionGraph
+   │
+   ▼
+Scheduler
+   │
+   ▼
+RuntimeExecutor
+   │
+   ▼
+Stages
+
+Trong đó:
+
+pipeline.drawio mô tả thành phần và luồng logic của Cognitive Pipeline.
+execution_graph.drawio mô tả DAG, phụ thuộc và khả năng thực thi song song.
+runtime.drawio mô tả cách Runtime và Scheduler thực thi các node của Execution Graph.
+
+Ba sơ đồ này bổ sung cho nhau và tạo thành tài liệu cốt lõi về cơ chế thực thi của SciOS.

@@ -1,0 +1,370 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |        Perception                    |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |       Working Memory                 |
+                    +------------------+-------------------+
+                                       |
+                    +------------------+-------------------+
+                    |                                      |
+                    v                                      v
+             Semantic Memory                     Runtime Context
+                    |                                      |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |        Reasoning Engine              |
+                    +--------------------------------------+
+                    | Strategy Manager                     |
+                    | Knowledge Retriever                  |
+                    | Inference Engine                     |
+                    | Constraint Solver                    |
+                    | Confidence Estimator                 |
+                    | Trace Recorder                       |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                              Hypothesis Set
+                                       |
+                                       v
+                             Decision Candidates
+                                       |
+                                       v
+                                  Planning
+Reasoning Pipeline
+Perception
+
+↓
+
+Context Integration
+
+↓
+
+Memory Retrieval
+
+↓
+
+Knowledge Fusion
+
+↓
+
+Strategy Selection
+
+↓
+
+Inference
+
+↓
+
+Constraint Validation
+
+↓
+
+Confidence Estimation
+
+↓
+
+Decision Candidates
+
+↓
+
+Planning
+Internal Components
+                +--------------------------------+
+                |       Reasoning Engine         |
+                +--------------------------------+
+                | Strategy Manager               |
+                | Knowledge Retriever            |
+                | Inference Engine               |
+                | Constraint Solver              |
+                | Confidence Estimator           |
+                | Explanation Generator          |
+                | Trace Recorder                 |
+                +--------------------------------+
+Strategy Selection
+                 Current Context
+                        |
+                        v
+                Strategy Manager
+                        |
+        +---------------+----------------+
+        |               |                |
+        v               v                v
+   Rule-based      LLM-based      Scientific Model
+        |               |                |
+        +---------------+----------------+
+                        |
+                        v
+               Selected Strategy
+
+Có thể mở rộng thêm:
+
+Deductive Reasoning
+Inductive Reasoning
+Abductive Reasoning
+Probabilistic Reasoning
+Case-based Reasoning
+Analogical Reasoning
+Multi-Agent Reasoning
+Knowledge Retrieval
+Question
+
+↓
+
+Working Memory
+
+↓
+
+Semantic Memory
+
+↓
+
+Knowledge Retriever
+
+↓
+
+Evidence Set
+
+Reasoning tổng hợp bằng chứng từ nhiều nguồn trước khi suy luận.
+
+Inference Flow
+Evidence
+
+↓
+
+Inference Engine
+
+↓
+
+Candidate Hypotheses
+
+↓
+
+Constraint Solver
+
+↓
+
+Validated Hypotheses
+Constraint Validation
+Candidate Hypothesis
+
+↓
+
+Constraint Solver
+
+↓
+
+Logical Constraints
+
+↓
+
+Scientific Constraints
+
+↓
+
+Policy Constraints
+
+↓
+
+Validated Result
+
+Constraint Solver đảm bảo kết quả phù hợp với miền tri thức và các quy tắc hệ thống.
+
+Confidence Estimation
+Validated Hypothesis
+
+↓
+
+Evidence Consistency
+
+↓
+
+Confidence Estimator
+
+↓
+
+Confidence Score
+
+Confidence Score được sử dụng bởi Planning và Reflection.
+
+Explanation Generation
+Inference Trace
+
+↓
+
+Explanation Generator
+
+↓
+
+Human-readable Explanation
+
+↓
+
+Artifact Manager
+
+Hỗ trợ Explainable AI (XAI) và khả năng kiểm toán.
+
+Trace Recording
+Reasoning Session
+
+↓
+
+Trace Recorder
+
+↓
+
+Reasoning Trace
+
+↓
+
+Artifact Manager
+
+Lưu toàn bộ chuỗi suy luận để phục vụ tái lập và phân tích.
+
+Reasoning Lifecycle
+Receive Context
+
+↓
+
+Retrieve Knowledge
+
+↓
+
+Select Strategy
+
+↓
+
+Infer
+
+↓
+
+Validate
+
+↓
+
+Estimate Confidence
+
+↓
+
+Generate Explanation
+
+↓
+
+Output Decision Candidates
+Relationship with Cognitive Core
+Perception
+      |
+      v
+Memory
+      |
+      v
+Reasoning
+      |
+      +------------+
+      |            |
+      v            v
+Planning    Reflection
+
+Reasoning là cầu nối giữa tri thức và quyết định hành động.
+
+Reasoning API
+ReasoningEngine
+
+├── reason()
+
+├── retrieve()
+
+├── select_strategy()
+
+├── infer()
+
+├── validate()
+
+├── estimate_confidence()
+
+├── explain()
+
+├── trace()
+
+└── reset()
+Reasoning Plugin Architecture
+                 Reasoning Engine
+                        |
+        +---------------+---------------+
+        |               |               |
+        v               v               v
+ Rule Plugin      LLM Plugin     Scientific Plugin
+        |               |               |
+        +---------------+---------------+
+                        |
+                        v
+                Unified Reasoning API
+
+Mỗi chiến lược suy luận được đóng gói thành plugin độc lập, giúp mở rộng mà không cần sửa lõi hệ thống.
+
+Complete Reasoning Flow
+Perception
+      |
+      v
+Working Memory
+      |
+      v
+Semantic Memory
+      |
+      v
+Knowledge Retrieval
+      |
+      v
+Reasoning
+      |
+      v
+Hypothesis
+      |
+      v
+Planning
+Suggested Colors
+Component	Color
+Reasoning Engine	Orange
+Strategy Manager	Blue
+Knowledge Retriever	Cyan
+Inference Engine	Green
+Constraint Solver	Purple
+Confidence Estimator	Yellow
+Trace Recorder	Gray
+Footer
+SciOS Developer Handbook
+
+Reasoning Architecture
+
+Version: v0.2
+
+Phase 8 — Cognitive Core
+Vai trò trong kiến trúc SciOS
+
+Reasoning là lõi suy luận của Cognitive Core và là điểm kết nối giữa tri thức, lập kế hoạch và tự đánh giá.
+
+perception.drawio
+        │
+        ▼
+memory.drawio
+        │
+        ▼
+reasoning.drawio
+        │
+        ├────────► planning.drawio
+        │
+        ├────────► reflection.drawio
+        │
+        └────────► artifact_manager.drawio
+Vai trò của Reasoning
+Tổng hợp tri thức: Kết hợp dữ liệu từ Working Memory, Semantic Memory và Runtime Context để tạo tập bằng chứng.
+Lựa chọn chiến lược: Chọn phương pháp suy luận phù hợp với từng nhiệm vụ (quy tắc, LLM, mô hình khoa học, xác suất...).
+Sinh giả thuyết: Tạo và đánh giá các giả thuyết hoặc phương án hành động.
+Kiểm tra ràng buộc: Đảm bảo kết quả đáp ứng các quy tắc logic, chính sách hệ thống và ràng buộc khoa học.
+Giải thích và truy vết: Sinh lời giải thích (Explainability) và lưu Reasoning Trace để phục vụ kiểm toán, tái lập và nghiên cứu.
+
+Với kiến trúc này, Reasoning Engine trở thành một plugin-based inference framework, cho phép SciOS tích hợp đồng thời nhiều loại mô hình suy luận và mở rộng sang các lĩnh vực như khoa học tính toán, hệ chuyên gia, mô phỏng hoặc đa tác tử mà vẫn giữ được giao diện thống nhất và khả năng bảo trì lâu dài.

@@ -1,184 +1,304 @@
 """
-SciOS Event Bus
-===============
+SciOS Kernel Event Bus
+======================
 
-Lightweight publish/subscribe event bus for the SciOS Kernel.
+Thread-safe publish/subscribe event bus used throughout the SciOS Kernel.
 
 Responsibilities
 ----------------
-- Publish kernel events
-- Subscribe event handlers
-- Decouple kernel components
-- Maintain event statistics
+- Publish events
+- Subscribe handlers
+- Unsubscribe handlers
+- Middleware execution
+- Event filtering
+- Exception isolation
+
+Design Goals
+------------
+- Thread-safe
+- Lightweight
+- Fast
+- Extensible
+- Runtime independent
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable
+from threading import RLock
+from typing import Any
+from typing import Callable
 
-__all__ = [
-    "Event",
-    "EventBus",
-]
+from .event import Event
 
 
-# ==========================================================
-# Event
-# ==========================================================
+EventHandler = Callable[[Event], None]
 
-@dataclass(slots=True)
-class Event:
-    """
-    Kernel event.
-    """
-
-    name: str
-
-    payload: dict[str, Any] = field(default_factory=dict)
-
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(
-            timezone.utc
-        ).isoformat()
-    )
-
-
-# ==========================================================
-# Event Bus
-# ==========================================================
 
 class EventBus:
     """
-    Publish/Subscribe event bus.
+    Central event bus for SciOS.
 
-    Used internally by the SciOS Kernel.
+    Supports topic-based publish/subscribe.
+
+    Example
+    -------
+    >>> bus = EventBus()
+    >>> bus.subscribe("task.completed", handler)
+    >>> bus.publish("task.completed", result=42)
     """
 
     def __init__(self) -> None:
 
         self._subscribers: dict[
             str,
-            list[Callable[[Event], None]]
+            list[EventHandler],
         ] = defaultdict(list)
+
+        self._middleware: list[Callable[[Event], Event]] = []
+
+        self._filters: list[Callable[[Event], bool]] = []
+
+        self._lock = RLock()
 
         self._published = 0
 
-    # =====================================================
+    # ==========================================================
     # Subscription
-    # =====================================================
+    # ==========================================================
 
     def subscribe(
         self,
-        event: str,
-        handler: Callable[[Event], None],
+        topic: str,
+        handler: EventHandler,
     ) -> None:
         """
-        Subscribe a handler to an event.
+        Subscribe a handler to a topic.
         """
 
-        if handler not in self._subscribers[event]:
-            self._subscribers[event].append(handler)
+        with self._lock:
+
+            if handler not in self._subscribers[topic]:
+                self._subscribers[topic].append(handler)
 
     def unsubscribe(
         self,
-        event: str,
-        handler: Callable[[Event], None],
+        topic: str,
+        handler: EventHandler,
     ) -> None:
         """
         Remove a subscription.
         """
 
-        if event not in self._subscribers:
-            return
+        with self._lock:
 
-        if handler in self._subscribers[event]:
-            self._subscribers[event].remove(handler)
+            if handler in self._subscribers[topic]:
+                self._subscribers[topic].remove(handler)
 
-    # =====================================================
-    # Publishing
-    # =====================================================
+    def clear_subscribers(self) -> None:
+        """
+        Remove all subscribers.
+        """
+
+        with self._lock:
+            self._subscribers.clear()
+
+    # ==========================================================
+    # Middleware
+    # ==========================================================
+
+    def add_middleware(
+        self,
+        middleware: Callable[[Event], Event],
+    ) -> None:
+        """
+        Register middleware.
+        """
+
+        self._middleware.append(middleware)
+
+    # ==========================================================
+    # Filters
+    # ==========================================================
+
+    def add_filter(
+        self,
+        predicate: Callable[[Event], bool],
+    ) -> None:
+        """
+        Register an event filter.
+        """
+
+        self._filters.append(predicate)
+
+    # ==========================================================
+    # Publish
+    # ==========================================================
 
     def publish(
         self,
-        event: str,
+        topic: str,
         **payload: Any,
     ) -> Event:
         """
         Publish an event.
+
+        Returns
+        -------
+        Event
+            Published event instance.
         """
 
-        evt = Event(
-            name=event,
+        event = Event(
+            topic=topic,
             payload=payload,
         )
 
-        self._published += 1
+        # Apply middleware
 
-        for handler in list(
-            self._subscribers.get(event, [])
-        ):
-            handler(evt)
+        for middleware in self._middleware:
+            event = middleware(event)
 
-        return evt
+        # Apply filters
 
-    # =====================================================
-    # Queries
-    # =====================================================
+        for predicate in self._filters:
 
-    def listeners(
+            if not predicate(event):
+                return event
+
+        # Snapshot subscribers
+
+        with self._lock:
+
+            subscribers = list(
+                self._subscribers.get(topic, [])
+            )
+
+            wildcard = list(
+                self._subscribers.get("*", [])
+            )
+
+            self._published += 1
+
+        # Notify subscribers
+
+        for handler in subscribers + wildcard:
+
+            try:
+                handler(event)
+
+            except Exception:
+                # Never allow one subscriber
+                # to break the event system.
+                continue
+
+        return event
+
+    # ==========================================================
+    # Query
+    # ==========================================================
+
+    def topics(self) -> list[str]:
+        """
+        Registered topics.
+        """
+
+        with self._lock:
+            return sorted(self._subscribers.keys())
+
+    def subscribers(
         self,
-        event: str,
+        topic: str,
+    ) -> list[EventHandler]:
+        """
+        Handlers subscribed to topic.
+        """
+
+        with self._lock:
+            return list(
+                self._subscribers.get(topic, [])
+            )
+
+    def subscriber_count(
+        self,
+        topic: str | None = None,
     ) -> int:
+        """
+        Count subscribers.
 
-        return len(
-            self._subscribers.get(event, [])
-        )
+        If topic is None count all.
+        """
 
-    def clear(self) -> None:
+        with self._lock:
 
-        self._subscribers.clear()
+            if topic is None:
 
-    # =====================================================
-    # Status
-    # =====================================================
+                return sum(
+                    len(v)
+                    for v in self._subscribers.values()
+                )
+
+            return len(
+                self._subscribers.get(topic, [])
+            )
+
+    @property
+    def events_published(self) -> int:
+        return self._published
+
+    # ==========================================================
+    # Maintenance
+    # ==========================================================
+
+    def reset(self) -> None:
+        """
+        Reset the event bus.
+        """
+
+        with self._lock:
+
+            self._subscribers.clear()
+
+            self._middleware.clear()
+
+            self._filters.clear()
+
+            self._published = 0
 
     def status(self) -> dict[str, Any]:
+        """
+        EventBus status.
+        """
 
         return {
-
-            "events": len(self._subscribers),
-
-            "published": self._published,
-
-            "subscribers": {
-                name: len(handlers)
-                for name, handlers
-                in self._subscribers.items()
-            },
+            "topics": len(self._subscribers),
+            "subscribers": self.subscriber_count(),
+            "middleware": len(self._middleware),
+            "filters": len(self._filters),
+            "events_published": self._published,
         }
 
-    # =====================================================
-    # Python Protocols
-    # =====================================================
+    # ==========================================================
+    # Magic Methods
+    # ==========================================================
 
     def __contains__(
         self,
-        event: str,
+        topic: object,
     ) -> bool:
 
-        return event in self._subscribers
+        return (
+            isinstance(topic, str)
+            and topic in self._subscribers
+        )
 
     def __len__(self) -> int:
-
         return len(self._subscribers)
 
     def __repr__(self) -> str:
-
         return (
-            "EventBus("
-            f"events={len(self)}, "
+            f"{self.__class__.__name__}("
+            f"topics={len(self)}, "
+            f"subscribers={self.subscriber_count()}, "
             f"published={self._published})"
         )

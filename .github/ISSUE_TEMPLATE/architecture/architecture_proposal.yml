@@ -1,0 +1,172 @@
+name: 🏛️ Architecture Proposal (RFC)
+description: Propose a new architecture, subsystem, or major design change.
+title: "[RFC]: "
+labels:
+  - architecture
+  - proposal
+  - discussion
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Architecture Proposal (RFC)
+
+        Đây là template dành cho **Architecture Proposal (RFC)**.  
+        RFC tập trung vào thay đổi thiết kế hệ thống, kiến trúc hoặc thành phần cốt lõi.  
+        Vui lòng điền đầy đủ thông tin để đảm bảo minh bạch và dễ thảo luận.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the proposal.
+      placeholder: "Introduce a distributed cognitive scheduler..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this proposal necessary?
+      placeholder: |
+        - Current architecture limitations: ...
+        - Why important: ...
+        - Expected improvements: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Describe the architectural problem.
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: proposed_design
+    attributes:
+      label: Proposed Design
+      description: Explain the proposed architecture.
+      render: markdown
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe other possible approaches.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: integration
+    attributes:
+      label: Integration
+      description: Which modules are affected?
+      placeholder: |
+        - Kernel
+        - Pipeline
+        - Memory
+        - Planner
+        - Tool Use
+        - Reflection
+        - Runtime
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Breaking Changes
+      options:
+        - None
+        - Minor
+        - Major
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration Strategy
+      description: Migration plan if needed.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: Technical risks and mitigations.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: performance
+    attributes:
+      label: Performance Impact
+      description: Expected performance changes.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security Impact
+      description: Security considerations.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: research
+    attributes:
+      label: Research Impact
+      description: Scientific contribution.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: roadmap
+    attributes:
+      label: Future Roadmap
+      description: Long-term evolution.
+
+# --------------------------------------------------
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: Existing architecture reviewed
+        - label: Alternatives considered
+        - label: No duplicate proposal
+        - label: Backward compatibility evaluated
+        - label: Performance impact evaluated
+        - label: Security impact evaluated
+        - label: Documentation planned
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Papers, RFCs, ADRs, external projects.

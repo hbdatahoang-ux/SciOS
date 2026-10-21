@@ -1,84 +1,72 @@
 """
-SciOS Component Registry
-========================
+SciOS Kernel Service Registry
+=============================
 
-Global component registry for the Scientific Cognitive
-Operating System (SciOS).
+Central service registry for the SciOS Kernel.
 
 Responsibilities
 ----------------
-- Register system components
-- Resolve components by name
-- Remove components
-- Prevent duplicate registrations
-- Provide registry inspection
+- Register services.
+- Lookup services.
+- Remove services.
+- Support dependency injection.
+- Provide service discovery.
+
+Design Goals
+------------
+- O(1) lookup
+- Thread-safe
+- Type-safe API
+- Bootstrap friendly
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from threading import RLock
 from typing import Any
 
-from scios.shared.exceptions import ConfigurationError
 
-__all__ = [
-    "Registry",
-    "ComponentRegistry",
-]
-
-
-class Registry:
+class ServiceRegistry:
     """
-    Global component registry.
-
-    Examples
-    --------
-    >>> registry = Registry()
-
-    >>> registry.register("runtime", runtime)
-
-    >>> runtime = registry.get("runtime")
+    Central registry for kernel services.
     """
 
     def __init__(self) -> None:
-        self._components: dict[str, Any] = {}
+        self._services: dict[str, Any] = {}
+        self._lock = RLock()
 
-    # ======================================================
+    # ==========================================================
     # Registration
-    # ======================================================
+    # ==========================================================
 
     def register(
         self,
         name: str,
-        component: Any,
+        service: Any,
         *,
         overwrite: bool = False,
     ) -> None:
         """
-        Register a component.
+        Register a service.
 
-        Parameters
-        ----------
-        name
-            Component name.
-
-        component
-            Component instance.
-
-        overwrite
-            Replace existing component.
+        Raises
+        ------
+        ValueError
+            If the service already exists and overwrite=False.
         """
 
-        if not overwrite and name in self._components:
-            raise ConfigurationError(
-                f"Component '{name}' is already registered."
-            )
+        with self._lock:
 
-        self._components[name] = component
+            if not overwrite and name in self._services:
+                raise ValueError(
+                    f"Service '{name}' is already registered."
+                )
 
-    # ======================================================
+            self._services[name] = service
+
+    # ==========================================================
     # Lookup
-    # ======================================================
+    # ==========================================================
 
     def get(
         self,
@@ -86,116 +74,139 @@ class Registry:
         default: Any = None,
     ) -> Any:
         """
-        Retrieve a component.
+        Retrieve a service.
+
+        Returns
+        -------
+        Any
+            Registered service or default.
         """
 
-        return self._components.get(
-            name,
-            default,
-        )
+        with self._lock:
+            return self._services.get(name, default)
 
     def require(
         self,
         name: str,
     ) -> Any:
         """
-        Retrieve a required component.
+        Retrieve a required service.
 
         Raises
         ------
-        ConfigurationError
+        KeyError
+            If the service is not registered.
         """
 
-        if name not in self._components:
-            raise ConfigurationError(
-                f"Component '{name}' is not registered."
-            )
+        with self._lock:
 
-        return self._components[name]
+            if name not in self._services:
+                raise KeyError(
+                    f"Unknown service '{name}'."
+                )
 
-    # ======================================================
+            return self._services[name]
+
+    # ==========================================================
     # Removal
-    # ======================================================
+    # ==========================================================
 
     def unregister(
         self,
         name: str,
-    ) -> None:
+    ) -> Any:
         """
-        Remove a component.
+        Remove a service.
+
+        Returns
+        -------
+        Removed service.
+
+        Raises
+        ------
+        KeyError
+            If service does not exist.
         """
 
-        self._components.pop(name, None)
+        with self._lock:
+
+            if name not in self._services:
+                raise KeyError(
+                    f"Unknown service '{name}'."
+                )
+
+            return self._services.pop(name)
 
     def clear(self) -> None:
         """
-        Remove all registered components.
+        Remove all services.
         """
 
-        self._components.clear()
+        with self._lock:
+            self._services.clear()
 
-    # ======================================================
-    # Queries
-    # ======================================================
+    # ==========================================================
+    # Query
+    # ==========================================================
 
     def contains(
         self,
         name: str,
     ) -> bool:
         """
-        Check whether a component exists.
+        Check if service exists.
         """
 
-        return name in self._components
+        with self._lock:
+            return name in self._services
 
     def names(self) -> list[str]:
         """
-        Registered component names.
+        Return sorted service names.
         """
 
-        return sorted(self._components.keys())
+        with self._lock:
+            return sorted(self._services.keys())
 
     def values(self) -> list[Any]:
         """
-        Registered component instances.
+        Return registered services.
         """
 
-        return list(self._components.values())
+        with self._lock:
+            return list(self._services.values())
 
     def items(self) -> list[tuple[str, Any]]:
         """
-        Registered component pairs.
+        Return registry items.
         """
 
-        return list(self._components.items())
+        with self._lock:
+            return list(self._services.items())
 
-    def size(self) -> int:
+    def count(self) -> int:
         """
-        Number of registered components.
-        """
-
-        return len(self._components)
-
-    def is_empty(self) -> bool:
-        """
-        Whether registry is empty.
+        Number of registered services.
         """
 
-        return not self._components
+        with self._lock:
+            return len(self._services)
 
-    # ======================================================
+    # ==========================================================
     # Export
-    # ======================================================
+    # ==========================================================
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         """
-        Export registry metadata.
+        Export registry.
         """
 
-        return {
-            name: type(component).__name__
-            for name, component in self._components.items()
-        }
+        with self._lock:
+            return dict(self._services)
+
+    # ==========================================================
+    # Status
+    # ==========================================================
 
     def status(self) -> dict[str, Any]:
         """
@@ -203,19 +214,22 @@ class Registry:
         """
 
         return {
-            "components": self.size(),
-            "registered": self.names(),
+            "services": self.count(),
+            "names": self.names(),
         }
 
-    # ======================================================
-    # Python Protocols
-    # ======================================================
+    # ==========================================================
+    # Magic Methods
+    # ==========================================================
 
     def __contains__(
         self,
-        name: str,
+        name: object,
     ) -> bool:
-        return self.contains(name)
+        return (
+            isinstance(name, str)
+            and self.contains(name)
+        )
 
     def __getitem__(
         self,
@@ -223,28 +237,31 @@ class Registry:
     ) -> Any:
         return self.require(name)
 
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._components)
+    def __setitem__(
+        self,
+        name: str,
+        service: Any,
+    ) -> None:
+        self.register(
+            name,
+            service,
+            overwrite=True,
+        )
+
+    def __delitem__(
+        self,
+        name: str,
+    ) -> None:
+        self.unregister(name)
+
+    def __iter__(self):
+        return iter(self.names())
 
     def __len__(self) -> int:
-        return self.size()
+        return self.count()
 
     def __repr__(self) -> str:
         return (
-            f"Registry("
-            f"components={self.size()})"
+            f"{self.__class__.__name__}("
+            f"services={self.count()})"
         )
-# ======================================================
-# Backward Compatibility
-# ======================================================
-
-class ComponentRegistry(Registry):
-    """
-    Backward-compatible alias.
-
-    Existing kernel modules may still import
-    ComponentRegistry while Registry is the
-    canonical implementation.
-    """
-
-    pass        

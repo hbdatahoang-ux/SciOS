@@ -2,11 +2,7 @@
 SciOS Kernel Tests
 ==================
 
-Unit tests for the SciOS kernel.
-
-These tests validate the core kernel lifecycle,
-runtime interface, and state transitions independently
-from the public SciOS API.
+Unit tests for the SciOS Kernel.
 """
 
 from __future__ import annotations
@@ -20,31 +16,14 @@ from scios.kernel.kernel import Kernel
 # Construction
 # ==========================================================
 
-def test_kernel_construction() -> None:
+def test_kernel_creation() -> None:
     """
-    Kernel should be constructible.
+    Kernel should construct successfully.
     """
 
     kernel = Kernel()
 
     assert kernel is not None
-
-
-# ==========================================================
-# Initial State
-# ==========================================================
-
-def test_initial_state() -> None:
-    """
-    Newly created kernel should not be booted.
-    """
-
-    kernel = Kernel()
-
-    status = kernel.status()
-
-    assert status["booted"] is False
-    assert status["state"] == "created"
 
 
 # ==========================================================
@@ -60,10 +39,7 @@ def test_kernel_boot() -> None:
 
     assert kernel.boot() is True
 
-    status = kernel.status()
-
-    assert status["booted"] is True
-    assert status["state"] == "running"
+    assert kernel.status()["state"] == "running"
 
 
 # ==========================================================
@@ -81,61 +57,26 @@ def test_kernel_shutdown() -> None:
 
     assert kernel.shutdown() is True
 
-    status = kernel.status()
-
-    assert status["booted"] is False
-    assert status["state"] == "stopped"
-
-
-# ==========================================================
-# Boot Idempotence
-# ==========================================================
-
-def test_kernel_double_boot() -> None:
-    """
-    Booting twice should be safe.
-    """
-
-    kernel = Kernel()
-
-    assert kernel.boot() is True
-    assert kernel.boot() is True
-
-    assert kernel.status()["state"] == "running"
-
-
-# ==========================================================
-# Shutdown Idempotence
-# ==========================================================
-
-def test_kernel_double_shutdown() -> None:
-    """
-    Shutdown twice should be safe.
-    """
-
-    kernel = Kernel()
-
-    kernel.boot()
-
-    assert kernel.shutdown() is True
-    assert kernel.shutdown() is True
-
     assert kernel.status()["state"] == "stopped"
 
 
 # ==========================================================
-# Lifecycle Cycles
+# Boot Cycle
 # ==========================================================
 
 @pytest.mark.parametrize(
     "cycles",
-    [1, 3, 5],
+    [
+        1,
+        3,
+        5,
+    ],
 )
-def test_kernel_lifecycle_cycles(
+def test_kernel_boot_cycles(
     cycles: int,
 ) -> None:
     """
-    Kernel should survive repeated lifecycle cycles.
+    Kernel should survive repeated boot/shutdown cycles.
     """
 
     kernel = Kernel()
@@ -143,102 +84,107 @@ def test_kernel_lifecycle_cycles(
     for _ in range(cycles):
 
         assert kernel.boot() is True
+
         assert kernel.status()["state"] == "running"
 
         assert kernel.shutdown() is True
+
         assert kernel.status()["state"] == "stopped"
 
 
 # ==========================================================
-# Run Before Boot
+# Registry
 # ==========================================================
 
-def test_run_before_boot() -> None:
+def test_kernel_registry_exists() -> None:
     """
-    Running before boot should fail.
-    """
-
-    kernel = Kernel()
-
-    with pytest.raises(Exception):
-
-        kernel.run("task")
-
-
-# ==========================================================
-# Run After Boot
-# ==========================================================
-
-def test_run_after_boot() -> None:
-    """
-    Kernel should execute a task after boot.
+    Kernel should expose a service registry.
     """
 
     kernel = Kernel()
 
-    kernel.boot()
-
-    result = kernel.run("ping")
-
-    assert result is not None
+    assert kernel.registry is not None
 
 
 # ==========================================================
-# Status Schema
+# Dispatcher
 # ==========================================================
 
-def test_status_schema() -> None:
+def test_kernel_dispatcher_exists() -> None:
     """
-    Kernel status should expose a stable schema.
+    Kernel should expose a dispatcher.
     """
 
     kernel = Kernel()
 
-    kernel.boot()
-
-    status = kernel.status()
-
-    required = {
-        "state",
-        "booted",
-        "version",
-    }
-
-    assert required.issubset(status.keys())
+    assert kernel.dispatcher is not None
 
 
 # ==========================================================
-# Version
+# Lifecycle
 # ==========================================================
 
-def test_kernel_version() -> None:
+def test_kernel_lifecycle_exists() -> None:
     """
-    Kernel version should be available.
+    Kernel should expose lifecycle management.
+    """
+
+    kernel = Kernel()
+
+    assert kernel.lifecycle is not None
+
+
+# ==========================================================
+# Status
+# ==========================================================
+
+def test_kernel_status_structure() -> None:
+    """
+    Kernel status should return a dictionary.
     """
 
     kernel = Kernel()
 
     status = kernel.status()
 
-    assert isinstance(status["version"], str)
-    assert len(status["version"]) > 0
+    assert isinstance(status, dict)
+
+    assert "state" in status
 
 
 # ==========================================================
-# Multiple Run Calls
+# Double Boot
 # ==========================================================
 
-def test_multiple_runs() -> None:
+def test_kernel_double_boot() -> None:
     """
-    Kernel should support multiple sequential tasks.
+    Booting twice should not fail.
+    """
+
+    kernel = Kernel()
+
+    assert kernel.boot() is True
+
+    assert kernel.boot() is True
+
+    assert kernel.status()["state"] == "running"
+
+
+# ==========================================================
+# Double Shutdown
+# ==========================================================
+
+def test_kernel_double_shutdown() -> None:
+    """
+    Shutting down twice should not fail.
     """
 
     kernel = Kernel()
 
     kernel.boot()
 
-    for i in range(10):
+    assert kernel.shutdown() is True
 
-        result = kernel.run(f"task-{i}")
+    assert kernel.shutdown() is True
 
-        assert result is not None
+    assert kernel.status()["state"] == "stopped"

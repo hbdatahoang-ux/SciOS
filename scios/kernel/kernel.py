@@ -1,33 +1,49 @@
 """
-SciOS Kernel
-============
+SciOS Kernel Core
+=================
 
-Core microkernel of the Scientific Cognitive Operating System.
-
-The kernel coordinates all major SciOS subsystems while keeping
-their implementations independent.
+Central orchestration component of the Scientific Cognitive
+Operating System (SciOS).
 
 Responsibilities
 ----------------
-- Lifecycle management
-- Boot / shutdown
-- Runtime orchestration
-- Component registry
-- Event bus
-- Execution entry point
-- Status reporting
+- Own all kernel subsystems.
+- Manage kernel lifecycle.
+- Adapt public tasks into runtime tasks.
+- Execute tasks.
+- Provide service lookup.
+- Expose kernel status.
+
+Architecture
+------------
+
+Public API
+    |
+    v
+ Kernel
+    |
+ Task Adapter
+    |
+    v
+ Runtime Engine
+    |
+ Executor
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
+
+from collections.abc import Callable
+
 from typing import Any
 
-from .bootstrap import Bootstrap
-from .context import KernelContext
-from .eventbus.bus import EventBus
-from .lifecycle import KernelState, LifecycleManager
-from .registry import ComponentRegistry
-from .runtime.engine import Runtime
+
+from .bootstrap import build_components
+
+from .state import KernelState
+
 
 
 __all__ = [
@@ -35,118 +51,324 @@ __all__ = [
 ]
 
 
+
 class Kernel:
     """
-    SciOS microkernel.
+    SciOS Kernel.
+
+    The Kernel is the central orchestration boundary
+    between public SciOS APIs and internal Runtime.
+
+    The Kernel SHOULD understand user intent.
+
+    The Runtime SHOULD only execute normalized tasks.
     """
 
-    VERSION = "0.2.0"
+
+
+    # ==========================================================
+    # Construction
+    # ==========================================================
 
     def __init__(self) -> None:
 
-        self.lifecycle = LifecycleManager()
+        components = build_components()
 
-        self.registry = ComponentRegistry()
 
-        self.context = KernelContext()
+        self.event_bus = (
+            components.event_bus
+        )
 
-        self.eventbus = EventBus()
+        self.lifecycle = (
+            components.lifecycle
+        )
 
-        self.runtime = Runtime()
+        self.registry = (
+            components.registry
+        )
 
-        self.bootstrap = Bootstrap()
+        self.scheduler = (
+            components.scheduler
+        )
 
-    # ---------------------------------------------------------
-    # Properties
-    # ---------------------------------------------------------
+        self.runtime = (
+            components.runtime
+        )
 
-    @property
-    def state(self) -> str:
-        return self.lifecycle.state.value
+        self.dispatcher = (
+            components.dispatcher
+        )
 
-    @property
-    def booted(self) -> bool:
-        return self.lifecycle.state is KernelState.READY
 
-    # ---------------------------------------------------------
+        self._state: KernelState = "created"
+
+
+
+    # ==========================================================
     # Lifecycle
-    # ---------------------------------------------------------
+    # ==========================================================
 
     def boot(self) -> bool:
         """
         Boot kernel.
+
+        Idempotent operation.
         """
 
-        if self.booted:
+        if self._state == "running":
+
             return True
 
-        self.bootstrap.boot(self)
+
+        self.lifecycle.initialize()
+
+        self.lifecycle.start()
+
+
+        self._state = "running"
+
 
         return True
+
+
 
     def shutdown(self) -> bool:
         """
         Shutdown kernel.
+
+        Idempotent operation.
         """
 
-        if self.lifecycle.state is KernelState.STOPPED:
+        if self._state == "stopped":
+
             return True
 
-        self.bootstrap.shutdown(self)
+
+        self.lifecycle.shutdown()
+
+
+        self._state = "stopped"
+
 
         return True
+
+
 
     def restart(self) -> bool:
+        """
+        Restart kernel.
+        """
 
         self.shutdown()
-        self.boot()
 
-        return True
+        self._state = "created"
 
-    # ---------------------------------------------------------
-    # Runtime
-    # ---------------------------------------------------------
+        return self.boot()
+
+
+
+    # ==========================================================
+    # Task Adaptation Boundary
+    # ==========================================================
+
+    def _adapt_task(
+        self,
+        task: Any,
+    ) -> Callable[[], Any]:
+        """
+        Normalize public tasks into Runtime executable tasks.
+
+        Runtime contract:
+
+            task -> Callable
+
+        Public API contract:
+
+            task -> Any
+
+        Supported:
+
+        - callable
+        - string command
+        - arbitrary object
+        """
+
+
+        if callable(task):
+
+            return task
+
+
+
+        if isinstance(
+            task,
+            str,
+        ):
+
+            return self._command_task(
+                task
+            )
+
+
+
+        return lambda: task
+
+
+
+    def _command_task(
+        self,
+        command: str,
+    ) -> Callable[[], dict[str, Any]]:
+        """
+        Adapt textual commands.
+
+        Example:
+
+            os.run("ping")
+
+        becomes:
+
+            callable returning command result
+        """
+
+
+        def execute():
+
+            return {
+
+                "command":
+                    command,
+
+                "status":
+                    "accepted",
+
+            }
+
+
+        return execute
+
+
+
+    # ==========================================================
+    # Execution
+    # ==========================================================
 
     def run(
         self,
         task: Any,
+        **metadata: Any,
     ) -> Any:
         """
-        Execute a task.
-        """
+        Execute one task.
 
-        if not self.booted:
-            raise RuntimeError(
-                "Kernel has not been booted."
+        Public examples:
+
+            kernel.run("ping")
+
+            kernel.run(
+                lambda: "pong"
             )
 
-        return self.runtime.run(task)
-
-    # ---------------------------------------------------------
-    # Status
-    # ---------------------------------------------------------
-
-    def status(self) -> dict[str, Any]:
         """
-        Return kernel status.
+
+        if self._state != "running":
+
+            raise RuntimeError(
+                "Kernel is not running."
+            )
+
+
+
+        runtime_task = self._adapt_task(
+            task
+        )
+
+
+        context = self.runtime.run(
+            task=runtime_task,
+            metadata=metadata,
+        )
+
+
+        return context.result
+
+
+
+    # ==========================================================
+    # Registry
+    # ==========================================================
+
+    def service(
+        self,
+        name: str,
+    ) -> Any:
+        """
+        Retrieve registered service.
+        """
+
+        return self.registry.require(
+            name
+        )
+
+
+
+    # ==========================================================
+    # Status
+    # ==========================================================
+
+    @property
+    def state(
+        self,
+    ) -> KernelState:
+        """
+        Current kernel state.
+        """
+
+        return self._state
+
+
+
+    def status(
+        self,
+    ) -> dict[str, Any]:
+        """
+        Kernel diagnostics.
         """
 
         return {
-            "state": self.state,
-            "runtime": self.runtime.status(),
-            "registry": self.registry.status(),
-            "context": self.context.status(),
-            "eventbus": self.eventbus.status(),
+
+            "state":
+                self._state,
+
+            "services":
+                self.registry.count(),
+
+            "scheduler_queue":
+                len(self.scheduler),
+
+            "runtime":
+                self.runtime.status(),
+
         }
 
-    # ---------------------------------------------------------
-    # Representation
-    # ---------------------------------------------------------
 
-    def __repr__(self) -> str:
+
+    # ==========================================================
+    # Protocol
+    # ==========================================================
+
+    def __repr__(
+        self,
+    ) -> str:
 
         return (
-            f"Kernel("
-            f"state='{self.state}', "
-            f"version='{self.VERSION}')"
+
+            f"{self.__class__.__name__}("
+
+            f"state={self._state}, "
+
+            f"services={self.registry.count()}"
+
+            ")"
+
         )

@@ -1,0 +1,2953 @@
+"""
+SciOS Runtime Tracing Manager
+=============================
+
+Part 1. Constructor + Internal State + Lifecycle + Registry
+
+Python 3.11+
+"""
+
+from __future__ import annotations
+
+import copy
+import time
+import uuid
+
+from collections.abc import Iterable, Mapping
+from typing import Any, Optional
+
+from .context import TraceContext
+from .exporter import TraceExporter
+from .processor import TraceProcessor
+from .sampler import TraceSampler
+from .span import Span
+from .trace import Trace
+
+class TraceManager:
+    """
+    Central runtime tracing manager.
+
+    Part A responsibilities
+    -----------------------
+    - constructor
+    - internal state
+    - lifecycle
+    - active/completed trace registry
+    - global manager registry
+    - basic statistics
+
+    Python 3.11+
+    """
+
+    # ==================================================================
+    # Global registry
+    # ==================================================================
+
+    _global: Optional["TraceManager"] = None
+
+    # ==================================================================
+    # Constructor
+    # ==================================================================
+
+    def __init__(
+        self,
+        name: str = "tracer",
+        service_name: str = "scios",
+        enabled: bool = True,
+        *,
+        sampler: Optional[TraceSampler] = None,
+        processor: Optional[TraceProcessor] = None,
+        exporters: Optional[Iterable[TraceExporter]] = None,
+        context: Optional[TraceContext] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        # --------------------------------------------------------------
+        # Validate configuration
+        # --------------------------------------------------------------
+
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+
+        name = name.strip()
+
+        if not name:
+            raise ValueError("name cannot be empty")
+
+        if not isinstance(service_name, str):
+            raise TypeError("service_name must be a string")
+
+        service_name = service_name.strip()
+
+        if not service_name:
+            raise ValueError("service_name cannot be empty")
+
+        if not isinstance(enabled, bool):
+            raise TypeError("enabled must be a bool")
+
+        # --------------------------------------------------------------
+        # Identity / configuration
+        # --------------------------------------------------------------
+
+        self._manager_id: str = str(uuid.uuid4())
+        self._name: str = name
+        self._service_name: str = service_name
+        self._enabled: bool = enabled
+
+        self._sampler: Optional[TraceSampler] = sampler
+        self._processor: Optional[TraceProcessor] = processor
+
+        self._exporters: list[TraceExporter] = list(
+            exporters or ()
+        )
+
+        # --------------------------------------------------------------
+        # Runtime context
+        # --------------------------------------------------------------
+
+        self._context: Optional[TraceContext] = context
+
+        # --------------------------------------------------------------
+        # Current trace state
+        # --------------------------------------------------------------
+
+        self._trace: Optional[Trace] = None
+        self._traces: list[Trace] = []
+
+        # --------------------------------------------------------------
+        # Current span state
+        # --------------------------------------------------------------
+
+        self._spans: list[Span] = []
+        self._span_stack: list[Span] = []
+        self._current_span: Optional[Span] = None
+
+        # --------------------------------------------------------------
+        # Trace registries
+        #
+        # These dictionaries are the authoritative runtime registries.
+        # --------------------------------------------------------------
+
+        self._active_traces: dict[str, Trace] = {}
+        self._completed_traces: dict[str, Trace] = {}
+
+        # --------------------------------------------------------------
+        # Lifecycle state
+        # --------------------------------------------------------------
+
+        self._initialized: bool = True
+        self._active: bool = False
+        self._closed: bool = False
+        self._frozen: bool = False
+        self._resetting: bool = False
+
+        self._created_at: float = time.time()
+        self._started_at: Optional[float] = None
+        self._stopped_at: Optional[float] = None
+
+        # --------------------------------------------------------------
+        # Metadata / options
+        # --------------------------------------------------------------
+
+        self._metadata: dict[str, Any] = dict(
+            metadata or {}
+        )
+
+        self._options: dict[str, Any] = dict(kwargs)
+
+        # --------------------------------------------------------------
+        # Statistics
+        #
+        # NOTE:
+        # completed trace count is intentionally NOT stored here.
+        # len(self._completed_traces) is the single source of truth.
+        # --------------------------------------------------------------
+
+        self._trace_count: int = 0
+        self._completed_trace_count: int = 0
+        self._cancelled_trace_count: int = 0
+
+        self._span_count: int = 0
+        self._completed_span_count: int = 0
+        self._cancelled_span_count: int = 0
+        self._active_span_count: int = 0
+
+        self._exported_count: int = 0
+        self._processed_count: int = 0
+        self._error_count: int = 0
+
+        # --------------------------------------------------------------
+        # Diagnostics
+        # --------------------------------------------------------------
+
+        self._events: list[Any] = []
+
+    # ==================================================================
+    # Identity / configuration
+    # ==================================================================
+
+    @property
+    def id(self) -> str:
+        """Return the manager identifier."""
+        return self._manager_id
+
+    @property
+    def name(self) -> str:
+        """Return the manager name."""
+        return self._name
+
+    @property
+    def service_name(self) -> str:
+        """Return the service name."""
+        return self._service_name
+
+    @property
+    def enabled(self) -> bool:
+        """Return whether tracing is enabled."""
+        return self._enabled
+
+    # ==================================================================
+    # Lifecycle state
+    # ==================================================================
+
+    @property
+    def initialized(self) -> bool:
+        """Return whether the manager is initialized."""
+        return self._initialized
+
+    @property
+    def active(self) -> bool:
+        """Return whether the manager is active."""
+        return self._active
+
+    @property
+    def closed(self) -> bool:
+        """Return whether the manager is closed."""
+        return self._closed
+
+    @property
+    def frozen(self) -> bool:
+        """Return whether the manager is frozen."""
+        return self._frozen
+
+    # ==================================================================
+    # Current tracing state
+    # ==================================================================
+
+    @property
+    def current_trace(self) -> Optional[Trace]:
+        """Return the currently active trace."""
+        return self._trace
+
+    @property
+    def trace(self) -> Optional[Trace]:
+        """Alias for current_trace."""
+        return self._trace
+
+    @property
+    def current_span(self) -> Optional[Span]:
+        """Return the currently active span."""
+        return self._current_span
+
+    def root_span(self) -> Span | None:
+        """Return the root span of the current trace.
+
+        Returns:
+            The first span in the current trace, or ``None`` when
+            there is no active trace or the trace contains no spans.
+        """
+        trace = self.current_trace
+
+        if trace is None:
+            return None
+
+        spans = getattr(trace, "spans", None)
+
+        if not spans:
+            return None
+
+        return spans[0]
+
+    @property
+    def active_span(self) -> Optional[Span]:
+        """Alias for current_span."""
+        return self._current_span
+
+    def current_context(self) -> Optional[TraceContext]:
+        """Return the current tracing context."""
+        return self._context
+
+    def active_span_stack(self) -> list[Span]:
+        """Return a snapshot of the active span stack."""
+        return list(self._span_stack)
+
+    @property
+    def span_stack(self) -> list[Span]:
+        """Return a snapshot of the active span stack.
+
+        Alias for active_span_stack().
+        """
+        return list(self._span_stack)
+
+    @property
+    def stack_depth(self) -> int:
+        """Return the current span stack depth."""
+        return len(self._span_stack)
+
+    @property
+    def span_depth(self) -> int:
+        """Alias for stack_depth."""
+        return len(self._span_stack)
+
+    # ==================================================================
+    # Metadata
+    # ==================================================================
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Return a copy of manager metadata."""
+        return dict(self._metadata)
+
+    # ==================================================================
+    # Trace registry
+    # ==================================================================
+
+    @property
+    def active_traces(self) -> dict[str, Trace]:
+        """
+        Return the active trace registry.
+
+        The returned dictionary is the manager's live registry.
+        """
+        return self._active_traces
+
+    @property
+    def completed_traces(self) -> dict[str, Trace]:
+        """
+        Return the completed trace registry.
+
+        The returned dictionary is the manager's live registry.
+        """
+        return self._completed_traces
+
+    @property
+    def active_trace_count(self) -> int:
+        """
+        Number of currently active traces.
+
+        The active-trace registry is the single source of truth.
+        """
+        return len(self._active_traces)
+
+    @property
+    def completed_trace_count(self) -> "_CallableCount":
+        """
+        Total number of completed traces.
+
+        Supports both:
+            manager.completed_trace_count
+            manager.completed_trace_count()
+        """
+        return self._CallableCount(
+            self._completed_trace_count
+        )
+
+    def has_active_trace(self) -> bool:
+        """
+        Return True when at least one trace is active.
+        """
+        return self._trace is not None
+
+    def has_active_span(self) -> bool:
+        """
+        Return True when a current active span exists.
+        """
+        return self._current_span is not None
+
+    # ==================================================================
+    # Trace statistics
+    # ==================================================================
+
+    @property
+    def trace_count(self) -> int:
+        """Return the total number of traces created."""
+        return self._trace_count
+
+    @property
+    def total_trace_count(self) -> int:
+        """Return the total number of traces created."""
+        return self._trace_count
+
+    @property
+    def cancelled_trace_count(self) -> int:
+        """Return the number of cancelled traces."""
+        return self._cancelled_trace_count
+
+    # ==================================================================
+    # Span statistics
+    # ==================================================================
+
+    @property
+    def span_count(self) -> int:
+        """Return the total number of spans created."""
+        return self._span_count
+
+    @property
+    def completed_span_count(self) -> int:
+        """Return the number of completed spans."""
+        return self._completed_span_count
+
+    @property
+    def cancelled_span_count(self) -> int:
+        """Return the number of cancelled spans."""
+        return self._cancelled_span_count
+
+    @property
+    def active_span_count(self) -> int:
+        """Return the number of active spans."""
+        return self._active_span_count
+
+    # ==================================================================
+    # Processing / exporting statistics
+    # ==================================================================
+
+    @property
+    def exported_count(self) -> int:
+        """Return the number of successfully exported traces."""
+        return self._exported_count
+
+    @property
+    def processed_count(self) -> int:
+        """Return the number of processed traces."""
+        return self._processed_count
+
+    @property
+    def error_count(self) -> int:
+        """Return the number of processing/export errors."""
+        return self._error_count
+
+    # ==================================================================
+    # Global registry
+    # ==================================================================
+
+    @classmethod
+    def get_global(cls) -> "TraceManager":
+        """
+        Return the process-wide global TraceManager.
+        """
+        if cls._global is None:
+            cls._global = cls()
+
+        return cls._global
+
+    @classmethod
+    def set_global(
+        cls,
+        manager: Optional["TraceManager"],
+    ) -> Optional["TraceManager"]:
+        """
+        Set the process-wide global TraceManager.
+
+        Returns the previously registered manager.
+        """
+        if manager is not None and not isinstance(manager, cls):
+            raise TypeError(
+                f"manager must be an instance of {cls.__name__}"
+            )
+
+        previous = cls._global
+        cls._global = manager
+
+        return previous
+
+    # ==================================================================
+    # Lifecycle
+    # ==================================================================
+
+    def initialize(self) -> "TraceManager":
+        """
+        Initialize or reinitialize the manager.
+        """
+        self._initialized = True
+        self._closed = False
+        self._frozen = False
+
+        return self
+
+    def start(self) -> "TraceManager":
+        """
+        Start the tracing manager.
+        """
+        if self._closed:
+            raise RuntimeError(
+                "Cannot start a closed TraceManager."
+            )
+
+        if not self._initialized:
+            self.initialize()
+
+        self._active = True
+        self._started_at = time.time()
+
+        return self
+
+    def stop(self) -> "TraceManager":
+        """
+        Stop the manager without clearing completed traces.
+        """
+        self._active = False
+        self._stopped_at = time.time()
+
+        return self
+
+    def freeze(self) -> "TraceManager":
+        """Freeze manager mutations."""
+        self._frozen = True
+        return self
+
+    def unfreeze(self) -> "TraceManager":
+        """Allow manager mutations again."""
+        self._frozen = False
+        return self
+
+    def reset(self) -> "TraceManager":
+        """
+        Reset runtime and tracing state while preserving configuration.
+        """
+
+        if self._closed:
+            self._closed = False
+
+        self._trace = None
+        self._traces.clear()
+
+        self._spans.clear()
+        self._span_stack.clear()
+        self._current_span = None
+
+        self._active_traces.clear()
+        self._completed_traces.clear()
+
+        self._context = None
+
+        self._trace_count = 0
+        self._completed_trace_count = 0
+        self._cancelled_trace_count = 0
+
+        self._span_count = 0
+        self._completed_span_count = 0
+        self._cancelled_span_count = 0
+        self._active_span_count = 0
+
+        self._exported_count = 0
+        self._processed_count = 0
+        self._error_count = 0
+
+        self._events.clear()
+
+        self._active = False
+        self._frozen = False
+        self._resetting = False
+
+        self._started_at = None
+        self._stopped_at = None
+
+        return self
+
+    def close(self) -> "TraceManager":
+        """
+        Close the manager.
+
+        Completed traces remain queryable.
+        """
+        if self._trace is not None:
+            self.finish_trace()
+
+        self._spans.clear()
+        self._span_stack.clear()
+        self._traces.clear()
+
+        self._trace = None
+        self._current_span = None
+        self._active_span_count = 0
+
+        self._active = False
+        self._closed = True
+        self._stopped_at = time.time()
+
+        return self
+
+    def shutdown(self) -> "TraceManager":
+        """
+        Shutdown the manager.
+
+        Active traces are finished before shutdown.
+        Completed traces are then cleared.
+        """
+        if self._closed:
+            return self
+
+        if self._trace is not None:
+            self.finish_trace()
+
+        self._active_traces.clear()
+        self._completed_traces.clear()
+
+        self._trace = None
+        self._span_stack.clear()
+        self._current_span = None
+        self._active_span_count = 0
+
+        self._context = None
+        self._metadata.clear()
+
+        self._active = False
+        self._closed = True
+        self._stopped_at = time.time()
+
+        return self
+
+    # ==================================================================
+    # Trace identity
+    # ==================================================================
+
+    @staticmethod
+    def _trace_id(trace: Trace) -> str:
+        """
+        Resolve the canonical trace identifier.
+        """
+        trace_id = getattr(trace, "trace_id", None)
+
+        if trace_id is None:
+            trace_id = getattr(trace, "id", None)
+
+        if trace_id is None:
+            raise ValueError(
+                "Trace must provide trace_id or id."
+            )
+
+        return str(trace_id)
+
+    # ==================================================================
+    # Trace registry helpers
+    # ==================================================================
+
+    def register_trace(self, trace: Trace) -> Trace:
+        """
+        Register a trace as active.
+        """
+        if trace is None:
+            raise TypeError("trace cannot be None")
+
+        trace_id = self._trace_id(trace)
+
+        # --------------------------------------------------------------
+        # Already active
+        # --------------------------------------------------------------
+
+        if trace_id in self._active_traces:
+            return self._active_traces[trace_id]
+
+        # --------------------------------------------------------------
+        # A completed trace with the same ID must not silently coexist.
+        # --------------------------------------------------------------
+
+        if trace_id in self._completed_traces:
+            raise ValueError(
+                f"Trace {trace_id!r} is already completed."
+            )
+
+        self._active_traces[trace_id] = trace
+
+        self._trace_count += 1
+
+        if trace not in self._traces:
+            self._traces.append(trace)
+
+        return trace
+
+    def unregister_trace(
+        self,
+        trace: Trace,
+    ) -> Optional[Trace]:
+        """
+        Move an active trace to the completed registry.
+
+        This method performs registry transition only. Trace lifecycle
+        finalization belongs to finish_trace().
+        """
+        trace_id = self._trace_id(trace)
+
+        active = self._active_traces.pop(
+            trace_id,
+            None,
+        )
+
+        if active is None:
+            return None
+
+        self._completed_traces[trace_id] = active
+
+        return active
+
+    def get_trace(
+        self,
+        trace_id: str,
+    ) -> Optional[Trace]:
+        """
+        Return a trace from either active or completed registry.
+        """
+        key = str(trace_id)
+
+        trace = self._active_traces.get(key)
+
+        if trace is not None:
+            return trace
+
+        return self._completed_traces.get(key)
+
+    def has_trace(
+        self,
+        trace_id: str,
+    ) -> bool:
+        """Return whether a trace exists."""
+        return self.get_trace(trace_id) is not None
+
+    # ==================================================================
+    # Trace lifecycle
+    # ==================================================================
+
+    def start_trace(
+        self,
+        trace: Optional[Trace] = None,
+        **kwargs: Any,
+    ) -> Trace:
+        """
+        Start a trace.
+
+        The trace becomes the current trace and is registered as active.
+        """
+        if self._closed:
+            raise RuntimeError(
+                "Cannot start a trace on a closed TraceManager."
+            )
+
+        if self._frozen:
+            raise RuntimeError(
+                "Cannot start a trace on a frozen TraceManager."
+            )
+
+        if not self._enabled:
+            raise RuntimeError(
+                "Tracing is disabled."
+            )
+
+        # --------------------------------------------------------------
+        # Prevent accidental nested root traces.
+        # --------------------------------------------------------------
+
+        if self._trace is not None:
+            raise RuntimeError(
+                "A trace is already active."
+            )
+
+        # --------------------------------------------------------------
+        # Create trace when caller did not provide one.
+        #
+        # Trace construction is intentionally isolated here so the
+        # remainder of the lifecycle works with either a supplied Trace
+        # or a Trace created by the manager.
+        # --------------------------------------------------------------
+
+        if trace is None:
+            trace = Trace(
+                name=kwargs.pop(
+                    "name",
+                    self._name,
+                ),
+                **kwargs,
+            )
+
+        # --------------------------------------------------------------
+        # Register active trace.
+        # --------------------------------------------------------------
+
+        self.register_trace(trace)
+
+        self._trace = trace
+
+        return trace
+
+
+    def _finish_span_for_trace(
+        self,
+        span: Span,
+    ) -> None:
+        """
+        Finish a span during trace finalization.
+
+        This helper is deliberately tolerant of different Span
+        lifecycle implementations.
+        """
+        finish = getattr(span, "finish", None)
+
+        if callable(finish):
+            finish()
+
+        try:
+            self._span_stack.remove(span)
+        except ValueError:
+            pass
+
+        self._current_span = (
+            self._span_stack[-1]
+            if self._span_stack
+            else None
+        )
+
+        self._active_span_count = len(
+            self._span_stack
+        )
+
+        self._completed_span_count += 1
+
+    # ==================================================================
+    # Representation
+    # ==================================================================
+
+    def __repr__(self) -> str:
+        return (
+            "TraceManager("
+            f"name={self._name!r}, "
+            f"service={self._service_name!r}, "
+            f"enabled={self._enabled!r}, "
+            f"active={self._active!r}, "
+            f"active_traces={self.active_trace_count}, "
+            f"completed={self.completed_trace_count}, "
+            f"spans={self._span_count}"
+            ")"
+        )
+
+
+    # ============================================================================
+    # Part 4. Core Properties
+    # ============================================================================
+
+    @property
+    def current_trace(self) -> Optional[Trace]:
+        """Return the currently active trace."""
+        return self._trace
+
+    @property
+    def trace(self) -> Optional[Trace]:
+        """Return the currently active trace."""
+        return self._trace
+
+    @property
+    def current_span(self) -> Optional[Span]:
+        """
+        Return the currently active span.
+
+        The span stack is the single source of truth.
+        """
+        if not self._span_stack:
+            return None
+
+        return self._span_stack[-1]
+
+    @property
+    def span_stack(self) -> list[Span]:
+        """Return a copy of the active span stack."""
+        return list(self._span_stack)
+
+    @property
+    def span_depth(self) -> int:
+        """Return the current span nesting depth."""
+        return len(self._span_stack)
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Return a shallow copy of manager metadata."""
+        return dict(self._metadata)
+
+    # ============================================================================
+    # Part 5. Trace Lifecycle
+    # ============================================================================
+
+    def start_trace(
+        self,
+        name: str | None = None,
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+        attributes: Optional[Mapping[str, Any]] = None,
+        **extra_attributes: Any,
+    ) -> Optional[Trace]:
+        """
+        Create and start a new trace.
+
+        Starting a new trace always establishes a new trace identity and
+        resets the current span state.
+        """
+
+        if not self._enabled:
+            return None
+
+        if self._closed:
+            raise RuntimeError(
+                "Cannot start a trace on a closed TraceManager."
+            )
+
+        if self._frozen:
+            raise RuntimeError(
+                "Cannot start a trace on a frozen TraceManager."
+            )
+
+        trace_name = self._name if name is None else name
+
+        if not isinstance(trace_name, str):
+            raise TypeError("trace name must be a string")
+
+        trace_name = trace_name.strip()
+
+        if not trace_name:
+            raise ValueError("trace name cannot be empty")
+
+        # ------------------------------------------------------------------
+        # If another trace is active, finish it before replacing it.
+        # ------------------------------------------------------------------
+
+        if self._trace is not None:
+            self.finish_trace(self._trace)
+
+        # ------------------------------------------------------------------
+        # Reset span runtime state.
+        # ------------------------------------------------------------------
+
+        self._span_stack.clear()
+        self._current_span = None
+        self._active_span_count = 0
+
+        # ------------------------------------------------------------------
+        # Build trace attributes.
+        # ------------------------------------------------------------------
+
+        trace_attributes: dict[str, Any] = dict(
+            attributes or {}
+        )
+        trace_attributes.update(extra_attributes)
+
+        # ------------------------------------------------------------------
+        # Construct trace.
+        # ------------------------------------------------------------------
+
+        trace_kwargs: dict[str, Any] = {
+            "name": trace_name,
+        }
+
+        if metadata is not None:
+            trace_kwargs["metadata"] = dict(metadata)
+
+        if trace_attributes:
+            trace_kwargs["attributes"] = trace_attributes
+
+        trace = Trace(**trace_kwargs)
+
+        # ------------------------------------------------------------------
+        # Start lifecycle.
+        # ------------------------------------------------------------------
+
+        start = getattr(trace, "start", None)
+
+        if callable(start):
+            start()
+
+        # ------------------------------------------------------------------
+        # Register trace.
+        # ------------------------------------------------------------------
+
+        self.register_trace(trace)
+
+        self._trace = trace
+        self._active = True
+
+        # ------------------------------------------------------------------
+        # Establish current context.
+        # ------------------------------------------------------------------
+
+        trace_id = self._trace_id(trace)
+
+        self._context = TraceContext(
+            trace_id=trace_id,
+            span_id=None,
+            parent_span_id=None,
+        )
+
+        # ------------------------------------------------------------------
+        # Manager lifecycle timestamp.
+        # ------------------------------------------------------------------
+
+        if self._started_at is None:
+            self._started_at = time.time()
+
+        return trace
+
+
+    def finish_trace(
+        self,
+        trace: Optional[Trace] = None,
+        *,
+        status: Any = None,
+        **kwargs: Any,
+    ) -> Optional[Trace]:
+        """
+        Finish an active trace.
+
+        Lifecycle:
+
+            _active_traces
+                ↓
+            finish active spans
+                ↓
+            trace.finish()
+                ↓
+            unregister_trace()
+                ↓
+            _completed_traces
+
+        Invariants
+        ----------
+        * A trace must leave _active_traces before becoming completed.
+        * unregister_trace() is the single registry transition authority.
+        * _completed_trace_count always equals
+        len(_completed_traces).
+        * The current trace is cleared after successful completion.
+        """
+
+        # ------------------------------------------------------------------
+        # 1. Manager lifecycle guard
+        # ------------------------------------------------------------------
+
+        if self._frozen:
+            raise RuntimeError(
+                "Cannot finish a trace on a frozen TraceManager."
+            )
+
+        # ------------------------------------------------------------------
+        # 2. Resolve target
+        # ------------------------------------------------------------------
+
+        target = (
+            trace
+            if trace is not None
+            else self._trace
+        )
+
+        if target is None:
+            return None
+
+        # ------------------------------------------------------------------
+        # 3. Resolve trace identity
+        # ------------------------------------------------------------------
+
+        trace_id = self._trace_id(target)
+
+        # ------------------------------------------------------------------
+        # 4. Target must be active
+        # ------------------------------------------------------------------
+
+        active = self._active_traces.get(
+            trace_id
+        )
+
+        if active is None:
+
+            # --------------------------------------------------------------
+            # Idempotent behavior for an already completed trace.
+            # --------------------------------------------------------------
+
+            completed = self._completed_traces.get(
+                trace_id
+            )
+
+            if completed is not None:
+
+                if self._trace is target:
+                    self._trace = None
+
+                return completed
+
+            raise ValueError(
+                f"Trace {trace_id!r} is not registered as active."
+            )
+
+        # Always operate on the registry-owned object.
+        target = active
+
+        # ------------------------------------------------------------------
+        # 5. Finish active spans belonging to this trace
+        # ------------------------------------------------------------------
+
+        spans_to_finish = [
+            span
+            for span in reversed(self._span_stack)
+            if (
+                getattr(span, "trace_id", None)
+                == trace_id
+            )
+            or (
+                getattr(span, "trace", None)
+                is target
+            )
+        ]
+
+        for span in spans_to_finish:
+            self._finish_span_for_trace(
+                span
+            )
+
+        # ------------------------------------------------------------------
+        # 6. Defensive span-state cleanup
+        # ------------------------------------------------------------------
+
+        if self._trace is target:
+
+            self._current_span = None
+
+            self._span_stack.clear()
+
+            self._active_span_count = 0
+
+        # ------------------------------------------------------------------
+        # 7. Finish Trace lifecycle
+        # ------------------------------------------------------------------
+
+        finish = getattr(
+            target,
+            "finish",
+            None,
+        )
+
+        if callable(finish):
+
+            if status is None:
+                finish(**kwargs)
+
+            else:
+                finish(
+                    status=status,
+                    **kwargs,
+                )
+
+        else:
+
+            # Compatibility fallback.
+            if hasattr(target, "state"):
+
+                try:
+                    target.state = "finished"
+
+                except (
+                    AttributeError,
+                    TypeError,
+                ):
+                    pass
+
+        # ------------------------------------------------------------------
+        # 8. ACTIVE -> COMPLETED
+        #
+        # unregister_trace() is the ONLY registry transition.
+        # ------------------------------------------------------------------
+
+        completed = self.unregister_trace(
+            target
+        )
+
+        if completed is None:
+            raise RuntimeError(
+                f"Failed to complete trace {trace_id!r}."
+            )
+
+        target = completed
+
+        # ------------------------------------------------------------------
+        # 9. Processor notification
+        # ------------------------------------------------------------------
+
+        if self._processor is not None:
+
+            callback = getattr(
+                self._processor,
+                "trace_finished",
+                None,
+            )
+
+            if callable(callback):
+
+                try:
+
+                    callback(target)
+
+                    self._processed_count += 1
+
+                except Exception:
+
+                    self._error_count += 1
+
+                    raise
+
+        # ------------------------------------------------------------------
+        # 10. Export
+        # ------------------------------------------------------------------
+
+        for exporter in self._exporters:
+
+            callback = getattr(
+                exporter,
+                "export_trace",
+                None,
+            )
+
+            if not callable(callback):
+                continue
+
+            try:
+
+                callback(target)
+
+                self._exported_count += 1
+
+            except Exception:
+
+                self._error_count += 1
+
+                raise
+
+        # ------------------------------------------------------------------
+        # 11. Clear current trace
+        # ------------------------------------------------------------------
+
+        if self._trace is target:
+            self._trace = None
+
+        self._current_span = None
+
+        self._span_stack.clear()
+
+        self._active_span_count = 0
+
+        self._context = None
+
+        self._active = bool(
+            self._active_traces
+        )
+
+        self._stopped_at = time.time()
+
+        # ------------------------------------------------------------------
+        # 12. Re-establish derived counter invariant
+        # ------------------------------------------------------------------
+
+        self._completed_trace_count = len(
+            self._completed_traces
+        )
+
+        return target
+
+    def cancel_trace(self) -> Optional[Trace]:
+        """
+        Cancel the current active trace.
+
+        Active spans are cancelled from child to parent before
+        cancelling the trace itself.
+
+        The cancelled trace is moved from the active registry to
+        the completed registry. The manager remains reusable.
+        """
+
+        trace = self._trace
+
+        if trace is None:
+            return None
+
+        try:
+            # ----------------------------------------------------------
+            # Cancel active spans child -> parent
+            # ----------------------------------------------------------
+
+            while self._span_stack:
+                self.cancel_span()
+
+            # ----------------------------------------------------------
+            # Cancel trace
+            # ----------------------------------------------------------
+
+            cancel = getattr(trace, "cancel", None)
+
+            if callable(cancel):
+                cancel()
+
+            self._cancelled_trace_count += 1
+
+            # ----------------------------------------------------------
+            # Move active trace -> completed registry
+            # ----------------------------------------------------------
+
+            trace_id = self._trace_id(trace)
+
+            self._active_traces.pop(
+                trace_id,
+                None,
+            )
+
+            self._completed_traces[trace_id] = trace
+
+            self._completed_trace_count = len(
+                self._completed_traces
+            )
+
+            return trace
+
+        finally:
+            # ----------------------------------------------------------
+            # Clear current runtime state
+            # ----------------------------------------------------------
+
+            self._trace = None
+            self._current_span = None
+            self._span_stack.clear()
+
+            self._active_span_count = 0
+
+            # ----------------------------------------------------------
+            # Trace context is no longer active
+            # ----------------------------------------------------------
+
+            self._context = None
+
+            # ----------------------------------------------------------
+            # Manager remains reusable
+            # ----------------------------------------------------------
+
+            self._active = False
+
+
+
+    # ==================================================================
+    # Part 6. Span Lifecycle
+    # ==================================================================
+
+    def start_span(
+        self,
+        name: str = "Span",
+        *,
+        component: str | None = None,
+        task_id: str | None = None,
+        kind: str = "internal",
+        status: str = "unset",
+        attributes: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Span:
+        """Create and start a span on the active trace."""
+
+        if not self._enabled:
+            return None
+
+        if not isinstance(name, str):
+            raise TypeError("span name must be a string")
+
+        name = name.strip()
+
+        if not name:
+            raise ValueError("span name cannot be empty")
+
+        # Resolve active trace.
+        target_trace = self._trace
+
+        if target_trace is None:
+            raise RuntimeError(
+                "cannot start span without an active trace"
+            )
+
+        # Current span becomes the parent for nested spans.
+        parent = self.current_span
+
+        trace_id = getattr(
+            target_trace,
+            "trace_id",
+            getattr(target_trace, "id", None),
+        )
+
+        # Merge explicit attributes with keyword attributes.
+        span_attributes: dict[str, Any] = dict(attributes or {})
+        span_attributes.update(kwargs)
+
+        span_kwargs: dict[str, Any] = {
+            "name": name,
+            "component": component,
+            "task_id": task_id,
+            "kind": kind,
+            "status": status,
+            "attributes": span_attributes or None,
+        }
+
+        if parent is not None:
+            parent_span_id = getattr(
+                parent,
+                "span_id",
+                getattr(parent, "id", None),
+            )
+
+            if parent_span_id is not None:
+                span_kwargs["parent_id"] = parent_span_id
+
+        if trace_id is not None:
+            span_kwargs["trace_id"] = trace_id
+
+        span = Span(**span_kwargs)
+
+        # Start the span when Span was constructed without auto-start.
+        if not bool(getattr(span, "running", False)):
+            start = getattr(span, "start", None)
+
+            if callable(start):
+                start()
+
+        # Register the span with the owning trace.
+        add_span = getattr(target_trace, "add_span", None)
+
+        if callable(add_span):
+            add_span(span)
+        else:
+            raise RuntimeError(
+                "active trace does not support span registration"
+            )
+
+        # Register the span with the manager.
+        self._spans.append(span)
+        self._span_stack.append(span)
+        self._current_span = span
+
+        self._span_count += 1
+        self._active_span_count += 1
+
+        span_id = getattr(
+            span,
+            "span_id",
+            getattr(span, "id", None),
+        )
+
+        parent_span_id = None
+
+        if parent is not None:
+            parent_span_id = getattr(
+                parent,
+                "span_id",
+                getattr(parent, "id", None),
+            )
+
+        self._context = TraceContext(
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+        )
+
+        return span
+
+    def finish_span(self) -> Optional[Span]:
+        """Finish the current span and restore its parent."""
+
+        span = self.current_span
+
+        if span is None:
+            return None
+
+        try:
+            already_finished = bool(
+                getattr(span, "finished", False)
+            )
+
+            if not already_finished:
+                is_finished = getattr(
+                    span,
+                    "is_finished",
+                    None,
+                )
+
+                if callable(is_finished):
+                    already_finished = bool(
+                        is_finished()
+                    )
+
+            if not already_finished:
+                span.finish()
+
+            self._completed_span_count += 1
+
+            return span
+
+        finally:
+            if self._span_stack and self._span_stack[-1] is span:
+                self._span_stack.pop()
+            else:
+                try:
+                    self._span_stack.remove(span)
+                except ValueError:
+                    pass
+
+            self._sync_current_span()
+
+            if self._active_span_count > 0:
+                self._active_span_count -= 1
+
+    def cancel_span(
+        self,
+        span: Optional[Span] = None,
+    ) -> "TraceManager":
+        """
+        Cancel an active span.
+
+        The cancelled span is removed from the active span stack.
+        """
+
+        if span is None:
+            if not self._span_stack:
+                return self
+
+            span = self._span_stack[-1]
+
+        # --------------------------------------------------------------
+        # Cancel lifecycle
+        # --------------------------------------------------------------
+
+        try:
+            cancel = getattr(span, "cancel", None)
+
+            if callable(cancel):
+                cancel()
+            else:
+                finish = getattr(span, "finish", None)
+
+                if callable(finish):
+                    finish()
+                else:
+                    try:
+                        span.status = "cancelled"
+                    except Exception:
+                        pass
+
+                    try:
+                        span.finished = True
+                    except Exception:
+                        pass
+
+        finally:
+            # ----------------------------------------------------------
+            # Remove from active stack
+            # ----------------------------------------------------------
+
+            if self._span_stack:
+                if self._span_stack[-1] is span:
+                    self._span_stack.pop()
+                elif span in self._span_stack:
+                    self._span_stack.remove(span)
+
+            # ----------------------------------------------------------
+            # Clear current span
+            # ----------------------------------------------------------
+
+            if self._current_span is span:
+                self._current_span = (
+                    self._span_stack[-1]
+                    if self._span_stack
+                    else None
+                )
+
+        return self
+
+    def enter_span(
+        self,
+        name: str,
+        *,
+        parent: Optional[Span] = None,
+        trace: Optional[Trace] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Optional[Span]:
+        """Enter a span."""
+
+        return self.start_span(
+            name,
+            parent=parent,
+            trace=trace,
+            metadata=metadata,
+        )
+
+    def exit_span(
+        self,
+        *,
+        cancel: bool = False,
+    ) -> Optional[Span]:
+        """Exit the current span."""
+
+        if cancel:
+            return self.cancel_span()
+
+        return self.finish_span()
+
+    # ==================================================================
+    # Part 7. Span Management
+    # ==================================================================
+
+    def push_span(self, span: Span) -> Span:
+        """Push a span onto the active span stack."""
+
+        if span is None:
+            raise TypeError("span cannot be None")
+
+        self._span_stack.append(span)
+        self._current_span = span
+
+        return span
+
+    def pop_span(self) -> Optional[Span]:
+        """Pop the current span."""
+
+        if not self._span_stack:
+            self._current_span = None
+            return None
+
+        span = self._span_stack.pop()
+
+        self._sync_current_span()
+
+        return span
+
+    def _sync_current_span(self) -> None:
+        """Synchronize current span and context."""
+
+        self._current_span = (
+            self._span_stack[-1]
+            if self._span_stack
+            else None
+        )
+
+        if self._current_span is None:
+            return
+
+        trace_id = None
+
+        if self._trace is not None:
+            trace_id = getattr(
+                self._trace,
+                "trace_id",
+                getattr(self._trace, "id", None),
+            )
+
+        span_id = getattr(
+            self._current_span,
+            "span_id",
+            getattr(self._current_span, "id", None),
+        )
+
+        parent = getattr(
+            self._current_span,
+            "parent_id",
+            None,
+        )
+
+        self._context = TraceContext(
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent,
+        )
+
+    def get_span(
+        self,
+        span_id: Optional[str] = None,
+    ) -> Optional[Span]:
+        """Get a span by id or return current span."""
+
+        if span_id is None:
+            return self._current_span
+
+        key = str(span_id)
+
+        for span in reversed(self._spans):
+            current_id = getattr(
+                span,
+                "span_id",
+                getattr(span, "id", None),
+            )
+
+            if str(current_id) == key:
+                return span
+
+        return None
+
+    def find_span(
+        self,
+        span_id: Optional[str] = None,
+        *,
+        name: Optional[str] = None,
+    ) -> Optional[Span]:
+        """Find a span by id or name."""
+
+        if span_id is not None:
+            return self.get_span(span_id)
+
+        if name is not None:
+            for span in reversed(self._spans):
+                if getattr(span, "name", None) == name:
+                    return span
+
+        return None
+
+    def add_span(self, span: Span) -> Span:
+        """Add an existing span."""
+
+        if span is None:
+            raise TypeError("span cannot be None")
+
+        if span not in self._spans:
+            self._spans.append(span)
+
+        return span
+
+    def remove_span(
+        self,
+        span: Span | str,
+    ) -> Optional[Span]:
+        """Remove a span from manager state."""
+
+        if isinstance(span, str):
+            target = self.get_span(span)
+        else:
+            target = span
+
+        if target is None:
+            return None
+
+        if target in self._span_stack:
+            self._span_stack.remove(target)
+
+        if target in self._spans:
+            self._spans.remove(target)
+
+        self._sync_current_span()
+
+        return target
+
+    # ==================================================================
+    # Part 8. Context Management
+    # ==================================================================
+
+    def context(self) -> Optional[TraceContext]:
+        """Return the current trace context."""
+        return self._context
+
+    def current_context(self) -> Optional[TraceContext]:
+        """Return the current trace context."""
+        return self._context
+
+    def set_context(
+        self,
+        context: Optional[TraceContext],
+    ) -> "TraceManager":
+        if context is not None and not isinstance(
+            context,
+            TraceContext,
+        ):
+            raise TypeError(
+                "context must be a TraceContext or None",
+            )
+
+        self._context = context
+
+        return self
+
+    def update_context(
+        self,
+        **updates: Any,
+    ) -> "TraceManager":
+        """Update the current tracing context."""
+
+        if self._trace is None:
+            return self
+
+        trace_id = getattr(
+            self._trace,
+            "trace_id",
+            getattr(self._trace, "id", None),
+        )
+
+        span_id = None
+
+        if self._current_span is not None:
+            span_id = getattr(
+                self._current_span,
+                "span_id",
+                getattr(
+                    self._current_span,
+                    "id",
+                    None,
+                ),
+            )
+
+        current = self._context
+
+        if current is None:
+            current = TraceContext(
+                trace_id=trace_id,
+                span_id=span_id,
+            )
+
+        for key, value in updates.items():
+            descriptor = getattr(
+                type(current),
+                key,
+                None,
+            )
+
+            if isinstance(descriptor, property):
+                if descriptor.fset is not None:
+                    descriptor.fset(current, value)
+                else:
+                    current.set_attribute(key, value)
+
+            elif hasattr(current, key):
+                setattr(current, key, value)
+
+            else:
+                current.set_attribute(key, value)
+
+        self._context = current
+
+        return self
+
+    def clear_context(self) -> "TraceManager":
+        """Clear the current trace context."""
+
+        self._context = None
+
+        return self
+
+    # ==================================================================
+    # Part 9. Metadata & Attributes
+    # ==================================================================
+
+    def set_metadata(
+        self,
+        key: str,
+        value: Any,
+    ) -> "TraceManager":
+        """Set one manager-level metadata value."""
+
+        if not isinstance(key, str):
+            raise TypeError("metadata key must be a string")
+
+        key = key.strip()
+
+        if not key:
+            raise ValueError("metadata key cannot be empty")
+
+        self._metadata[key] = value
+
+        return self
+
+    def update_metadata(
+        self,
+        values: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> "TraceManager":
+        """Update manager metadata."""
+
+        if values is not None:
+            if not isinstance(values, dict):
+                raise TypeError("values must be a dictionary")
+
+            for key, value in values.items():
+                self.set_metadata(key, value)
+
+        for key, value in kwargs.items():
+            self.set_metadata(key, value)
+
+        return self
+
+    def get_metadata(
+        self,
+        key: Optional[str] = None,
+        default: Any = None,
+    ) -> Any:
+        """Return metadata."""
+
+        if key is None:
+            return dict(self._metadata)
+
+        return self._metadata.get(key, default)
+
+    def set_attribute(
+        self,
+        key: str,
+        value: Any,
+    ) -> "TraceManager":
+        """
+        Set an attribute on the current span.
+
+        Falls back to manager metadata when no span is active.
+        """
+
+        if not isinstance(key, str):
+            raise TypeError("attribute key must be a string")
+
+        key = key.strip()
+
+        if not key:
+            raise ValueError("attribute key cannot be empty")
+
+        span = self._current_span
+
+        if span is not None:
+            setter = getattr(
+                span,
+                "set_attribute",
+                None,
+            )
+
+            if callable(setter):
+                setter(key, value)
+                return self
+
+            attributes = getattr(
+                span,
+                "_attributes",
+                None,
+            )
+
+            if isinstance(attributes, dict):
+                attributes[key] = value
+                return self
+
+        self._metadata[key] = value
+
+        return self
+
+    def add_event(
+        self,
+        name: str,
+        *,
+        attributes: Optional[dict[str, Any]] = None,
+        timestamp: Optional[float] = None,
+    ) -> "TraceManager":
+        """Add an event to the current span."""
+
+        if not isinstance(name, str):
+            raise TypeError("event name must be a string")
+
+        name = name.strip()
+
+        if not name:
+            raise ValueError("event name cannot be empty")
+
+        event = {
+            "name": name,
+            "attributes": dict(attributes or {}),
+            "timestamp": (
+                time.time()
+                if timestamp is None
+                else timestamp
+            ),
+        }
+
+        span = self._current_span
+
+        if span is not None:
+            add_event = getattr(
+                span,
+                "add_event",
+                None,
+            )
+
+            if callable(add_event):
+                try:
+                    add_event(
+                        name,
+                        attributes=event["attributes"],
+                        timestamp=event["timestamp"],
+                    )
+                except TypeError:
+                    try:
+                        add_event(
+                            name,
+                            event["attributes"],
+                        )
+                    except TypeError:
+                        add_event(name)
+
+                return self
+
+        events = self._metadata.setdefault(
+            "events",
+            [],
+        )
+
+        if isinstance(events, list):
+            events.append(event)
+
+        return self
+
+    # ==================================================================
+    # Part 10. Processing
+    # ==================================================================
+
+    def process_span(
+        self,
+        span: Optional[Span] = None,
+    ) -> Optional[Span]:
+        """Process a span through the configured processor."""
+
+        target = span or self._current_span
+
+        if target is None:
+            return None
+
+        processor = self._processor
+
+        if processor is None:
+            return target
+
+        method = getattr(
+            processor,
+            "process_span",
+            None,
+        )
+
+        if callable(method):
+            result = method(target)
+
+            self._processed_count += 1
+
+            return target if result is None else result
+
+        method = getattr(
+            processor,
+            "process",
+            None,
+        )
+
+        if callable(method):
+            result = method(target)
+
+            self._processed_count += 1
+
+            return target if result is None else result
+
+        return target
+
+    def process_trace(
+        self,
+        trace: Optional[Trace] = None,
+    ) -> Optional[Trace]:
+        """Process a trace through the configured processor."""
+
+        target = trace or self._trace
+
+        if target is None:
+            return None
+
+        processor = self._processor
+
+        if processor is None:
+            return target
+
+        method = getattr(
+            processor,
+            "process_trace",
+            None,
+        )
+
+        if callable(method):
+            result = method(target)
+
+            self._processed_count += 1
+
+            return target if result is None else result
+
+        method = getattr(
+            processor,
+            "process",
+            None,
+        )
+
+        if callable(method):
+            result = method(target)
+
+            self._processed_count += 1
+
+            return target if result is None else result
+
+        return target
+
+    def process(
+        self,
+        item: Any = None,
+    ) -> Any:
+        """
+        Generic processing entry point.
+
+        Dispatch Trace and Span to specialized processor APIs.
+        """
+
+        if item is None:
+            if self._current_span is not None:
+                item = self._current_span
+            else:
+                item = self._trace
+
+        if item is None:
+            return None
+
+        if isinstance(item, Span):
+            return self.process_span(item)
+
+        if isinstance(item, Trace):
+            return self.process_trace(item)
+
+        processor = self._processor
+
+        if processor is None:
+            return item
+
+        method = getattr(
+            processor,
+            "process",
+            None,
+        )
+
+        if callable(method):
+            result = method(item)
+
+            self._processed_count += 1
+
+            return item if result is None else result
+
+        return item
+
+# ============================================================================
+# Part 11. Sampling
+# ============================================================================
+
+    def should_sample(
+        self,
+        trace: Optional[Trace] = None,
+        *,
+        span: Optional[Span] = None,
+    ) -> bool:
+        """
+        Determine whether the current operation should be sampled.
+        """
+        sampler = self._sampler
+
+        if sampler is None:
+            return True
+
+        decision = self.sampling_decision(
+            trace=trace,
+            span=span,
+        )
+
+        if isinstance(decision, bool):
+            return decision
+
+        value = getattr(
+            decision,
+            "sampled",
+            None,
+        )
+
+        if value is not None:
+            return bool(value)
+
+        value = getattr(
+            decision,
+            "decision",
+            None,
+        )
+
+        if isinstance(value, bool):
+            return value
+
+        return bool(decision)
+
+    def sampling_decision(
+        self,
+        trace: Optional[Trace] = None,
+        *,
+        span: Optional[Span] = None,
+    ) -> Any:
+        """
+        Return the sampler's native sampling decision.
+        """
+        sampler = self._sampler
+
+        if sampler is None:
+            return True
+
+        target = trace or self._trace
+
+        method = getattr(
+            sampler,
+            "should_sample",
+            None,
+        )
+
+        if callable(method):
+            try:
+                return method(
+                    target,
+                    span=span,
+                )
+            except TypeError:
+                try:
+                    return method(target)
+                except TypeError:
+                    return method()
+
+        method = getattr(
+            sampler,
+            "sample",
+            None,
+        )
+
+        if callable(method):
+            try:
+                return method(
+                    target,
+                    span=span,
+                )
+            except TypeError:
+                try:
+                    return method(target)
+                except TypeError:
+                    return method()
+
+        method = getattr(
+            sampler,
+            "decide",
+            None,
+        )
+
+        if callable(method):
+            try:
+                return method(
+                    target,
+                    span=span,
+                )
+            except TypeError:
+                try:
+                    return method(target)
+                except TypeError:
+                    return method()
+
+        return True
+
+# ============================================================================
+# Part 12. Export
+# ============================================================================
+
+    def export_span(
+        self,
+        span: Optional[Span] = None,
+    ) -> list[Any]:
+        """
+        Export a span through all configured exporters.
+        """
+
+        target = span or self.current_span
+
+        if target is None:
+            return []
+
+        if not self._exporters:
+            return []
+
+        results: list[Any] = []
+
+        for exporter in self._exporters:
+            method = getattr(
+                exporter,
+                "export_span",
+                None,
+            )
+
+            if callable(method):
+                results.append(
+                    method(target),
+                )
+                self._exported_count += 1
+
+        return results
+
+    def set_processor(
+        self,
+        processor: Optional[TraceProcessor],
+    ) -> "TraceManager":
+        """
+        Set or clear the span processor.
+
+        Processors are accepted by capability rather than requiring
+        strict inheritance from TraceProcessor.
+        """
+
+        if processor is not None:
+            if not callable(getattr(processor, "process", None)):
+                raise TypeError(
+                    "processor must provide a callable process() method",
+                )
+
+        self._processor = processor
+
+        return self
+
+    def export(
+        self,
+        item: Any = None,
+    ) -> Any:
+        """
+        Generic export entry point.
+        """
+
+        if not self._exporters:
+            return None
+
+        if item is None:
+            item = (
+                self.current_span
+                if self.current_span is not None
+                else self._trace
+            )
+
+        if item is None:
+            return None
+
+        if isinstance(item, Span):
+            return self.export_span(item)
+
+        if isinstance(item, Trace):
+            return self.export_trace(item)
+
+        results: list[Any] = []
+
+        for exporter in self._exporters:
+            method = getattr(
+                exporter,
+                "export",
+                None,
+            )
+
+            if callable(method):
+                results.append(
+                    method(item),
+                )
+                self._exported_count += 1
+
+        return results
+
+    def export_trace(
+        self,
+        trace: Optional[Trace] = None,
+    ) -> list[Any]:
+        """
+        Export a trace through all configured exporters.
+        """
+
+        target = trace or self._trace
+
+        if target is None:
+            return []
+
+        if not self._exporters:
+            return []
+
+        results: list[Any] = []
+
+        for exporter in self._exporters:
+            method = getattr(
+                exporter,
+                "export_trace",
+                None,
+            )
+
+            if callable(method):
+                results.append(
+                    method(target),
+                )
+                self._exported_count += 1
+
+        return results
+
+    def flush(self) -> "TraceManager":
+        """
+        Flush every configured exporter.
+        """
+
+        for exporter in self._exporters:
+            method = getattr(
+                exporter,
+                "flush",
+                None,
+            )
+
+            if callable(method):
+                method()
+
+        return self
+
+    def validate_span_stack(self) -> bool:
+        """
+        Validate internal span-stack invariants.
+        """
+
+        if not self._span_stack:
+            return self._current_span is None
+
+        current = self._span_stack[-1]
+
+        return self._current_span is current
+
+# ============================================================================
+# Part 13. Snapshot
+# ============================================================================
+
+    def snapshot(self) -> dict[str, Any]:
+        """
+        Snapshot current manager runtime state.
+
+        The returned snapshot is fully detached from the live manager
+        state and can therefore be safely restored or inspected without
+        mutating the manager.
+        """
+
+        return {
+            # ------------------------------------------------------------------
+            # Identity / configuration
+            # ------------------------------------------------------------------
+
+            "name": self._name,
+            "service_name": self._service_name,
+            "enabled": self._enabled,
+
+            # ------------------------------------------------------------------
+            # Lifecycle
+            # ------------------------------------------------------------------
+
+            "initialized": self._initialized,
+            "active": self._active,
+            "closed": self._closed,
+            "frozen": self._frozen,
+
+            # ------------------------------------------------------------------
+            # Trace state
+            # ------------------------------------------------------------------
+
+            "trace": copy.deepcopy(
+                self._trace,
+            ),
+
+            "traces": copy.deepcopy(
+                self._traces,
+            ),
+
+            # ------------------------------------------------------------------
+            # Trace registries
+            # ------------------------------------------------------------------
+
+            "active_traces": copy.deepcopy(
+                self._active_traces,
+            ),
+
+            "completed_traces": copy.deepcopy(
+                self._completed_traces,
+            ),
+
+            # ------------------------------------------------------------------
+            # Span state
+            # ------------------------------------------------------------------
+
+            "current_span": copy.deepcopy(
+                self._current_span,
+            ),
+
+            "spans": copy.deepcopy(
+                self._spans,
+            ),
+
+            "span_stack": copy.deepcopy(
+                self._span_stack,
+            ),
+
+            # ------------------------------------------------------------------
+            # Runtime context
+            # ------------------------------------------------------------------
+
+            "context": copy.deepcopy(
+                self._context,
+            ),
+
+            # ------------------------------------------------------------------
+            # Metadata / options
+            # ------------------------------------------------------------------
+
+            "metadata": copy.deepcopy(
+                self._metadata,
+            ),
+
+            "options": copy.deepcopy(
+                self._options,
+            ),
+
+            # ------------------------------------------------------------------
+            # Lifecycle timestamps
+            # ------------------------------------------------------------------
+
+            "created_at": self._created_at,
+            "started_at": self._started_at,
+            "stopped_at": self._stopped_at,
+
+            # ------------------------------------------------------------------
+            # Statistics
+            # ------------------------------------------------------------------
+
+            "statistics": {
+                "trace_count": self._trace_count,
+                "completed_trace_count": (
+                    self._completed_trace_count
+                ),
+                "cancelled_trace_count": (
+                    self._cancelled_trace_count
+                ),
+                "span_count": self._span_count,
+                "completed_span_count": (
+                    self._completed_span_count
+                ),
+                "cancelled_span_count": (
+                    self._cancelled_span_count
+                ),
+                "active_span_count": (
+                    len(self._span_stack)
+                ),
+                "exported_count": self._exported_count,
+                "processed_count": self._processed_count,
+                "error_count": self._error_count,
+            },
+
+            # ------------------------------------------------------------------
+            # Diagnostics / events
+            # ------------------------------------------------------------------
+
+            "events": copy.deepcopy(
+                self._events,
+            ),
+        }
+
+    def restore(
+        self,
+        snapshot: Mapping[str, Any],
+    ) -> "TraceManager":
+        """
+        Restore manager runtime state from a snapshot.
+        """
+
+        if not isinstance(snapshot, Mapping):
+            raise TypeError(
+                "snapshot must be a mapping",
+            )
+
+        self._trace = copy.deepcopy(
+            snapshot.get("trace"),
+        )
+
+        self._traces = copy.deepcopy(
+            snapshot.get("traces", []),
+        )
+
+        self._spans = copy.deepcopy(
+            snapshot.get("spans", []),
+        )
+
+        self._span_stack = copy.deepcopy(
+            snapshot.get("span_stack", []),
+        )
+
+        self._context = copy.deepcopy(
+            snapshot.get("context"),
+        )
+
+        self._metadata = copy.deepcopy(
+            snapshot.get("metadata", {}),
+        )
+
+        self._active = bool(
+            snapshot.get("active", False),
+        )
+
+        self._closed = bool(
+            snapshot.get("closed", False),
+        )
+
+        statistics = snapshot.get(
+            "statistics",
+            {},
+        )
+
+        self._trace_count = int(
+            statistics.get("trace_count", 0),
+        )
+
+        self._completed_trace_count = int(
+            statistics.get("completed_trace_count", 0),
+        )
+
+        self._cancelled_trace_count = int(
+            statistics.get("cancelled_trace_count", 0),
+        )
+
+        self._span_count = int(
+            statistics.get("span_count", 0),
+        )
+
+        self._completed_span_count = int(
+            statistics.get("completed_span_count", 0),
+        )
+
+        self._cancelled_span_count = int(
+            statistics.get("cancelled_span_count", 0),
+        )
+
+        self._active_span_count = int(
+            statistics.get("active_span_count", 0),
+        )
+
+        self._exported_count = int(
+            statistics.get("exported_count", 0),
+        )
+
+        self._processed_count = int(
+            statistics.get("processed_count", 0),
+        )
+
+        self._error_count = int(
+            statistics.get("error_count", 0),
+        )
+
+        self._events = copy.deepcopy(
+            snapshot.get("events", []),
+        )
+
+        self._sync_current_span()
+
+        return self
+
+    def copy(self) -> "TraceManager":
+        """
+        Return an independent copy of the manager.
+        """
+        return copy.deepcopy(self)
+
+    def clone(self) -> "TraceManager":
+        """
+        Return an independent clone of the manager.
+
+        clone() is intentionally equivalent to copy() at this layer.
+        """
+        return self.copy()
+
+# ============================================================================
+# Part 14. Validation
+# ============================================================================
+
+    def validate(self) -> bool:
+        if self._trace is None:
+            return (
+                not self._active
+                and self._current_span is None
+                and not self._span_stack
+                and self._context is None
+            )
+
+        if not self._active:
+            return False
+
+        return self.validate_span_stack()
+
+    def validate_trace(
+        self,
+        trace: Optional[Trace] = None,
+    ) -> bool:
+        target = trace if trace is not None else self._trace
+
+        if target is None:
+            return False
+
+        if self._trace is not target:
+            return False
+
+        if not self._active:
+            return False
+
+        return True
+
+    def validate_span(
+        self,
+        span: Optional[Span] = None,
+    ) -> bool:
+        target = span if span is not None else self.current_span
+
+        if target is None:
+            return False
+
+        if target not in self._spans:
+            return False
+
+        if target not in self._span_stack:
+            return False
+
+        return True
+
+    def validate_state(self) -> bool:
+        """
+        Validate cross-component runtime invariants.
+        """
+        if self._trace is None:
+            if self._span_stack:
+                return False
+
+            if self._context is not None:
+                return False
+
+            return True
+
+        if not self.validate_span():
+            return False
+
+        if self.span_depth != len(self._span_stack):
+            return False
+
+        return True
+
+# ============================================================================
+# Part 15. Statistics
+# ============================================================================
+
+    class _CallableCount(int):
+        """
+        Integer count compatible with both:
+
+            manager.trace_count
+            manager.trace_count()
+
+        This preserves the existing property-style API while remaining
+        backward-compatible with the callable statistics API.
+        """
+
+        def __call__(self) -> int:
+            return int(self)
+
+    @property
+    def trace_count(self) -> int:
+        """
+        Total number of traces created by this manager.
+        """
+        return self._CallableCount(self._trace_count)
+
+    @property
+    def completed_trace_count(self) -> int:
+        """
+        Total number of completed traces.
+        """
+        return self._CallableCount(
+            self._completed_trace_count,
+        )
+
+    @property
+    def cancelled_trace_count(self) -> int:
+        """
+        Total number of cancelled traces.
+        """
+        return self._CallableCount(
+            self._cancelled_trace_count,
+        )
+
+    @property
+    def span_count(self) -> int:
+        """
+        Total number of spans created by this manager.
+        """
+        return self._CallableCount(self._span_count)
+
+    @property
+    def completed_span_count(self) -> int:
+        """
+        Total number of completed spans.
+        """
+        return self._CallableCount(
+            self._completed_span_count,
+        )
+
+    @property
+    def cancelled_span_count(self) -> int:
+        """
+        Total number of cancelled spans.
+        """
+        return self._CallableCount(
+            self._cancelled_span_count,
+        )
+
+    @property
+    def active_span_count(self) -> int:
+        """
+        Number of spans currently present on the active span stack.
+        """
+        return self._CallableCount(
+            len(self._span_stack),
+        )
+
+    @property
+    def exported_count(self) -> int:
+        """
+        Number of successfully exported tracing objects.
+        """
+        return self._CallableCount(self._exported_count)
+
+    @property
+    def processed_count(self) -> int:
+        """
+        Number of processed tracing objects.
+        """
+        return self._CallableCount(self._processed_count)
+
+    @property
+    def error_count(self) -> int:
+        """
+        Number of errors observed by the manager.
+        """
+        return self._CallableCount(self._error_count)
+
+# ============================================================================
+# Part 16. Diagnostics
+# ============================================================================
+
+    def health(self) -> dict[str, Any]:
+        """
+        Return a compact health report.
+        """
+        valid = self.validate()
+
+        return {
+            "healthy": valid,
+            "valid": valid,
+            "enabled": self._enabled,
+            "active": self._active,
+            "trace_count": self._trace_count,
+            "span_count": self._span_count,
+            "active_span_count": self._active_span_count,
+            "exported_count": self._exported_count,
+            "error_count": self._error_count,
+        }
+
+    def diagnostics(self) -> dict[str, Any]:
+        """
+        Return detailed runtime diagnostics.
+        """
+        return {
+            "name": self._name,
+            "service_name": self._service_name,
+            "enabled": self._enabled,
+            "active": self._active,
+            "closed": self._closed,
+            "statistics": {
+                "trace_count": self._trace_count,
+                "completed_trace_count": self._completed_trace_count,
+                "cancelled_trace_count": self._cancelled_trace_count,
+                "span_count": self._span_count,
+                "completed_span_count": self._completed_span_count,
+                "cancelled_span_count": self._cancelled_span_count,
+                "active_span_count": self._active_span_count,
+                "exported_count": self._exported_count,
+                "processed_count": self._processed_count,
+                "error_count": self._error_count,
+            },
+            "runtime": {
+                "span_depth": len(self._span_stack),
+                "has_trace": self._trace is not None,
+                "has_context": self._context is not None,
+            },
+            "metadata": dict(self._metadata),
+            "events": list(self._events),
+        }
+
+    def summary(self) -> dict[str, Any]:
+        """
+        Return a stable, serialization-friendly summary.
+        """
+        return {
+            "name": self._name,
+            "service_name": self._service_name,
+            "enabled": self._enabled,
+            "active": self._active,
+            "trace_count": self._trace_count,
+            "span_count": self._span_count,
+            "active_span_count": self._active_span_count,
+            "exported_count": self._exported_count,
+            "error_count": self._error_count,
+        }
+
+# ============================================================================
+# Part 17. Representation
+# ============================================================================
+
+    def _sync_current_span(self) -> None:
+        """
+        Synchronize current span with the active span stack.
+
+        The span stack is the single source of truth.
+        """
+        self._current_span = (
+            self._span_stack[-1]
+            if self._span_stack
+            else None
+        )
+
+        self._active_span_count = len(
+            self._span_stack
+        )
+
+    def __repr__(self) -> str:
+        return (
+            "TraceManager("
+            f"name={self._name!r}, "
+            f"service_name={self._service_name!r}, "
+            f"enabled={self._enabled!r}, "
+            f"active={self._active!r}, "
+            f"active_traces={self.active_trace_count!r}, "
+            f"completed={self.completed_trace_count!r}"
+            ")"
+        )
+
+    def __str__(self) -> str:
+        return (
+            "TraceManager("
+            f"name={self._name!r}, "
+            f"service={self._service_name!r}, "
+            f"active={self._active!r}, "
+            f"active_traces={self.active_trace_count!r}, "
+            f"completed={self.completed_trace_count!r}"
+            ")"
+        )
+
+# ============================================================================
+# Part 18. End
+# ============================================================================
+
+
+__all__ = [
+    "TraceManager",
+]                

@@ -1,0 +1,146 @@
+﻿SciOS Runtime Governance Integration v0.1
+FREEZE EVIDENCE — STEP 15-FINAL
+
+Status
+------
+Implementation candidate: FREEZE-READY
+Commit/tag action: NOT PERFORMED
+Evidence purpose: Final pre-freeze verification only
+
+1. ARCHITECTURE CONTRACT
+------------------------
+Canonical package:
+    scios/runtime/governance/
+
+Public symbols:
+    GovernanceContext
+    GovernanceAdapter
+    GovernanceError
+
+Integration boundary:
+    Agent → ToolRouter → ToolExecutor → GovernanceAdapter → ToolSandbox
+
+Control/Data separation:
+    GovernanceContext is explicit control-plane context.
+    Tool name / args / kwargs remain data-plane inputs.
+    GovernanceContext is never extracted from kwargs.
+
+Frozen non-goals:
+    RBAC / ABAC
+    Policy engine
+    Token issuance / validation / authentication
+    Audit backend
+    Persistent governance state
+    Capability inference
+    ToolPolicy replacement
+    ExecutionContext replacement
+    Synthetic/default GovernanceContext
+    safety_governance coupling
+
+2. IMPLEMENTATION
+-----------------
+Governance files:
+    scios/runtime/governance/__init__.py
+    scios/runtime/governance/context.py
+    scios/runtime/governance/adapter.py
+    scios/runtime/governance/exceptions.py
+
+Modified integration points:
+    scios/runtime/agent/agent.py
+    scios/runtime/agent/tool_router.py
+    scios/runtime/tools/executor.py
+
+GovernanceContext propagation:
+    Agent → Router → Executor
+    Explicit keyword-only parameter.
+    governance_context=None preserves legacy kwargs shape.
+
+Executor enforcement:
+    GovernanceAdapter.authorize(context, tool)
+    executes before ToolSandbox.execute(...).
+
+Failure semantics:
+    GovernanceError on DENY.
+    DENY is fail-closed.
+    Sandbox and Tool are not entered after governance denial.
+    Router preserves GovernanceError identity in ToolResult.
+
+3. BEHAVIORAL VERIFICATION
+--------------------------
+15-E.1:
+    DENY / fail-closed: PASS
+    DENY / exact GovernanceError: PASS
+    DENY / tool not executed: PASS
+    DENY / accounting: PASS
+    ALLOW / adapter called: PASS
+    ALLOW / kwargs preserved: PASS
+    ALLOW / tool executed: PASS
+    LEGACY / unchanged path: PASS
+
+15-E.2:
+    Agent → Router → Executor → Adapter identity: PASS
+    Data-plane kwargs preserved: PASS
+    GovernanceContext absent from Tool kwargs: PASS
+    Result propagation: PASS
+    Tool executed exactly once: PASS
+
+4. REGRESSION
+-------------
+15-F.1:
+    Governance-related existing tests: 87 passed
+
+15-F.2:
+    Runtime: 375 passed
+    Agents: 15 passed
+
+15-F.3:
+    Full repository: 4297 passed, 2 skipped, 1 warning
+    Duration: 7.63s
+
+Warning:
+    pandas datetime format inference warning in
+    scios/runtime/tools/time_series.py:66
+    Classified as unrelated to Runtime Governance integration.
+
+5. SCOPE / BOUNDARY AUDIT
+--------------------------
+15-G.1 Implementation Scope:
+    PASS
+    Exactly 4 governance files present.
+    Exactly 3 runtime integration files modified.
+    No additional runtime integration file detected.
+
+15-G.2 Exact Diff:
+    PASS
+    3 files changed.
+    46 insertions, 4 deletions.
+    No forbidden governance kwargs extraction.
+
+15-G.3 Data-plane Leakage:
+    PASS
+    No GovernanceContext / GovernanceAdapter / GovernanceError
+    references in Tool implementations, Tool base, Sandbox,
+    ToolResult, or ToolPolicy.
+    Existing kwargs handling is limited to tool data such as file_path.
+
+15-G.4 Frozen Boundary / Non-goals:
+    PASS
+    No Step 15 non-goal implementation detected.
+    No safety_governance → runtime governance coupling detected.
+    Public governance surface contains exactly 3 symbols.
+
+6. FREEZE DECISION INPUT
+------------------------
+Architecture contract: VERIFIED
+Implementation boundary: VERIFIED
+Behavioral tests: VERIFIED
+Full repository regression: VERIFIED
+Scope audit: VERIFIED
+Data-plane isolation: VERIFIED
+Non-goal audit: VERIFIED
+
+Pre-freeze status:
+    FREEZE-READY
+
+No commit or tag has been created by this evidence step.
+Final freeze remains a separate explicit action.

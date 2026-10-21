@@ -1,0 +1,4 @@
+ID,Title,Author,Created,LastUpdated,Status,File,Caption
+EQ-0001,Logistic Regression Hypothesis,Nguyen Van A,2026-07-08,2026-07-08,Approved,EQ-0001.md,caption.md
+EQ-0002,Gradient Descent Update Rule,Tran Thi B,2026-07-09,2026-07-10,Draft,EQ-0002.md,caption.md
+EQ-0003,Cross-Entropy Loss Function,Le Van C,2026-07-09,2026-07-11,Published,EQ-0003.md,caption.md

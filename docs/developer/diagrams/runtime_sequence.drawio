@@ -1,0 +1,495 @@
+Complete Runtime Sequence
++--------+
+| Client |
++--------+
+     |
+     | request(query)
+     |
+     v
++----------------+
+| SciOS API      |
++----------------+
+     |
+     | run()
+     |
+     v
++----------------+
+| Kernel         |
++----------------+
+     |
+     | create_context()
+     |
+     v
++----------------+
+| Runtime        |
++----------------+
+     |
+     | schedule()
+     |
+     v
++----------------+
+| Scheduler      |
++----------------+
+     |
+     | next_task()
+     |
+     v
++----------------+
+| Pipeline       |
++----------------+
+     |
+     | perception()
+     |
+     v
++----------------+
+| Perception     |
++----------------+
+     |
+     | context
+     |
+     v
++----------------+
+| Memory         |
++----------------+
+     |
+     | retrieve()
+     |
+     v
++----------------+
+| Reasoning      |
++----------------+
+     |
+     | hypotheses
+     |
+     v
++----------------+
+| Planning       |
++----------------+
+     |
+     | execution_plan
+     |
+     v
++----------------+
+| Tool Use       |
++----------------+
+     |
+     | execute()
+     |
+     v
++----------------+
+| External Tool  |
++----------------+
+     |
+     | result
+     |
+     v
++----------------+
+| Reflection     |
++----------------+
+     |
+     | feedback
+     |
+     +----------------------+
+     |                      |
+     | update_memory()      |
+     |                      |
+     v                      |
++----------------+          |
+| Memory         |<---------+
++----------------+
+     |
+     | final_result
+     |
+     v
++----------------+
+| Runtime        |
++----------------+
+     |
+     | response
+     |
+     v
++----------------+
+| Kernel         |
++----------------+
+     |
+     | return
+     |
+     v
++--------+
+| Client |
++--------+
+Runtime Lifecycle
+Request
+
+↓
+
+Kernel
+
+↓
+
+Runtime
+
+↓
+
+Scheduler
+
+↓
+
+Pipeline
+
+↓
+
+Execution
+
+↓
+
+Reflection
+
+↓
+
+Response
+Scheduler Interaction
+Runtime
+
+↓
+
+submit(task)
+
+↓
+
+Scheduler
+
+↓
+
+queue
+
+↓
+
+next()
+
+↓
+
+Pipeline
+Pipeline Interaction
+Runtime
+
+↓
+
+Pipeline.run(context)
+
+↓
+
+Perception
+
+↓
+
+Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+↓
+
+Result
+Tool Invocation
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Executor
+
+↓
+
+External Resource
+
+↓
+
+Result
+
+↓
+
+Reflection
+Memory Feedback
+Reflection
+
+↓
+
+Learning Policy
+
+↓
+
+Memory Update
+
+↓
+
+Knowledge Store
+Artifact Recording
+Reflection
+
+↓
+
+Artifact Manager
+
+↓
+
+Execution Trace
+
+↓
+
+Reasoning Trace
+
+↓
+
+Evaluation Report
+Error Recovery Sequence
+Runtime
+
+↓
+
+Pipeline
+
+↓
+
+Tool Failure
+
+↓
+
+Retry?
+
+↓
+
+Yes
+
+↓
+
+Re-execute
+
+↓
+
+Result
+
+Nếu thất bại:
+
+Tool Failure
+
+↓
+
+Reflection
+
+↓
+
+Re-plan
+
+↓
+
+Pipeline
+Cancellation Flow
+Client
+
+↓
+
+cancel()
+
+↓
+
+Kernel
+
+↓
+
+Runtime
+
+↓
+
+Scheduler
+
+↓
+
+Remove Task
+
+↓
+
+Terminate Worker
+Parallel Execution (Future)
+Runtime
+
+↓
+
+Execution Graph
+
+↓
+
+Worker A
+
+Worker B
+
+Worker C
+
+↓
+
+Merge Results
+
+↓
+
+Reflection
+
+Chuẩn bị cho SciOS v0.3 hỗ trợ DAG và thực thi song song.
+
+Runtime State Transition
+IDLE
+
+↓
+
+BOOT
+
+↓
+
+READY
+
+↓
+
+RUNNING
+
+↓
+
+WAITING
+
+↓
+
+RUNNING
+
+↓
+
+COMPLETED
+
+↓
+
+READY
+
+Nếu lỗi:
+
+RUNNING
+
+↓
+
+FAILED
+
+↓
+
+RECOVERY
+
+↓
+
+READY
+Components Participating
+Client
+
+↓
+
+API
+
+↓
+
+Kernel
+
+↓
+
+Runtime
+
+↓
+
+Scheduler
+
+↓
+
+Pipeline
+
+↓
+
+Perception
+
+↓
+
+Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+↓
+
+Artifact Manager
+Suggested Colors
+Component	Color
+Client	Gray
+Kernel	Blue
+Runtime	Orange
+Scheduler	Yellow
+Pipeline	Green
+Cognitive Modules	Cyan
+Tool Use	Purple
+Reflection	Red
+Artifact Manager	Brown
+Footer
+SciOS Developer Handbook
+
+Runtime Execution Sequence
+
+Version: v0.2
+
+Phase 8 — Runtime Architecture
+Vai trò trong kiến trúc SciOS
+
+runtime_sequence.drawio là sơ đồ động (behavioral view) mô tả cách các thành phần phối hợp trong một chu kỳ xử lý hoàn chỉnh. Nó bổ sung cho các sơ đồ kiến trúc tĩnh như runtime.drawio và pipeline.drawio.
+
+boot_sequence.drawio
+        │
+        ▼
+kernel.drawio
+        │
+        ▼
+runtime.drawio
+        │
+        ▼
+runtime_sequence.drawio
+        │
+        ▼
+pipeline.drawio
+        │
+        ▼
+cognitive_loop.drawio
+Giá trị của sơ đồ
+Minh họa rõ trình tự gọi hàm và trao đổi thông điệp giữa các thành phần.
+Phân biệt trách nhiệm của Kernel, Runtime, Scheduler và Cognitive Pipeline.
+Thể hiện các điểm mở rộng như retry, re-plan, parallel execution và artifact recording.
+Là tài liệu tham chiếu quan trọng khi triển khai Runtime Engine, viết integration tests hoặc phân tích hiệu năng bằng tracing và profiling.
+
+Sơ đồ này nên được vẽ theo chuẩn UML Sequence Diagram, với các lifeline cho từng thành phần và các activation bar thể hiện thời gian xử lý của mỗi bước. Điều đó sẽ giúp tài liệu SciOS gần với chuẩn của các dự án nghiên cứu và hệ thống phần mềm quy mô lớn.

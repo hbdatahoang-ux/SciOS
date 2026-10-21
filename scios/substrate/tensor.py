@@ -17,16 +17,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
+HAS_NUMPY = True
+
+#
+# Torch is optional.
+#
 try:
+
     import torch
 
     HAS_TORCH = True
 
-except ImportError:
+except Exception:
+    #
+    # Handles:
+    #
+    # ImportError
+    # OSError
+    # DLL load failure
+    # CUDA runtime failure
+    #
 
     torch = None
 
@@ -34,6 +48,8 @@ except ImportError:
 
 
 __all__ = [
+    "HAS_NUMPY",
+    "HAS_TORCH",
     "TensorBackend",
     "Device",
     "SciOSTensor",
@@ -80,6 +96,8 @@ class SciOSTensor:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # ======================================================
+    # Constructors
+    # ======================================================
 
     @classmethod
     def from_numpy(
@@ -88,12 +106,32 @@ class SciOSTensor:
     ) -> "SciOSTensor":
 
         return cls(
-
             data=array,
-
             backend=TensorBackend.NUMPY,
-
             device=Device.CPU,
+        )
+
+    @classmethod
+    def from_torch(
+        cls,
+        tensor: Any,
+    ) -> "SciOSTensor":
+
+        if not HAS_TORCH:
+            raise RuntimeError(
+                "PyTorch backend unavailable."
+            )
+
+        device = (
+            Device.CUDA
+            if tensor.is_cuda
+            else Device.CPU
+        )
+
+        return cls(
+            data=tensor,
+            backend=TensorBackend.TORCH,
+            device=device,
         )
 
     @classmethod
@@ -110,20 +148,45 @@ class SciOSTensor:
     def zeros(
         cls,
         shape: tuple[int, ...],
+        dtype=float,
     ) -> "SciOSTensor":
 
         return cls.from_numpy(
-            np.zeros(shape)
+            np.zeros(shape, dtype=dtype)
         )
 
     @classmethod
     def ones(
         cls,
         shape: tuple[int, ...],
+        dtype=float,
     ) -> "SciOSTensor":
 
         return cls.from_numpy(
-            np.ones(shape)
+            np.ones(shape, dtype=dtype)
+        )
+
+    @classmethod
+    def empty(
+        cls,
+        shape: tuple[int, ...],
+        dtype=float,
+    ) -> "SciOSTensor":
+
+        return cls.from_numpy(
+            np.empty(shape, dtype=dtype)
+        )
+
+    @classmethod
+    def full(
+        cls,
+        shape: tuple[int, ...],
+        value: Any,
+        dtype=None,
+    ) -> "SciOSTensor":
+
+        return cls.from_numpy(
+            np.full(shape, value, dtype=dtype)
         )
 
     @classmethod
@@ -136,6 +199,8 @@ class SciOSTensor:
             np.random.random(shape)
         )
 
+    # ======================================================
+    # Properties
     # ======================================================
 
     @property
@@ -154,8 +219,27 @@ class SciOSTensor:
         return self.data.dtype
 
     # ======================================================
+    # Backend
+    # ======================================================
 
-    def numpy(self):
+    @staticmethod
+    def backend_available(
+        backend: TensorBackend,
+    ) -> bool:
+
+        if backend == TensorBackend.NUMPY:
+            return True
+
+        if backend == TensorBackend.TORCH:
+            return HAS_TORCH
+
+        return False
+
+    # ======================================================
+    # Conversion
+    # ======================================================
+
+    def numpy(self) -> np.ndarray:
 
         if self.backend == TensorBackend.NUMPY:
             return self.data
@@ -167,13 +251,11 @@ class SciOSTensor:
             "Torch backend unavailable."
         )
 
-    # ======================================================
-
     def torch(self):
 
         if not HAS_TORCH:
             raise RuntimeError(
-                "PyTorch not installed."
+                "PyTorch backend unavailable."
             )
 
         if self.backend == TensorBackend.TORCH:
@@ -182,8 +264,6 @@ class SciOSTensor:
         return torch.from_numpy(
             self.data
         )
-
-    # ======================================================
 
     def to(
         self,
@@ -194,96 +274,96 @@ class SciOSTensor:
             return self
 
         if backend == TensorBackend.NUMPY:
-
             return SciOSTensor.from_numpy(
                 self.numpy()
             )
 
         if backend == TensorBackend.TORCH:
-
-            return SciOSTensor(
-
-                data=self.torch(),
-
-                backend=TensorBackend.TORCH,
-
-                device=Device.CPU,
+            return SciOSTensor.from_torch(
+                self.torch()
             )
 
         raise ValueError(
-            backend
+            f"Unsupported backend: {backend}"
         )
 
     # ======================================================
+    # Utilities
+    # ======================================================
 
-    def copy(self):
+    def clone(self) -> "SciOSTensor":
+
+        return self.copy()
+
+    def copy(self) -> "SciOSTensor":
 
         return SciOSTensor(
-
             data=self.numpy().copy(),
-
             backend=self.backend,
-
             device=self.device,
-
             metadata=self.metadata.copy(),
         )
 
-    # ======================================================
-
     def astype(
         self,
-        dtype,
-    ):
+        dtype: Any,
+    ) -> "SciOSTensor":
 
-        return SciOSTensor(
-
-            data=self.numpy().astype(dtype),
-
-            backend=TensorBackend.NUMPY,
+        return SciOSTensor.from_numpy(
+            self.numpy().astype(dtype)
         )
 
-    # ======================================================
+    def tolist(self):
+
+        return self.numpy().tolist()
 
     def to_dict(self):
 
         return {
-
             "backend": self.backend.value,
-
             "device": self.device.value,
-
             "shape": list(self.shape),
-
             "dtype": str(self.dtype),
-
             "metadata": self.metadata,
         }
 
     # ======================================================
+    # Python Protocols
+    # ======================================================
+
+    def __array__(self):
+
+        return self.numpy()
 
     def __len__(self):
 
         return len(self.data)
 
-    def __getitem__(self, item):
+    def __iter__(self) -> Iterator[Any]:
+
+        return iter(self.data)
+
+    def __getitem__(
+        self,
+        item,
+    ):
 
         return self.data[item]
 
-    def __setitem__(self, key, value):
+    def __setitem__(
+        self,
+        key,
+        value,
+    ):
 
         self.data[key] = value
 
     def __repr__(self):
 
         return (
-
             "SciOSTensor("
-
             f"shape={self.shape}, "
-
             f"dtype={self.dtype}, "
-
-            f"backend={self.backend.value})"
-
+            f"backend={self.backend.value}, "
+            f"device={self.device.value})"
         )

@@ -1,0 +1,264 @@
+Overall Architecture
+                  +--------------------------------------+
+                  |            SciOS Kernel              |
+                  +------------------+-------------------+
+                                     |
+                                     |
+                                     v
+                  +--------------------------------------+
+                  |          Plugin Manager              |
+                  +--------------------------------------+
+                  | Discovery                            |
+                  | Registration                         |
+                  | Dependency Resolver                  |
+                  | Lifecycle Manager                    |
+                  +------------------+-------------------+
+                                     |
+          +--------------------------+--------------------------+
+          |                          |                          |
+          v                          v                          v
+    Built-in Plugins          External Plugins           Research Plugins
+Plugin Loading Flow
+Kernel Boot
+
+↓
+
+Plugin Discovery
+
+↓
+
+Load Plugin Metadata
+
+↓
+
+Validate Dependencies
+
+↓
+
+Instantiate Plugin
+
+↓
+
+Register Services
+
+↓
+
+Initialize Plugin
+
+↓
+
+Plugin Ready
+Plugin Interface
+               +-----------------------------+
+               |        Plugin Base          |
+               +-----------------------------+
+               | name                        |
+               | version                     |
+               | author                      |
+               | dependencies               |
+               +-----------------------------+
+               | initialize()               |
+               | register()                 |
+               | shutdown()                 |
+               +-----------------------------+
+Plugin Categories
+                    Plugins
+                        |
+      +-----------------+------------------+
+      |                 |                  |
+      v                 v                  v
+ Pipeline         Cognitive          Infrastructure
+ Plugins           Plugins             Plugins
+      |                 |                  |
+      |                 |                  |
+   Stage Plugin     Memory Plugin      Logging Plugin
+                    Reasoning Plugin   Metrics Plugin
+                    Planning Plugin    Storage Plugin
+Registration Flow
+Plugin
+
+↓
+
+Plugin Manager
+
+↓
+
+Service Registry
+
+↓
+
+Kernel
+
+↓
+
+PipelineBuilder
+
+↓
+
+Runtime
+
+Plugin chỉ cần đăng ký dịch vụ hoặc stage; Kernel và PipelineBuilder sẽ sử dụng chúng khi xây dựng hệ thống.
+
+Dependency Resolution
+Plugin A
+
+↓
+
+Depends on
+
+↓
+
+Plugin B
+
+↓
+
+Depends on
+
+↓
+
+Plugin C
+
+Plugin Manager kiểm tra vòng phụ thuộc và thứ tự khởi tạo trước khi kích hoạt plugin.
+
+Runtime Interaction
+External Plugin
+
+↓
+
+Plugin Manager
+
+↓
+
+Service Registry
+
+↓
+
+Kernel
+
+↓
+
+Pipeline
+
+↓
+
+Execution Graph
+
+Plugin có thể cung cấp stage mới, service mới hoặc thay thế một thành phần hiện có thông qua Registry.
+
+Lifecycle
+Discover
+
+↓
+
+Load
+
+↓
+
+Validate
+
+↓
+
+Initialize
+
+↓
+
+Active
+
+↓
+
+Suspend
+
+↓
+
+Resume
+
+↓
+
+Shutdown
+
+↓
+
+Unload
+Package Structure
+plugins/
+│
+├── memory_plugin/
+│   ├── plugin.py
+│   ├── config.py
+│   └── metadata.yaml
+│
+├── reasoning_plugin/
+│   ├── plugin.py
+│   └── metadata.yaml
+│
+└── tool_plugin/
+    ├── plugin.py
+    └── metadata.yaml
+Extension Points
+                 SciOS Kernel
+                      |
+      +---------------+---------------+
+      |               |               |
+      v               v               v
+ Pipeline        Runtime        Event Bus
+      |               |               |
+      +-------+-------+-------+-------+
+              |               |
+              v               v
+        Plugin Extension Points
+
+Các extension point phổ biến gồm:
+
+Pipeline Stages
+Runtime Services
+Event Handlers
+Tool Adapters
+Storage Backends
+Artifact Processors
+Suggested Colors
+Thành phần	Màu
+Kernel	Dark Blue
+Plugin Manager	Blue
+Plugin	Green
+Service Registry	Orange
+Runtime	Purple
+Event Bus	Cyan
+Footer
+SciOS Developer Handbook
+
+Plugin System
+
+Version: v0.2
+
+Phase 8 — Extensibility
+Vai trò trong kiến trúc SciOS
+
+Sơ đồ này bổ sung cho các sơ đồ kiến trúc khác theo hướng mở rộng hệ thống:
+
+Kernel
+   │
+   ▼
+Plugin Manager
+   │
+   ▼
+Service Registry
+   │
+   ▼
+PipelineBuilder
+   │
+   ▼
+Cognitive Pipeline
+   │
+   ▼
+Execution Graph
+   │
+   ▼
+Runtime
+
+Trong kiến trúc này:
+
+service_registry.drawio (sẽ mô tả sau) quản lý các service đã được đăng ký.
+plugin_system.drawio mô tả cơ chế phát hiện, tải và tích hợp plugin.
+builder.drawio hoặc builder.md mô tả cách PipelineBuilder sử dụng các plugin đã đăng ký để xây dựng CognitivePipeline.
+
+Cách phân tách này giúp SciOS dễ mở rộng với các module nghiên cứu, plugin chuyên biệt hoặc tích hợp bên thứ ba mà không cần thay đổi mã nguồn của Kernel.

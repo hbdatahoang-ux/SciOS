@@ -1,0 +1,113 @@
+name: ✨ Feature Request
+description: Propose a new feature or enhancement for SciOS-NG
+title: "[Feature]: "
+labels:
+  - enhancement
+  - discussion
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Feature Request
+
+        Cảm ơn bạn đã đóng góp ý tưởng!  
+        Vui lòng điền thông tin dưới đây để chúng tôi có thể thảo luận và đánh giá tính năng.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the feature request.
+      placeholder: "Add reflection module to pipeline..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this feature necessary? What problem does it solve?
+      placeholder: |
+        - Problem: ...
+        - Why important: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe how the feature should work, API, UI, or architecture changes.
+      placeholder: |
+        - Idea: ...
+        - Implementation: ...
+        - Impact: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: List other approaches and explain why this proposal is preferred.
+      placeholder: |
+        - Option A: ...
+        - Option B: ...
+        - Reason: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: benefits
+    attributes:
+      label: Expected Benefits
+      description: What benefits will this feature bring to users, researchers, or enterprises?
+      placeholder: |
+        - Users: ...
+        - Researchers: ...
+        - Enterprises: ...
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope of Impact
+      description: Select the area affected by this feature.
+      options:
+        - Kernel
+        - Pipeline
+        - Memory
+        - Reasoning
+        - Planner
+        - Tool Use
+        - Reflection
+        - Runtime
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked that this feature is not already requested.
+          required: true
+        - label: I have described the motivation and benefits clearly.
+          required: true
+        - label: I have considered alternative solutions.
+          required: true

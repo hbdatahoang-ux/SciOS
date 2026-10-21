@@ -1,0 +1,281 @@
+Cognitive Loop Overview
+                     ┌─────────────────────────────┐
+                     │     External Environment    │
+                     └──────────────┬──────────────┘
+                                    │
+                              Observation
+                                    │
+                                    ▼
+                        ┌──────────────────────┐
+                        │     Perception       │
+                        └──────────┬───────────┘
+                                   │
+                              Structured Context
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │       Memory         │
+                        └──────────┬───────────┘
+                                   │
+                          Relevant Knowledge
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │     Reasoning        │
+                        └──────────┬───────────┘
+                                   │
+                               Hypothesis
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │      Planning        │
+                        └──────────┬───────────┘
+                                   │
+                              Action Plan
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │      Tool Use        │
+                        └──────────┬───────────┘
+                                   │
+                            Tool Execution
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │     Reflection       │
+                        └──────────┬───────────┘
+                                   │
+                         Evaluation & Learning
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │  Artifact Manager    │
+                        └──────────┬───────────┘
+                                   │
+                            Persist Results
+                                   │
+                                   ▼
+                        ┌──────────────────────┐
+                        │   Memory Update      │
+                        └──────────┬───────────┘
+                                   │
+                                   └──────────────► back to Memory
+Runtime View
+User Request
+
+↓
+
+Kernel
+
+↓
+
+Runtime
+
+↓
+
+Cognitive Pipeline
+
+↓
+
+Perception
+
+↓
+
+Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+↓
+
+Artifacts
+
+↓
+
+Memory Update
+
+↓
+
+Response
+Learning Cycle
+Experience
+
+↓
+
+Observation
+
+↓
+
+Understanding
+
+↓
+
+Reasoning
+
+↓
+
+Decision
+
+↓
+
+Action
+
+↓
+
+Feedback
+
+↓
+
+Learning
+
+↓
+
+Knowledge
+
+↓
+
+Next Experience
+
+Đây là vòng lặp học hỏi liên tục của hệ thống.
+
+Information Flow
+Environment
+
+↓
+
+Input
+
+↓
+
+Context
+
+↓
+
+Knowledge
+
+↓
+
+Inference
+
+↓
+
+Plan
+
+↓
+
+Action
+
+↓
+
+Output
+
+↓
+
+Feedback
+
+↓
+
+Knowledge Base
+Memory Feedback Loop
+Perception
+
+↓
+
+Working Memory
+
+↓
+
+Reasoning
+
+↓
+
+Reflection
+
+↓
+
+Semantic Memory
+
+↓
+
+Future Reasoning
+
+Memory đóng vai trò cầu nối giữa các lần thực thi.
+
+Scientific Discovery Loop
+Observation
+
+↓
+
+Hypothesis
+
+↓
+
+Planning
+
+↓
+
+Experiment
+
+↓
+
+Evidence
+
+↓
+
+Reflection
+
+↓
+
+Knowledge
+
+↓
+
+New Hypothesis
+
+Sơ đồ này phản ánh định hướng của SciOS như một nền tảng hỗ trợ khám phá khoa học.
+
+Cognitive Layers
++--------------------------------------+
+|        Reflection Layer              |
++--------------------------------------+
+|        Planning Layer                |
++--------------------------------------+
+|        Reasoning Layer               |
++--------------------------------------+
+|        Memory Layer                  |
++--------------------------------------+
+|        Perception Layer              |
++--------------------------------------+
+|        External Environment          |
++--------------------------------------+
+Suggested Colors
+Layer	Color
+Environment	Gray
+Perception	Light Blue
+Memory	Green
+Reasoning	Orange
+Planning	Yellow
+Tool Use	Cyan
+Reflection	Purple
+Artifacts	Pink
+Footer
+SciOS Developer Handbook
+
+Cognitive Loop
+
+Version: v0.2
+
+Phase 8 — Cognitive Core

@@ -1,0 +1,148 @@
+name: 📊 Benchmark Proposal
+description: Propose a new benchmark, evaluation methodology, or improvement to existing benchmarks.
+title: "[Benchmark]: "
+labels:
+  - research
+  - benchmark
+  - proposal
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Benchmark Proposal
+
+        Đây là template dành cho **Benchmark Proposal**.  
+        Vui lòng điền đầy đủ thông tin để đảm bảo benchmark được thiết kế minh bạch, khoa học và có thể tái lập.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the benchmark proposal.
+      placeholder: "Introduce a reasoning consistency benchmark..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Benchmark Domain
+      description: Select the primary domain.
+      options:
+        - Reasoning
+        - Planning
+        - Memory
+        - Reflection
+        - Tool Use
+        - Runtime
+        - Scalability
+        - Distributed Systems
+        - Optimization
+        - Other
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this benchmark necessary?
+      placeholder: |
+        - Current limitations: ...
+        - Why important: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: design
+    attributes:
+      label: Benchmark Design
+      description: Describe the benchmark setup, tasks, datasets, and methodology.
+      placeholder: |
+        - Task definition: ...
+        - Dataset: ...
+        - Evaluation protocol: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Evaluation Metrics
+      description: Define metrics for success.
+      placeholder: |
+        - Accuracy
+        - Latency
+        - Memory usage
+        - Planning success
+        - Tool efficiency
+        - Energy consumption
+        - Scalability
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: baselines
+    attributes:
+      label: Baselines
+      description: List baseline models or systems for comparison.
+      placeholder: |
+        - Baseline A: ...
+        - Baseline B: ...
+        - Baseline C: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: Code, dataset, seeds, environment, documentation.
+      placeholder: |
+        - Code available: ...
+        - Dataset available: ...
+        - Seeds fixed: ...
+        - Environment reproducible: ...
+        - Documentation complete: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: Technical, methodological, reproducibility.
+      placeholder: |
+        - Technical: ...
+        - Methodological: ...
+        - Reproducibility: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Papers, RFCs, ADRs, external projects, benchmarks.
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: roadmap
+    attributes:
+      label: Roadmap
+      description: Phased plan for benchmark development

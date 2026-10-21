@@ -16,21 +16,20 @@ Responsibilities
 - Identity morphisms
 - Morphism validation
 
-The morphism framework serves as the mathematical foundation for
-symbolic reasoning, temporal compression, and knowledge
-transformations throughout SciOS.
+Python 3.11+
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 __all__ = [
     "MorphismMetadata",
     "QTCMorphism",
     "IdentityMorphism",
+    "CompositeMorphism",
 ]
 
 S = TypeVar("S")
@@ -41,6 +40,7 @@ U = TypeVar("U")
 # ==========================================================
 # Metadata
 # ==========================================================
+
 
 @dataclass(slots=True, frozen=True)
 class MorphismMetadata:
@@ -63,12 +63,10 @@ class MorphismMetadata:
 # Base Morphism
 # ==========================================================
 
+
 class QTCMorphism(ABC, Generic[S, T]):
     """
     Abstract structure-preserving mapping.
-
-    A morphism maps objects from one symbolic domain into
-    another while preserving essential structure.
     """
 
     def __init__(
@@ -78,6 +76,8 @@ class QTCMorphism(ABC, Generic[S, T]):
 
         self._metadata = metadata
 
+    # ------------------------------------------------------
+    # Metadata
     # ------------------------------------------------------
 
     @property
@@ -100,6 +100,23 @@ class QTCMorphism(ABC, Generic[S, T]):
         """
         Apply the morphism.
         """
+
+    # ------------------------------------------------------
+    # Backward Compatibility
+    # ------------------------------------------------------
+
+    def apply(
+        self,
+        value: S,
+    ) -> T:
+        """
+        Backward-compatible alias.
+
+        Older SciOS releases exposed apply()
+        instead of map().
+        """
+
+        return self.map(value)
 
     # ------------------------------------------------------
     # Validation
@@ -126,9 +143,11 @@ class QTCMorphism(ABC, Generic[S, T]):
         other: "QTCMorphism[T, U]",
     ) -> "QTCMorphism[S, U]":
         """
-        Compose this morphism with another morphism.
+        Compose two morphisms.
 
-        (other ∘ self)
+        Result:
+
+            other ∘ self
         """
 
         return CompositeMorphism(
@@ -136,6 +155,8 @@ class QTCMorphism(ABC, Generic[S, T]):
             second=other,
         )
 
+    # ------------------------------------------------------
+    # Callable
     # ------------------------------------------------------
 
     def __call__(
@@ -148,18 +169,37 @@ class QTCMorphism(ABC, Generic[S, T]):
         return self.map(value)
 
     # ------------------------------------------------------
+    # Python Protocols
+    # ------------------------------------------------------
 
     def __repr__(self) -> str:
 
         return (
-            f"{self.__class__.__name__}"
-            f"(name='{self.name}')"
+            f"{self.__class__.__name__}("
+            f"name='{self.name}')"
         )
+
+    def __str__(self) -> str:
+        return self.name
+
+    def __eq__(
+        self,
+        other: object,
+    ) -> bool:
+
+        if not isinstance(other, QTCMorphism):
+            return NotImplemented
+
+        return self.metadata == other.metadata
+
+    def __hash__(self) -> int:
+        return hash(self.metadata)
 
 
 # ==========================================================
 # Identity Morphism
 # ==========================================================
+
 
 class IdentityMorphism(QTCMorphism[S, S]):
     """
@@ -171,15 +211,10 @@ class IdentityMorphism(QTCMorphism[S, S]):
     def __init__(self) -> None:
 
         super().__init__(
-
             MorphismMetadata(
-
                 name="identity",
-
                 description="Identity morphism",
-
                 invertible=True,
-
             )
         )
 
@@ -195,6 +230,7 @@ class IdentityMorphism(QTCMorphism[S, S]):
 # Composite Morphism
 # ==========================================================
 
+
 class CompositeMorphism(QTCMorphism[S, U]):
     """
     Composition of two morphisms.
@@ -209,19 +245,30 @@ class CompositeMorphism(QTCMorphism[S, U]):
     ) -> None:
 
         super().__init__(
-
             MorphismMetadata(
-
                 name=f"{second.name}∘{first.name}",
-
                 description="Composite morphism",
-
+                invertible=(
+                    first.metadata.invertible
+                    and second.metadata.invertible
+                ),
+                deterministic=(
+                    first.metadata.deterministic
+                    and second.metadata.deterministic
+                ),
             )
         )
 
         self._first = first
-
         self._second = second
+
+    @property
+    def first(self) -> QTCMorphism[S, T]:
+        return self._first
+
+    @property
+    def second(self) -> QTCMorphism[T, U]:
+        return self._second
 
     def map(
         self,
@@ -229,7 +276,5 @@ class CompositeMorphism(QTCMorphism[S, U]):
     ) -> U:
 
         return self._second(
-
             self._first(value)
-
         )

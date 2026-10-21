@@ -1,0 +1,59 @@
+name: ❓ Question
+description: Ask a question or start a discussion about SciOS-NG
+title: "[Question]: "
+labels:
+  - question
+  - discussion
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Question / Discussion
+
+        Cảm ơn bạn đã quan tâm đến dự án!  
+        Vui lòng điền thông tin dưới đây để chúng tôi có thể hỗ trợ hoặc thảo luận cùng bạn.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of your question.
+      placeholder: "How does the reflection module interact with the planner?"
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Provide more context or background for your question.
+      placeholder: |
+        - Context: ...
+        - What I tried: ...
+        - What I want to understand: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Select the area your question relates to.
+      options:
+        - Kernel
+        - Pipeline
+        - Memory
+        - Reasoning
+        - Planner
+        - Tool Use
+        - Reflection
+        - Runtime
+        - Documentation

@@ -1,0 +1,130 @@
+name: 🧪 Experiment Report
+description: Record and share results of an experiment for SciOS-NG research.
+title: "[Experiment]: "
+labels:
+  - research
+  - experiment
+  - report
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SciOS Experiment Report
+
+        Đây là template dành cho **Experiment Report**.  
+        Vui lòng điền đầy đủ thông tin để đảm bảo kết quả thực nghiệm minh bạch, có thể tái lập và hữu ích cho cộng đồng.
+
+# --------------------------------------------------
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short summary of the experiment.
+      placeholder: "Evaluate hierarchical reflection on planning tasks..."
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What was the goal of this experiment?
+      placeholder: |
+        - Test hypothesis: ...
+        - Validate method: ...
+        - Compare baseline: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Experimental Setup
+      description: Describe dataset, environment, hardware, and configuration.
+      placeholder: |
+        - Dataset: ...
+        - Environment: ...
+        - Hardware: ...
+        - Configuration: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: methodology
+    attributes:
+      label: Methodology
+      description: Steps, algorithms, or procedures followed.
+      render: markdown
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Report quantitative and qualitative results.
+      placeholder: |
+        - Accuracy: ...
+        - Latency: ...
+        - Memory usage: ...
+        - Observations: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: analysis
+    attributes:
+      label: Analysis
+      description: Interpret the results, compare with baselines, discuss findings.
+      placeholder: |
+        - Comparison with baseline: ...
+        - Strengths: ...
+        - Weaknesses: ...
+        - Insights: ...
+    validations:
+      required: true
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: Code, dataset, seeds, environment, documentation.
+      placeholder: |
+        - Code available: ...
+        - Dataset available: ...
+        - Seeds fixed: ...
+        - Environment reproducible: ...
+        - Documentation complete: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks / Limitations
+      description: Technical, methodological, reproducibility.
+      placeholder: |
+        - Technical: ...
+        - Methodological: ...
+        - Reproducibility: ...
+
+# --------------------------------------------------
+
+  - type: textarea
+    id: references
+    attributes:

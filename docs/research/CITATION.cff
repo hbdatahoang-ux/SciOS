@@ -1,0 +1,30 @@
+# CITATION.cff
+
+cff-version: 1.2.0
+message: "If you use this research, please cite it as below."
+title: "Geometry-Driven Renormalization of Elastic Fluctuations in Constrained Hydrogel Microfluidics"
+authors:
+  - family-names: "Bui Dinh"
+    given-names: "Hoang"
+    orcid: "0000-0002-XXXX-XXXX"
+version: "1.0.0"
+date-released: 2026-11-10
+doi: "10.1038/s41560-026-XXXX-X"
+url: "https://doi.org/10.1038/s41560-026-XXXX-X"
+license: "CC-BY-4.0"
+repository-code: "https://github.com/SciOS-Research/CEIT"
+keywords:
+  - hydrogel microfluidics
+  - elastic fluctuations
+  - renormalization group
+  - geometry confinement
+  - universality
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Bui Dinh"
+      given-names: "Hoang"
+  title: "Geometry-Driven Renormalization of Elastic Fluctuations in Constrained Hydrogel Microfluidics"
+  journal: "Nature Energy"
+  year: 2026
+  doi: "10.1038/s41560-026-XXXX-X"

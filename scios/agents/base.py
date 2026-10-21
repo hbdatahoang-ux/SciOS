@@ -2,14 +2,31 @@
 SciOS Base Agent
 ================
 
-Abstract base class for all cognitive agents in SciOS.
+Base abstraction for every cognitive agent inside SciOS.
 
 Responsibilities
 ----------------
-- Define the common agent interface
-- Manage lifecycle
-- Maintain agent metadata
-- Expose execution status
+- Agent identity and metadata
+- Enable / disable lifecycle
+- Common execution wrapper
+- Execution diagnostics
+- Memory dependency injection
+- Tool router dependency injection
+- Memory delegation
+- Tool execution delegation
+
+Architecture
+------------
+
+                Agent
+                  |
+        +---------+---------+
+        |                   |
+      Memory            ToolRouter
+        |                   |
+   Runtime Memory     Runtime Tool Layer
+
+Python 3.11+
 """
 
 from __future__ import annotations
@@ -17,48 +34,116 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
+
+from .contracts import MemoryCapability, ToolRoutingCapability
+
 
 __all__ = [
+    "Agent",
     "BaseAgent",
 ]
 
 
-class BaseAgent(ABC):
+class Agent(ABC):
     """
-    Abstract base class for all SciOS agents.
+    Root abstraction of every SciOS agent.
 
-    Every cognitive subsystem (Planner, Memory, Reasoning,
-    ToolUse, Reflection, Collaboration) derives from this
-    class to provide a consistent execution interface.
+    The base Agent owns framework-level concerns:
+
+    - identity
+    - metadata
+    - enable/disable state
+    - execution lifecycle
+    - execution counter
+    - memory delegation
+    - tool-router delegation
+
+    Concrete cognitive behavior belongs to ``run()``.
     """
 
     def __init__(
         self,
         name: str,
-        version: str = "0.1.3",
+        version: str = "0.3.0",
+        *,
+        memory: MemoryCapability | None = None,
+        router: ToolRoutingCapability | None = None,
     ) -> None:
+
+        # ---------------------------------------------------
+        # Identity
+        # ---------------------------------------------------
+
+        self._id = str(uuid4())
 
         self._name = name
 
         self._version = version
 
+        # ---------------------------------------------------
+        # Lifecycle
+        # ---------------------------------------------------
+
+        self._state = "idle"
+
         self._enabled = True
+
+        # ---------------------------------------------------
+        # Metadata
+        # ---------------------------------------------------
 
         self._created_at = datetime.now(
             timezone.utc
         ).isoformat()
 
+        # ---------------------------------------------------
+        # Diagnostics
+        # ---------------------------------------------------
+
         self._executions = 0
 
-    # ======================================================
+        # ---------------------------------------------------
+        # Dependencies
+        #
+        # The canonical Agent depends only on minimal
+        # capability contracts. Concrete implementations
+        # are supplied by the composition root.
+        #
+        # Dependency injection is identity-preserving.
+        # ---------------------------------------------------
+
+        if memory is None:
+            raise ValueError(
+                "Agent requires a MemoryCapability."
+            )
+
+        if router is None:
+            raise ValueError(
+                "Agent requires a ToolRoutingCapability."
+            )
+
+        self._memory: MemoryCapability = memory
+        self._router: ToolRoutingCapability = router
+
+    # =======================================================
     # Metadata
-    # ======================================================
+    # =======================================================
+
+    @property
+    def id(self) -> str:
+        """
+        Stable unique agent identifier.
+        """
+
+        return self._id
 
     @property
     def name(self) -> str:
         """
         Agent name.
         """
+
         return self._name
 
     @property
@@ -66,105 +151,279 @@ class BaseAgent(ABC):
         """
         Agent version.
         """
+
         return self._version
 
-    # ======================================================
-    # Lifecycle
-    # ======================================================
+    @property
+    def state(self) -> str:
+        """
+        Current framework execution state.
 
-    def enable(self) -> None:
-        """
-        Enable the agent.
-        """
-        self._enabled = True
+        Normal states:
 
-    def disable(self) -> None:
+        - ``idle``
+        - ``running``
         """
-        Disable the agent.
-        """
-        self._enabled = False
+
+        return self._state
 
     @property
     def enabled(self) -> bool:
         """
         Whether the agent is enabled.
         """
+
         return self._enabled
 
-    # ======================================================
-    # Execution
-    # ======================================================
+    @property
+    def memory(self) -> MemoryCapability:
+        """
+        Injected memory capability.
+        """
+
+        return self._memory
+
+    @property
+    def router(self) -> ToolRoutingCapability:
+        """
+        Injected tool-routing capability.
+        """
+
+        return self._router
+
+    @property
+    def tool_router(self) -> ToolRoutingCapability:
+        """
+        Alias for ``router``.
+        """
+
+        return self._router
+
+    @property
+    def executions(self) -> int:
+        """
+        Number of completed execution attempts.
+        """
+
+        return self._executions
+
+    # =======================================================
+    # Lifecycle
+    # =======================================================
+
+    def enable(self) -> None:
+        """
+        Enable the agent.
+        """
+
+        self._enabled = True
+
+    def disable(self) -> None:
+        """
+        Disable the agent.
+
+        Disabled agents reject execution through
+        ``execute()``.
+        """
+
+        self._enabled = False
+
+    def reset(self) -> None:
+        """
+        Restore initial runtime state.
+
+        The execution counter is reset.
+        Identity and creation metadata remain unchanged.
+        """
+
+        self._state = "idle"
+
+        self._executions = 0
+
+    # =======================================================
+    # Memory Delegation
+    # =======================================================
+
+    def remember(
+        self,
+        key: str,
+        value: Any,
+    ) -> None:
+        """
+        Store a value through the configured memory backend.
+        """
+
+        self._memory.store(
+            key,
+            value,
+        )
+
+    def recall(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        """
+        Retrieve a value through the configured memory backend.
+        """
+
+        return self._memory.get(
+            key,
+            default,
+        )
+
+    # =======================================================
+    # Tool Delegation
+    # =======================================================
+
+    def execute_tool(
+        self,
+        name: str,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Execute a registered tool through the configured
+        tool router.
+        """
+
+        return self._router.route(
+            name,
+            **kwargs,
+        )
+
+    # =======================================================
+    # Invocation
+    # =======================================================
 
     def __call__(
         self,
+        task: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
         """
-        Callable interface.
+        Callable shorthand for ``execute()``.
         """
 
-        return self.execute(*args, **kwargs)
+        return self.execute(
+            task,
+            *args,
+            **kwargs,
+        )
+
+    # =======================================================
+    # Execution Wrapper
+    # =======================================================
 
     def execute(
         self,
+        task: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
         """
-        Execute the agent.
+        Common framework execution wrapper.
 
-        This wrapper checks lifecycle state before delegating
-        to the concrete implementation.
+        Guarantees:
+
+        - ``None`` task is rejected.
+        - disabled agents are rejected.
+        - state becomes ``running`` during execution.
+        - state returns to ``idle`` afterward.
+        - execution counter increases exactly once.
         """
+
+        if task is None:
+            raise ValueError(
+                "Task cannot be None."
+            )
 
         if not self._enabled:
             raise RuntimeError(
                 f"Agent '{self._name}' is disabled."
             )
 
-        self._executions += 1
+        self._state = "running"
 
-        return self.run(*args, **kwargs)
+        try:
+
+            return self.run(
+                task,
+                *args,
+                **kwargs,
+            )
+
+        finally:
+
+            self._executions += 1
+
+            self._state = "idle"
+
+    # =======================================================
+    # Implementation Contract
+    # =======================================================
 
     @abstractmethod
     def run(
         self,
+        task: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
         """
-        Agent-specific implementation.
+        Concrete agent implementation.
 
-        Must be implemented by subclasses.
+        Subclasses must implement this method.
+
+        ``execute()`` is the framework wrapper.
+        ``run()`` contains agent-specific behavior.
         """
 
-    # ======================================================
+        raise NotImplementedError
+
+    # =======================================================
     # Status
-    # ======================================================
+    # =======================================================
 
     def status(self) -> dict[str, Any]:
         """
-        Return runtime status.
+        Return a snapshot of public agent diagnostics.
+
+        A new dictionary is returned for every invocation.
         """
 
         return {
+            "id": self._id,
             "name": self._name,
+            "state": self._state,
             "version": self._version,
             "enabled": self._enabled,
             "executions": self._executions,
             "created_at": self._created_at,
         }
 
-    # ======================================================
-    # Python Protocols
-    # ======================================================
+    # =======================================================
+    # Representation
+    # =======================================================
 
     def __repr__(self) -> str:
+        """
+        Developer representation.
+        """
 
         return (
             f"{self.__class__.__name__}("
+            f"id='{self._id}', "
             f"name='{self._name}', "
-            f"enabled={self._enabled}, "
-            f"executions={self._executions})"
+            f"state='{self._state}')"
         )
+
+
+# ===========================================================
+# Backward Compatibility
+# ===========================================================
+
+Agent.__init__.__annotations__["memory"] = MemoryCapability
+Agent.__init__.__annotations__["router"] = ToolRoutingCapability
+
+BaseAgent = Agent

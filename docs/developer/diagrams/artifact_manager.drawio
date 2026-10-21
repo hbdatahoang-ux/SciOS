@@ -1,0 +1,250 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |          Cognitive Pipeline          |
+                    +------------------+-------------------+
+                                       |
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |        Artifact Manager              |
+                    +--------------------------------------+
+                    | Artifact Registry                    |
+                    | Storage Backend                      |
+                    | Version Manager                      |
+                    | Metadata Index                       |
+                    +------------------+-------------------+
+                                       |
+          +----------------------------+----------------------------+
+          |                            |                            |
+          v                            v                            v
+   Artifact Store                Artifact Cache              Artifact API
+Artifact Lifecycle
+Pipeline Result
+
+↓
+
+Create Artifact
+
+↓
+
+Validate
+
+↓
+
+Assign Metadata
+
+↓
+
+Version
+
+↓
+
+Persist
+
+↓
+
+Index
+
+↓
+
+Retrieve
+
+↓
+
+Reuse
+
+↓
+
+Archive
+Artifact Class
+                +----------------------------+
+                |         Artifact           |
+                +----------------------------+
+                | id                         |
+                | type                       |
+                | content                    |
+                | metadata                   |
+                | version                    |
+                | timestamp                  |
+                | producer                   |
+                +----------------------------+
+                | validate()                 |
+                | serialize()                |
+                | deserialize()              |
+                | update()                   |
+                +----------------------------+
+Artifact Types
+                  Artifact
+                     |
+     +---------------+----------------+
+     |               |                |
+     v               v                v
+ Text Artifact   Model Artifact   Dataset Artifact
+     |
+     +-----------------------------+
+                                   |
+                             Report Artifact
+                                   |
+                             Experiment Result
+
+Có thể mở rộng thêm các loại như SimulationArtifact, KnowledgeArtifact, GraphArtifact mà không ảnh hưởng kiến trúc hiện có.
+
+Artifact Flow
+Perception
+
+↓
+
+Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Tool Use
+
+↓
+
+Reflection
+
+↓
+
+Artifact Manager
+
+↓
+
+Storage
+
+↓
+
+Knowledge Base
+
+Mọi subsystem đều có thể tạo artifact; Artifact Manager là nơi tập trung quản lý.
+
+Storage Architecture
+                 Artifact Manager
+                        |
+        +---------------+---------------+
+        |                               |
+        v                               v
+ Metadata Index                  Artifact Store
+        |                               |
+        |                               |
+        +---------------+---------------+
+                        |
+                        v
+                 Persistent Storage
+Version Management
+Artifact v1
+
+↓
+
+Artifact v2
+
+↓
+
+Artifact v3
+
+↓
+
+Latest
+
+↓
+
+Archive
+
+Việc quản lý phiên bản giúp theo dõi lịch sử thay đổi của artifact.
+
+Retrieval Flow
+Request
+
+↓
+
+Artifact Manager
+
+↓
+
+Metadata Index
+
+↓
+
+Artifact Store
+
+↓
+
+Artifact
+
+↓
+
+Pipeline
+
+Artifact có thể được truy xuất để tái sử dụng trong các lần thực thi sau.
+
+Relationship with Cognitive Core
+                 Cognitive Pipeline
+                         |
+      +------------------+------------------+
+      |                  |                  |
+      v                  v                  v
+  Memory            Reflection          Tool Use
+      \                  |                  /
+       \                 |                 /
+        +----------------+----------------+
+                         |
+                         v
+                 Artifact Manager
+                         |
+                         v
+                   Knowledge Store
+
+Artifact Manager là điểm hội tụ của các kết quả nhận thức và hỗ trợ tích lũy tri thức.
+
+Suggested Colors
+Thành phần	Màu
+Artifact Manager	Blue
+Registry	Green
+Metadata Index	Purple
+Storage	Gray
+Artifact Types	Orange
+Knowledge Base	Cyan
+Footer
+SciOS Developer Handbook
+
+Artifact Manager
+
+Version: v0.2
+
+Phase 8 — Artifact System
+Vai trò trong kiến trúc SciOS
+
+Sơ đồ này kết nối tự nhiên với các sơ đồ khác:
+
+Cognitive Pipeline
+        │
+        ▼
+Execution Graph
+        │
+        ▼
+Reflection
+        │
+        ▼
+Artifact Manager
+        │
+        ▼
+Knowledge Store
+        │
+        ▼
+Memory
+
+Theo kiến trúc này:
+
+pipeline.drawio mô tả cách dữ liệu được xử lý.
+execution_graph.drawio mô tả cách các stage được lập lịch và thực thi.
+artifact_manager.drawio mô tả cách kết quả được chuẩn hóa, lưu trữ, lập phiên bản và tái sử dụng.
+
+Ba sơ đồ này tạo thành nền tảng cho việc quản lý tri thức và kết quả trong SciOS, đồng thời hỗ trợ tốt cho các mục tiêu nghiên cứu và tái lập kết quả (reproducibility).

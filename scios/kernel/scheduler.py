@@ -2,200 +2,227 @@
 SciOS Kernel Scheduler
 ======================
 
-Task scheduler for the Scientific Cognitive
-Operating System (SciOS).
+Task scheduler for the SciOS Kernel.
 
 Responsibilities
 ----------------
-- Queue task execution
-- Support multiple scheduling policies
-- Dispatch tasks to the Runtime
-- Track scheduler statistics
+- Maintain a thread-safe task queue.
+- Provide FIFO scheduling.
+- Support enqueue/dequeue operations.
+- Maintain scheduling statistics.
+
+Design Goals
+------------
+- Thread-safe
+- Lightweight
+- Deterministic FIFO
+- Runtime independent
 """
 
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
+from collections.abc import Iterable
+from threading import RLock
 from typing import Any
 
 
-__all__ = [
-    "SchedulePolicy",
-    "Task",
-    "Scheduler",
-]
-
-
-# ==========================================================
-# Scheduling Policy
-# ==========================================================
-
-class SchedulePolicy(str, Enum):
-    """
-    Supported scheduling policies.
-    """
-
-    FIFO = "fifo"
-
-    LIFO = "lifo"
-
-
-# ==========================================================
-# Task
-# ==========================================================
-
-@dataclass(slots=True)
-class Task:
-    """
-    Scheduled task.
-    """
-
-    id: int
-
-    payload: Any
-
-    created_at: str = field(
-        default_factory=lambda: datetime.utcnow().isoformat()
-    )
-
-
-# ==========================================================
-# Scheduler
-# ==========================================================
-
 class Scheduler:
     """
-    Kernel task scheduler.
-
-    The scheduler stores tasks and dispatches them
-    to the Runtime in the selected scheduling order.
+    FIFO task scheduler.
     """
 
-    def __init__(
-        self,
-        policy: SchedulePolicy = SchedulePolicy.FIFO,
-    ) -> None:
+    def __init__(self) -> None:
+        self._queue: deque[Any] = deque()
+        self._lock = RLock()
 
-        self._policy = policy
+        self._running = False
 
-        self._queue: deque[Task] = deque()
+        self._tasks_enqueued = 0
+        self._tasks_dequeued = 0
 
-        self._counter = 0
+    # ==========================================================
+    # Lifecycle
+    # ==========================================================
 
-        self._executed = 0
+    def initialize(self) -> None:
+        """Initialize scheduler."""
+        self._running = False
 
-    # ======================================================
-    # Task Management
-    # ======================================================
+    def start(self) -> None:
+        """Start scheduler."""
+        self._running = True
 
-    def submit(
-        self,
-        payload: Any,
-    ) -> Task:
-        """
-        Submit a task.
-        """
+    def shutdown(self) -> None:
+        """Shutdown scheduler."""
+        self._running = False
+        self.clear()
 
-        self._counter += 1
-
-        task = Task(
-            id=self._counter,
-            payload=payload,
-        )
-
-        self._queue.append(task)
-
-        return task
-
-    # ======================================================
-    # Dispatch
-    # ======================================================
-
-    def next(self) -> Task | None:
-        """
-        Return the next task.
-        """
-
-        if not self._queue:
-            return None
-
-        if self._policy == SchedulePolicy.FIFO:
-            task = self._queue.popleft()
-        else:
-            task = self._queue.pop()
-
-        self._executed += 1
-
-        return task
-
-    # ======================================================
+    # ==========================================================
     # Queue Operations
-    # ======================================================
+    # ==========================================================
+
+    def enqueue(
+        self,
+        task: Any,
+    ) -> None:
+        """
+        Add a task to the queue.
+        """
+
+        with self._lock:
+            self._queue.append(task)
+            self._tasks_enqueued += 1
+
+    def extend(
+        self,
+        tasks: Iterable[Any],
+    ) -> None:
+        """
+        Add multiple tasks.
+        """
+
+        for task in tasks:
+            self.enqueue(task)
+
+    def dequeue(self) -> Any:
+        """
+        Remove and return the next task.
+
+        Raises
+        ------
+        IndexError
+            If queue is empty.
+        """
+
+        with self._lock:
+
+            if not self._queue:
+                raise IndexError(
+                    "Scheduler queue is empty."
+                )
+
+            self._tasks_dequeued += 1
+
+            return self._queue.popleft()
+
+    def peek(self) -> Any | None:
+        """
+        Return the next task without removing it.
+        """
+
+        with self._lock:
+
+            if not self._queue:
+                return None
+
+            return self._queue[0]
 
     def clear(self) -> None:
+        """
+        Remove all queued tasks.
+        """
 
-        self._queue.clear()
+        with self._lock:
+            self._queue.clear()
+
+    # ==========================================================
+    # Query
+    # ==========================================================
 
     def empty(self) -> bool:
+        """
+        True if queue is empty.
+        """
 
-        return len(self._queue) == 0
-
-    def pending(self) -> int:
-
-        return len(self._queue)
-
-    # ======================================================
-    # Policy
-    # ======================================================
+        with self._lock:
+            return len(self._queue) == 0
 
     @property
-    def policy(self) -> SchedulePolicy:
+    def running(self) -> bool:
+        """
+        Scheduler running state.
+        """
 
-        return self._policy
+        return self._running
 
-    def set_policy(
-        self,
-        policy: SchedulePolicy,
-    ) -> None:
+    @property
+    def queue_size(self) -> int:
+        """
+        Number of queued tasks.
+        """
 
-        self._policy = policy
+        return len(self)
 
-    # ======================================================
+    # ==========================================================
     # Statistics
-    # ======================================================
+    # ==========================================================
+
+    @property
+    def tasks_enqueued(self) -> int:
+        return self._tasks_enqueued
+
+    @property
+    def tasks_dequeued(self) -> int:
+        return self._tasks_dequeued
+
+    # ==========================================================
+    # Status
+    # ==========================================================
 
     def status(self) -> dict[str, Any]:
+        """
+        Scheduler status.
+        """
 
         return {
-
-            "policy": self._policy.value,
-
-            "pending": self.pending(),
-
-            "submitted": self._counter,
-
-            "executed": self._executed,
+            "running": self._running,
+            "queue_size": len(self),
+            "tasks_enqueued": self._tasks_enqueued,
+            "tasks_dequeued": self._tasks_dequeued,
         }
 
-    # ======================================================
-    # Python Protocols
-    # ======================================================
+    # ==========================================================
+    # Reset
+    # ==========================================================
+
+    def reset(self) -> None:
+        """
+        Reset scheduler.
+        """
+
+        self.clear()
+
+        self._tasks_enqueued = 0
+        self._tasks_dequeued = 0
+
+    # ==========================================================
+    # Magic Methods
+    # ==========================================================
 
     def __len__(self) -> int:
-
-        return self.pending()
+        with self._lock:
+            return len(self._queue)
 
     def __bool__(self) -> bool:
-
         return not self.empty()
 
-    def __repr__(self) -> str:
+    def __iter__(self):
+        with self._lock:
+            return iter(tuple(self._queue))
 
+    def __contains__(
+        self,
+        task: object,
+    ) -> bool:
+        with self._lock:
+            return task in self._queue
+
+    def __repr__(self) -> str:
         return (
-            "Scheduler("
-            f"policy={self._policy.value}, "
-            f"pending={self.pending()})"
+            f"{self.__class__.__name__}("
+            f"running={self._running}, "
+            f"queue_size={len(self)}, "
+            f"enqueued={self._tasks_enqueued}, "
+            f"dequeued={self._tasks_dequeued})"
         )

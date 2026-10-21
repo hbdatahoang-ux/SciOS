@@ -2,34 +2,35 @@
 SciOS QTC Tests
 ===============
 
-Foundation tests for the Quantum Temporal Compression (QTC)
+Foundation tests for the SciOS Quantum Temporal Compression (QTC)
 subsystem.
 
 These tests validate the public API contracts of the QTC foundation
 without depending on concrete implementations.
+
+Python 3.11+
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
-from scios.substrate.qtc.algebra import (
-    AlgebraElement,
-)
-
+from scios.substrate.qtc.algebra import AlgebraElement
 from scios.substrate.qtc.operator import (
-    UnaryOperator,
     OperatorMetadata,
+    UnaryOperator,
 )
-
 from scios.substrate.qtc.compression import (
-    QTCCompression,
     CompressionMetadata,
+    CompressionResult,
+    CompressionValidationError,
+    QTCCompression,
 )
-
 from scios.substrate.qtc.morphism import (
-    QTCMorphism,
     MorphismMetadata,
+    QTCMorphism,
 )
 
 
@@ -39,10 +40,18 @@ from scios.substrate.qtc.morphism import (
 
 
 class DummyElement(AlgebraElement):
+    """Minimal algebra element used for testing."""
 
-    def __init__(self, value):
-
+    def __init__(self, value: int) -> None:
         self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DummyElement):
+            return NotImplemented
+        return self.value == other.value
+
+    def __repr__(self) -> str:
+        return f"DummyElement({self.value})"
 
 
 # ==========================================================
@@ -51,9 +60,9 @@ class DummyElement(AlgebraElement):
 
 
 class IdentityOperator(UnaryOperator):
+    """Identity operator."""
 
-    def __init__(self):
-
+    def __init__(self) -> None:
         super().__init__(
             OperatorMetadata(
                 name="identity",
@@ -62,9 +71,9 @@ class IdentityOperator(UnaryOperator):
 
     def execute(
         self,
-        operand,
-    ):
-
+        context: Any | None,
+        operand: DummyElement,
+    ) -> DummyElement:
         return operand
 
 
@@ -79,9 +88,9 @@ class IdentityCompression(
         list[DummyElement],
     ]
 ):
+    """Identity compression."""
 
-    def __init__(self):
-
+    def __init__(self) -> None:
         super().__init__(
             CompressionMetadata(
                 name="identity",
@@ -91,9 +100,11 @@ class IdentityCompression(
     def compress(
         self,
         sequence,
-    ):
+    ) -> CompressionResult[list[DummyElement]]:
 
-        return self.result_type(
+        self.validate(sequence)
+
+        return CompressionResult(
             data=list(sequence),
             original_size=len(sequence),
             compressed_size=len(sequence),
@@ -101,10 +112,10 @@ class IdentityCompression(
 
     def decompress(
         self,
-        result,
-    ):
+        result: CompressionResult[list[DummyElement]],
+    ) -> list[DummyElement]:
 
-        return result.data
+        return list(result.data)
 
 
 # ==========================================================
@@ -118,20 +129,19 @@ class IdentityMorphism(
         DummyElement,
     ]
 ):
+    """Identity morphism."""
 
-    def __init__(self):
-
+    def __init__(self) -> None:
         super().__init__(
             MorphismMetadata(
                 name="identity",
             )
         )
 
-    def apply(
+    def map(
         self,
-        value,
-    ):
-
+        value: DummyElement,
+    ) -> DummyElement:
         return value
 
 
@@ -140,11 +150,13 @@ class IdentityMorphism(
 # ==========================================================
 
 
-def test_algebra_element():
+def test_algebra_element() -> None:
 
     x = DummyElement(10)
 
     assert x.value == 10
+
+    assert repr(x) == "DummyElement(10)"
 
 
 # ==========================================================
@@ -152,7 +164,7 @@ def test_algebra_element():
 # ==========================================================
 
 
-def test_operator():
+def test_operator() -> None:
 
     op = IdentityOperator()
 
@@ -161,13 +173,32 @@ def test_operator():
     assert op(x) is x
 
 
-def test_operator_metadata():
+def test_operator_metadata() -> None:
 
     op = IdentityOperator()
 
     assert op.name == "identity"
 
+    assert op.metadata.name == "identity"
+
     assert op.metadata.version == "1.0"
+
+    assert op.metadata.deterministic is True
+
+    assert op.metadata.differentiable is False
+
+
+def test_operator_repr() -> None:
+
+    text = repr(
+        IdentityOperator()
+    )
+
+    assert "IdentityOperator" in text
+
+    assert "identity" in text
+
+    assert "unary" in text
 
 
 # ==========================================================
@@ -175,7 +206,7 @@ def test_operator_metadata():
 # ==========================================================
 
 
-def test_compression():
+def test_compression() -> None:
 
     c = IdentityCompression()
 
@@ -186,14 +217,27 @@ def test_compression():
 
     result = c.compress(seq)
 
+    assert isinstance(
+        result,
+        CompressionResult,
+    )
+
     assert result.original_size == 2
 
     assert result.compressed_size == 2
 
+    assert result.saved == 0
+
     assert result.ratio == 1.0
 
+    assert result.saving == 0.0
 
-def test_decompression():
+    assert bool(result)
+
+    assert len(result) == 2
+
+
+def test_decompression() -> None:
 
     c = IdentityCompression()
 
@@ -205,7 +249,52 @@ def test_decompression():
 
     restored = c.decompress(compressed)
 
-    assert len(restored) == 1
+    assert restored == seq
+
+
+def test_verify() -> None:
+
+    c = IdentityCompression()
+
+    seq = [
+        DummyElement(1),
+        DummyElement(2),
+    ]
+
+    restored = c.decompress(
+        c.compress(seq)
+    )
+
+    assert c.verify(
+        seq,
+        restored,
+    )
+
+
+def test_callable_compression() -> None:
+
+    c = IdentityCompression()
+
+    seq = [
+        DummyElement(1),
+    ]
+
+    result = c(seq)
+
+    assert isinstance(
+        result,
+        CompressionResult,
+    )
+
+
+def test_invalid_compression() -> None:
+
+    c = IdentityCompression()
+
+    with pytest.raises(
+        CompressionValidationError,
+    ):
+        c(None)
 
 
 # ==========================================================
@@ -213,7 +302,7 @@ def test_decompression():
 # ==========================================================
 
 
-def test_morphism():
+def test_morphism() -> None:
 
     m = IdentityMorphism()
 
@@ -222,34 +311,34 @@ def test_morphism():
     assert m(x) is x
 
 
-def test_morphism_metadata():
+def test_morphism_apply_alias() -> None:
+
+    m = IdentityMorphism()
+
+    x = DummyElement(7)
+
+    assert m.apply(x) is x
+
+
+def test_morphism_metadata() -> None:
 
     m = IdentityMorphism()
 
     assert m.name == "identity"
 
+    assert m.metadata.name == "identity"
 
-# ==========================================================
-# Representation
-# ==========================================================
+    assert m.metadata.version == "1.0"
 
-
-def test_repr():
-
-    op = IdentityOperator()
-
-    assert "identity" in repr(op)
+    assert m.metadata.deterministic is True
 
 
-# ==========================================================
-# Validation
-# ==========================================================
+def test_morphism_repr() -> None:
 
+    text = repr(
+        IdentityMorphism()
+    )
 
-def test_invalid_compression():
+    assert "IdentityMorphism" in text
 
-    c = IdentityCompression()
-
-    with pytest.raises(Exception):
-
-        c.compress(None)
+    assert "identity" in text

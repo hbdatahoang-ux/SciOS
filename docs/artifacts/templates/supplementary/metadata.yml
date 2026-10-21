@@ -1,0 +1,55 @@
+# ============================================================
+# SciOS Supplementary Metadata Template
+# ============================================================
+
+ID: SUP-XXXX
+
+Title: 
+
+Paper: SciOS
+
+Section: 
+
+Version: v0.1
+
+Status: Draft
+
+Author: 
+
+Created: YYYY-MM-DD
+
+LastUpdated: YYYY-MM-DD
+
+Reviewer: 
+
+ApprovedBy: 
+
+Keywords: []
+
+Description: >
+  Short description of the supplementary material, its purpose, and context.
+
+Purpose: >
+  Why this supplementary artifact exists and what it demonstrates.
+
+Caption: caption.md
+
+Files:
+  Content: content.md
+
+Dependencies:
+  Figures: []
+  Tables: []
+  Equations: []
+  Datasets: []
+  Experiments: []
+  Benchmarks: []
+
+RelatedSections: []
+
+License: CC-BY-4.0
+
+DOI: 
+
+Notes: >
+  Any additional notes or comments.

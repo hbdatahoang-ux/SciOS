@@ -1,0 +1,280 @@
+Overall Architecture
+                    +--------------------------------------+
+                    |        Cognitive Pipeline            |
+                    +------------------+-------------------+
+                                       |
+                                       v
+                    +--------------------------------------+
+                    |          Memory Manager              |
+                    +--------------------------------------+
+                    | Store                               |
+                    | Retrieve                            |
+                    | Update                              |
+                    | Forget                              |
+                    +------------------+-------------------+
+                                       |
+          +----------------------------+----------------------------+
+          |                            |                            |
+          v                            v                            v
+ Working Memory               Episodic Memory             Semantic Memory
+Memory Hierarchy
+                Long-term Knowledge
+                       ▲
+                       │
+              Semantic Memory
+                       ▲
+                       │
+              Episodic Memory
+                       ▲
+                       │
+              Working Memory
+                       ▲
+                       │
+               Input Context
+Internal Components
+                 +---------------------------+
+                 |      Memory Manager       |
+                 +---------------------------+
+                 | Working Memory            |
+                 | Episodic Memory           |
+                 | Semantic Memory           |
+                 | Memory Index              |
+                 | Persistence Adapter       |
+                 +---------------------------+
+Working Memory
+Input
+
+↓
+
+Working Memory
+
+↓
+
+Reasoning
+
+↓
+
+Planning
+
+↓
+
+Reflection
+
+Đặc điểm:
+
+dữ liệu ngắn hạn
+chỉ tồn tại trong một phiên xử lý
+tốc độ truy cập cao
+tự động giải phóng sau khi pipeline hoàn tất
+Episodic Memory
+Execution
+
+↓
+
+Episode
+
+↓
+
+Store
+
+↓
+
+Retrieve
+
+↓
+
+Replay
+
+Lưu các phiên làm việc, lịch sử suy luận và chuỗi hành động để hỗ trợ phân tích và học hỏi.
+
+Semantic Memory
+Knowledge
+
+↓
+
+Embedding
+
+↓
+
+Index
+
+↓
+
+Retrieve
+
+↓
+
+Reasoning
+
+Lưu tri thức đã được chuẩn hóa và có thể tái sử dụng trong các phiên làm việc khác nhau.
+
+Memory Flow
+Perception
+
+↓
+
+Working Memory
+
+↓
+
+Reasoning
+
+↓
+
+Reflection
+
+↓
+
+Semantic Memory
+
+↓
+
+Future Retrieval
+Retrieval Flow
+Query
+
+↓
+
+Memory Manager
+
+↓
+
+Memory Index
+
+↓
+
+Working Memory
+
+↓
+
+Semantic Memory
+
+↓
+
+Episodes
+
+↓
+
+Merged Context
+Storage Architecture
+               Memory Manager
+                      |
+      +---------------+---------------+
+      |                               |
+      v                               v
+ Memory Cache                  Persistent Store
+      |                               |
+      +---------------+---------------+
+                      |
+                      v
+               Knowledge Database
+Memory Lifecycle
+Receive Context
+
+↓
+
+Encode
+
+↓
+
+Store
+
+↓
+
+Retrieve
+
+↓
+
+Update
+
+↓
+
+Consolidate
+
+↓
+
+Forget
+
+↓
+
+Archive
+Relationship with Cognitive Core
+Perception
+      |
+      v
+Working Memory
+      |
+      v
+Reasoning
+      |
+      v
+Planning
+      |
+      v
+Reflection
+      |
+      v
+Semantic Memory
+      |
+      v
+Artifacts
+Memory API
+MemoryManager
+
+├── store()
+
+├── retrieve()
+
+├── search()
+
+├── update()
+
+├── delete()
+
+└── consolidate()
+Suggested Colors
+Component	Color
+Memory Manager	Blue
+Working Memory	Green
+Episodic Memory	Orange
+Semantic Memory	Purple
+Storage	Gray
+Knowledge DB	Cyan
+Footer
+SciOS Developer Handbook
+
+Memory Architecture
+
+Version: v0.2
+
+Phase 8 — Cognitive Core
+Vai trò trong kiến trúc SciOS
+
+Sơ đồ này kết nối trực tiếp với các sơ đồ khác trong bộ tài liệu:
+
+Perception
+      │
+      ▼
+memory.drawio
+      │
+      ▼
+reasoning.drawio
+      │
+      ▼
+planning.drawio
+      │
+      ▼
+reflection.drawio
+      │
+      ▼
+artifact_manager.drawio
+
+Trong kiến trúc này:
+
+perception.drawio mô tả cách dữ liệu đầu vào được tiếp nhận.
+memory.drawio mô tả cách dữ liệu được tổ chức thành Working, Episodic và Semantic Memory.
+reasoning.drawio sử dụng ngữ cảnh do Memory cung cấp để suy luận.
+reflection.drawio đánh giá kết quả và quyết định tri thức nào được hợp nhất trở lại vào Semantic Memory.
+artifact_manager.drawio quản lý các kết quả lâu dài được tạo ra từ quá trình nhận thức.
+
+Cách thiết kế này phản ánh một kiến trúc bộ nhớ nhiều tầng, phù hợp với mục tiêu xây dựng SciOS như một nền tảng nghiên cứu về hệ điều hành nhận thức và cho phép mở rộng thêm các loại bộ nhớ (ví dụ: Procedural Memory, Spatial Memory hoặc Collaborative Memory) trong các phiên bản sau mà không làm thay đổi kiến trúc tổng thể.
