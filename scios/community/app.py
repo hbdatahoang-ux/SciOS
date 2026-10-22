@@ -92,6 +92,7 @@ if report is not None:
                         "the IQR bounds from SciOS evidence."
                     )
                     st.line_chart(series[["value", "lower_bound", "upper_bound"]])
+                    st.dataframe(outlier_table, use_container_width=True)
         except (ValueError, TypeError) as exc:
             st.warning(f"Visualization unavailable: {exc}")
     else:
