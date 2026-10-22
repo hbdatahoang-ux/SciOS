@@ -15,7 +15,7 @@ st.set_page_config(page_title="SciOS Community", page_icon="🔬")
 st.title("SciOS Community — CSV Analysis")
 st.caption("Local deterministic IQR analysis; not scientific proof.")
 
-uploaded = st.file_uploader("1. Choose a CSV file", type=["csv"], max_upload_size=10)
+uploaded = st.file_uploader("1. Choose a CSV file (SciOS limit: 10 MiB)", type=["csv"])
 query = st.text_area(
     "2. Ask a research question",
     value="Which numeric values are anomalous, and what evidence supports them?",
