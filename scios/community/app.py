@@ -1,7 +1,11 @@
 """Streamlit entry point: streamlit run scios/community/app.py"""
 from __future__ import annotations
 
+import hashlib
+
 import streamlit as st
+
+from scios.community.visualization import chart_data
 
 from scios.community.csv_adapter import (
     MAX_CSV_BYTES, analyze_csv, report_json, report_markdown,
@@ -11,7 +15,7 @@ st.set_page_config(page_title="SciOS Community", page_icon="🔬")
 st.title("SciOS Community — CSV Analysis")
 st.caption("Local deterministic IQR analysis; not scientific proof.")
 
-uploaded = st.file_uploader("1. Choose a CSV file", type=["csv"])
+uploaded = st.file_uploader("1. Choose a CSV file", type=["csv"], max_upload_size=10)
 query = st.text_area(
     "2. Ask a research question",
     value="Which numeric values are anomalous, and what evidence supports them?",
@@ -43,7 +47,55 @@ if report is not None:
     a, b = st.columns(2)
     a.metric("Rows", answer["rows"])
     b.metric("Columns", answer["columns"])
-    st.write(answer["explanation"])
+    counts = {name: info["count"] for name, info in answer["outliers"].items()}
+    distinct_rows = set()
+    for info in answer["outliers"].values():
+        distinct_rows.update(info["indices"])
+    st.success(
+        f"{sum(counts.values())} outlier values across "
+        f"{len(distinct_rows)} distinct rows (IQR rule)."
+    )
+    st.bar_chart(
+        {"column": list(counts), "outliers": list(counts.values())},
+        x="column", y="outliers",
+    )
+    with st.expander("Full deterministic explanation"):
+        st.write(answer["explanation"])
+
+    st.markdown("#### Distribution and IQR thresholds")
+    numeric_columns = list(answer["outliers"])
+    if numeric_columns and uploaded is not None and (
+        hashlib.sha256(uploaded.getvalue()).hexdigest()
+        == report["dataset"]["sha256"]
+    ):
+        chosen = st.selectbox("Numeric column", numeric_columns)
+        try:
+            histogram, series, outlier_table = chart_data(
+                uploaded.getvalue(), report, chosen
+            )
+            if histogram.empty:
+                st.info("No finite numeric observations to chart.")
+            else:
+                st.caption("Histogram of numeric values (counts by bin center).")
+                st.bar_chart(histogram.set_index("bin_center"))
+                if outlier_table.empty:
+                    st.info(
+                        "No outliers in this column. IQR thresholds are not "
+                        "stored in the v0.1 evidence for zero-outlier columns."
+                    )
+                    st.line_chart(series[["value"]])
+                else:
+                    st.caption(
+                        "Value by zero-based CSV row; horizontal lines are "
+                        "the IQR bounds from SciOS evidence."
+                    )
+                    st.line_chart(series[["value", "lower_bound", "upper_bound"]])
+                    st.dataframe(outlier_table, use_container_width=True)
+        except (ValueError, TypeError) as exc:
+            st.warning(f"Visualization unavailable: {exc}")
+    else:
+        st.info("Select and analyze the same CSV to view its distribution.")
+
     st.write("Missing values", answer["missing"])
     st.write("IQR outlier evidence (zero-based row indices)")
     for column, data in answer["outliers"].items():
