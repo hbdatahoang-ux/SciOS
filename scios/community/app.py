@@ -77,7 +77,9 @@ if report is not None:
                 st.info("No finite numeric observations to chart.")
             else:
                 st.caption("Histogram of numeric values (counts by bin center).")
-                st.bar_chart(histogram.set_index("bin_center"))
+                chart_bins = histogram.copy()
+                chart_bins["bin_label"] = chart_bins["bin_center"].map(lambda v: f"{v:.2f}")
+                st.bar_chart(chart_bins.set_index("bin_label")[["count"]])
                 if outlier_table.empty:
                     st.info(
                         "No outliers in this column. IQR thresholds are not "
@@ -90,20 +92,13 @@ if report is not None:
                         "the IQR bounds from SciOS evidence."
                     )
                     st.line_chart(series[["value", "lower_bound", "upper_bound"]])
-                    st.dataframe(outlier_table, use_container_width=True)
         except (ValueError, TypeError) as exc:
             st.warning(f"Visualization unavailable: {exc}")
     else:
         st.info("Select and analyze the same CSV to view its distribution.")
 
     st.write("Missing values", answer["missing"])
-    st.write("IQR outlier evidence (zero-based row indices)")
-    for column, data in answer["outliers"].items():
-        with st.expander(f"{column}: {data['count']} outlier(s)", expanded=bool(data["count"])):
-            if data["evidence"]:
-                st.dataframe(data["evidence"], use_container_width=True)
-            else:
-                st.write("No outliers detected by this rule.")
+    st.caption("Outlier table above reflects the selected numeric column.")
     st.caption(f"SHA-256: {report['dataset']['sha256']}")
     st.caption(f"Analysis Run ID: {report['analysis_run_id']}")
     st.warning(report["limitations"])
