@@ -40,7 +40,6 @@ def test_same_input_has_same_hash_but_unique_run_ids():
     (b"   ", "data.csv", QUESTION),
     (CSV, "data.txt", QUESTION),
     (CSV, "data.csv", ""),
-    (b"x" * (MAX_CSV_BYTES + 1), "data.csv", QUESTION),
 ])
 def test_invalid_uploads_are_rejected(data, name, question):
     with pytest.raises(ValueError):
@@ -50,3 +49,9 @@ def test_invalid_uploads_are_rejected(data, name, question):
 def test_filename_is_not_used_as_local_path():
     report = analyze_csv(CSV, filename="../../outside.csv", query=QUESTION)
     assert report["dataset"]["filename"] == "outside.csv"
+
+
+def test_oversized_upload_is_rejected():
+    oversized_csv = b"x" * (MAX_CSV_BYTES + 1)
+    with pytest.raises(ValueError, match="10 MiB"):
+        analyze_csv(oversized_csv, filename="data.csv", query=QUESTION)
